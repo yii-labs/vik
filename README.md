@@ -52,7 +52,9 @@ Daemon logs are JSON lines on stdout and in a daily file under `logging.dir`. If
 
 This implementation targets trusted local automation environments.
 
-- Codex app-server launches with `bash -lc <codex.command>` in the per-issue workspace.
+- Codex app-server launches in the per-issue workspace using a command derived from
+  `codex.command`, with `codex.model` and `codex.model_reasoning_effort` converted into CLI
+  `--config` args before `app-server`.
 - The default workflow routes approval review to Codex `auto_review`, so connector write prompts do
   not wait for an interactive user.
 - Command and file-change approvals are answered with session acceptance.
