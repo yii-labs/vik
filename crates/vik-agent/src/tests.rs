@@ -46,6 +46,21 @@ fn codex_spawn_command_inserts_model_config_before_app_server() {
 }
 
 #[test]
+fn codex_spawn_command_inserts_model_config_before_app_server_flags() {
+    let config = CodexConfig {
+        command: "codex   --config shell_environment_policy.inherit=all app-server --stdio"
+            .to_string(),
+        model: Some("gpt-5.5".to_string()),
+        model_reasoning_effort: Some("xhigh".to_string()),
+        ..CodexConfig::default()
+    };
+    assert_eq!(
+        codex_spawn_command(&config),
+        "codex   --config shell_environment_policy.inherit=all --config 'model=\"gpt-5.5\"' --config 'model_reasoning_effort=xhigh' app-server --stdio"
+    );
+}
+
+#[test]
 fn codex_spawn_command_keeps_command_when_model_config_absent() {
     let config = CodexConfig {
         command: "codex --config shell_environment_policy.inherit=all app-server".to_string(),

@@ -62,6 +62,85 @@ pub struct CodexConfig {
     pub stall_timeout_ms: i64,
 }
 
+impl CodexConfig {
+    pub fn has_model_cli_config(&self) -> bool {
+        self.model
+            .as_deref()
+            .is_some_and(|model| !model.trim().is_empty())
+            || self
+                .model_reasoning_effort
+                .as_deref()
+                .is_some_and(|effort| !effort.trim().is_empty())
+    }
+
+    pub fn split_command_at_app_server(&self) -> Option<(&str, &str)> {
+        let command = self.command.trim();
+        find_shell_token_start(command, "app-server").map(|index| command.split_at(index))
+    }
+}
+
+fn find_shell_token_start(command: &str, needle: &str) -> Option<usize> {
+    let mut token_start = None;
+    let mut token = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+
+    for (index, ch) in command.char_indices() {
+        if token_start.is_none() {
+            if ch.is_whitespace() {
+                continue;
+            }
+            token_start = Some(index);
+        }
+
+        if escaped {
+            token.push(ch);
+            escaped = false;
+            continue;
+        }
+
+        match quote {
+            Some('\'') => {
+                if ch == '\'' {
+                    quote = None;
+                } else {
+                    token.push(ch);
+                }
+            }
+            Some('"') => {
+                if ch == '"' {
+                    quote = None;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else {
+                    token.push(ch);
+                }
+            }
+            Some(_) => unreachable!(),
+            None => {
+                if ch.is_whitespace() {
+                    if token == needle {
+                        return token_start;
+                    }
+                    token_start = None;
+                    token.clear();
+                } else if ch == '\'' || ch == '"' {
+                    quote = Some(ch);
+                } else if ch == '\\' {
+                    escaped = true;
+                } else {
+                    token.push(ch);
+                }
+            }
+        }
+    }
+
+    if escaped {
+        token.push('\\');
+    }
+    if token == needle { token_start } else { None }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServerConfig {
     pub port: u16,
@@ -233,6 +312,11 @@ impl ServiceConfig {
         {
             return Err(WorkflowError::InvalidConfig(
                 "codex.model_reasoning_effort is empty".to_string(),
+            ));
+        }
+        if self.codex.has_model_cli_config() && self.codex.split_command_at_app_server().is_none() {
+            return Err(WorkflowError::InvalidConfig(
+                "codex.command must include app-server when codex.model or codex.model_reasoning_effort is set".to_string(),
             ));
         }
         Ok(())

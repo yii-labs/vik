@@ -96,6 +96,22 @@ fn parses_codex_model_fields() {
 }
 
 #[test]
+fn rejects_model_fields_without_app_server_command() {
+    let def = parse_workflow_content(
+        PathBuf::from("WORKFLOW.md"),
+        "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\ncodex:\n  command: codex exec\n  model: gpt-5.5\n---\nBody",
+    )
+    .unwrap();
+    let config = ServiceConfig::from_definition(&def).unwrap();
+    let err = config.validate_for_dispatch().unwrap_err();
+    assert!(matches!(
+        err,
+        WorkflowError::InvalidConfig(message)
+            if message == "codex.command must include app-server when codex.model or codex.model_reasoning_effort is set"
+    ));
+}
+
+#[test]
 fn strict_prompt_render_fails_on_unknown() {
     let def = WorkflowDefinition {
         path: PathBuf::from("WORKFLOW.md"),

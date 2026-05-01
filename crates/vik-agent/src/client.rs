@@ -153,11 +153,17 @@ pub(crate) fn codex_spawn_command(config: &CodexConfig) -> String {
         return config.command.clone();
     }
 
-    let command = config.command.trim();
     let joined_args = args.join(" ");
-    if let Some(prefix) = command.strip_suffix(" app-server") {
-        format!("{prefix} {joined_args} app-server")
+    if let Some((prefix, app_server_command)) = config.split_command_at_app_server() {
+        let prefix = prefix.trim_end();
+        let app_server_command = app_server_command.trim_start();
+        if prefix.is_empty() {
+            format!("{joined_args} {app_server_command}")
+        } else {
+            format!("{prefix} {joined_args} {app_server_command}")
+        }
     } else {
+        let command = config.command.trim();
         format!("{command} {joined_args}")
     }
 }
