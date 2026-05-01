@@ -1,10 +1,11 @@
-use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::{fs, io};
 
 use clap::Parser;
-use tracing_subscriber::EnvFilter;
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 use vik_agent::LocalAgentWorker;
 use vik_http::{HttpState, serve};
 use vik_orchestrator::Orchestrator;
@@ -36,7 +37,6 @@ async fn main() {
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     load_dotenv()?;
-    init_logging();
     let args = Args::parse();
     let reloader = WorkflowReloader::start(args.workflow.clone())?;
     let loaded = reloader.current().clone();
@@ -45,6 +45,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         println!("workflow valid: {}", loaded.definition.path.display());
         return Ok(());
     }
+
+    let log_dir = loaded.config.logging.dir.clone();
+    let _log_guard = init_logging(&log_dir)?;
+    tracing::info!(log_dir=%log_dir.display(), "logging outcome=started");
 
     let tracker_config = LinearClientConfig::new(
         if loaded.config.tracker.endpoint.is_empty() {
@@ -105,14 +109,28 @@ fn load_dotenv_path(path: &std::path::Path) -> Result<(), Box<dyn std::error::Er
     }
 }
 
-fn init_logging() {
+fn init_logging(log_dir: &Path) -> Result<WorkerGuard, Box<dyn std::error::Error>> {
+    fs::create_dir_all(log_dir)?;
+    let file_appender = tracing_appender::rolling::daily(log_dir, "vik.log");
+    let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
+
+    let stdout_layer = tracing_subscriber::fmt::layer()
         .json()
         .with_current_span(false)
-        .with_span_list(false)
+        .with_span_list(false);
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(file_writer)
+        .json()
+        .with_current_span(false)
+        .with_span_list(false);
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(stdout_layer)
+        .with(file_layer)
         .init();
+    Ok(guard)
 }
 
 #[cfg(test)]

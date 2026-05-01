@@ -23,16 +23,17 @@ description:
   - `## Codex Workpad` is the durable progress and handoff record.
 - Runtime JSON logs:
   - Vik logs through `tracing_subscriber::fmt().json()`.
-  - The daemon writes logs to stdout/stderr unless the operator redirects them.
-  - Search captured files such as `log/vik*.log*`, `.tests/*.log`, or the
-    terminal transcript used to run the daemon.
+  - The daemon writes logs to stdout and to daily files in `logging.dir`.
+  - If `logging.dir` is omitted, search `<workspace.root>/.vik/logs`.
+  - Daily file names use `vik.log.<date>`.
 - HTTP observation API when the daemon runs with `--port`:
   - `GET /api/v1/state` returns running and retrying rows plus token totals.
   - `GET /api/v1/{issue_identifier}` returns one issue debug snapshot.
   - `POST /api/v1/refresh` queues an immediate poll and reconcile pass.
 - Workspace evidence:
   - Workspace root comes from `WORKFLOW.md`.
-  - Default local root is `~/code/vik-workspaces`.
+  - If `workspace.root` is omitted, the default is
+    `std::env::temp_dir()/vik_workspaces`.
   - Per-issue workspace name is the sanitized Linear issue key.
 
 ## Correlation Keys
@@ -76,24 +77,24 @@ curl -s http://127.0.0.1:3000/api/v1/VIK-9 | jq .
 # Force one poll/reconcile pass.
 curl -s -X POST http://127.0.0.1:3000/api/v1/refresh | jq .
 
-# Search captured JSON logs by issue key.
-rg -n '"issue_identifier":"VIK-9"|issue_identifier=VIK-9|VIK-9' log .tests
+# Search persisted JSON logs by issue key.
+rg -n '"issue_identifier":"VIK-9"|issue_identifier=VIK-9|VIK-9' <log-dir>
 
-# Search captured JSON logs by Linear UUID.
-rg -n '"issue_id":"<linear-uuid>"|issue_id=<linear-uuid>' log .tests
+# Search persisted JSON logs by Linear UUID.
+rg -n '"issue_id":"<linear-uuid>"|issue_id=<linear-uuid>' <log-dir>
 
-# Pull unique session IDs from captured logs.
-rg -o '"session_id":"[^"]+"|session_id=[^ ,}]+' log .tests | sort -u
+# Pull unique session IDs from persisted logs.
+rg -o '"session_id":"[^"]+"|session_id=[^ ,}]+' <log-dir> | sort -u
 
 # Trace one session end to end.
-rg -n '<session-id>' log .tests
+rg -n '<session-id>' <log-dir>
 
 # Focus on retry, stall, and terminal signals.
-rg -n 'stalled_run|retry_dispatch|worker_exit|turn_timeout|turn_failed|turn_cancelled|response_timeout|port_exit|codex_not_found|workflow_reload outcome=failed' log .tests
+rg -n 'stalled_run|retry_dispatch|worker_exit|turn_timeout|turn_failed|turn_cancelled|response_timeout|port_exit|codex_not_found|workflow_reload outcome=failed' <log-dir>
 ```
 
-If `log` or `.tests` does not exist, search the actual capture path used by the
-daemon run. Do not create committed log artifacts.
+Use the configured `logging.dir` from `WORKFLOW.md`. If it is omitted, use
+`<workspace.root>/.vik/logs`. Do not create committed log artifacts.
 
 ## Investigation Flow
 
@@ -142,9 +143,10 @@ daemon run. Do not create committed log artifacts.
   - `linear_graphql` tool failure
   - missing Linear credentials
 - Workspace:
-  - hook failure
-  - workspace path outside root
-  - invalid Codex cwd
+  - `hook_failed`
+  - `hook_timeout`
+  - `workspace_path_outside_root`
+  - `invalid_workspace_cwd`
 - Codex startup:
   - `codex_not_found`
   - `port_exit`

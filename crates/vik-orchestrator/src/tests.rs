@@ -4,8 +4,8 @@ use chrono::{TimeZone, Utc};
 use serde_json::json;
 use vik_core::{AgentEvent, BlockerRef, Issue, TokenUsage, WorkerOutcome};
 use vik_workflow::{
-    AgentConfig, CodexConfig, HooksConfig, PollingConfig, ServiceConfig, TrackerConfig,
-    WorkspaceConfig,
+    AgentConfig, CodexConfig, HooksConfig, LoggingConfig, PollingConfig, ServiceConfig,
+    TrackerConfig, WorkspaceConfig,
 };
 
 use crate::{
@@ -28,6 +28,9 @@ fn config() -> ServiceConfig {
         },
         workspace: WorkspaceConfig {
             root: "/tmp/vik".into(),
+        },
+        logging: LoggingConfig {
+            dir: "/tmp/vik/.vik/logs".into(),
         },
         hooks: HooksConfig {
             timeout_ms: 60_000,
