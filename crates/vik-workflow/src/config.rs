@@ -51,6 +51,8 @@ pub struct AgentConfig {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CodexConfig {
     pub command: String,
+    pub model: Option<String>,
+    pub model_reasoning_effort: Option<String>,
     pub approval_policy: Option<serde_json::Value>,
     pub approvals_reviewer: Option<serde_json::Value>,
     pub thread_sandbox: Option<serde_json::Value>,
@@ -58,6 +60,85 @@ pub struct CodexConfig {
     pub turn_timeout_ms: u64,
     pub read_timeout_ms: u64,
     pub stall_timeout_ms: i64,
+}
+
+impl CodexConfig {
+    pub fn has_model_cli_config(&self) -> bool {
+        self.model
+            .as_deref()
+            .is_some_and(|model| !model.trim().is_empty())
+            || self
+                .model_reasoning_effort
+                .as_deref()
+                .is_some_and(|effort| !effort.trim().is_empty())
+    }
+
+    pub fn split_command_at_app_server(&self) -> Option<(&str, &str)> {
+        let command = self.command.trim();
+        find_shell_token_start(command, "app-server").map(|index| command.split_at(index))
+    }
+}
+
+fn find_shell_token_start(command: &str, needle: &str) -> Option<usize> {
+    let mut token_start = None;
+    let mut token = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+
+    for (index, ch) in command.char_indices() {
+        if token_start.is_none() {
+            if ch.is_whitespace() {
+                continue;
+            }
+            token_start = Some(index);
+        }
+
+        if escaped {
+            token.push(ch);
+            escaped = false;
+            continue;
+        }
+
+        match quote {
+            Some('\'') => {
+                if ch == '\'' {
+                    quote = None;
+                } else {
+                    token.push(ch);
+                }
+            }
+            Some('"') => {
+                if ch == '"' {
+                    quote = None;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else {
+                    token.push(ch);
+                }
+            }
+            Some(_) => unreachable!(),
+            None => {
+                if ch.is_whitespace() {
+                    if token == needle {
+                        return token_start;
+                    }
+                    token_start = None;
+                    token.clear();
+                } else if ch == '\'' || ch == '"' {
+                    quote = Some(ch);
+                } else if ch == '\\' {
+                    escaped = true;
+                } else {
+                    token.push(ch);
+                }
+            }
+        }
+    }
+
+    if escaped {
+        token.push('\\');
+    }
+    if token == needle { token_start } else { None }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -150,6 +231,8 @@ impl ServiceConfig {
         let codex = CodexConfig {
             command: string_value(codex_map, "command")
                 .unwrap_or_else(|| "codex app-server".to_string()),
+            model: string_value(codex_map, "model"),
+            model_reasoning_effort: string_value(codex_map, "model_reasoning_effort"),
             approval_policy: json_value(codex_map, "approval_policy"),
             approvals_reviewer: json_value(codex_map, "approvals_reviewer"),
             thread_sandbox: json_value(codex_map, "thread_sandbox"),
@@ -209,6 +292,31 @@ impl ServiceConfig {
         if self.codex.command.trim().is_empty() {
             return Err(WorkflowError::InvalidConfig(
                 "codex.command is empty".to_string(),
+            ));
+        }
+        if self
+            .codex
+            .model
+            .as_ref()
+            .is_some_and(|model| model.trim().is_empty())
+        {
+            return Err(WorkflowError::InvalidConfig(
+                "codex.model is empty".to_string(),
+            ));
+        }
+        if self
+            .codex
+            .model_reasoning_effort
+            .as_ref()
+            .is_some_and(|effort| effort.trim().is_empty())
+        {
+            return Err(WorkflowError::InvalidConfig(
+                "codex.model_reasoning_effort is empty".to_string(),
+            ));
+        }
+        if self.codex.has_model_cli_config() && self.codex.split_command_at_app_server().is_none() {
+            return Err(WorkflowError::InvalidConfig(
+                "codex.command must include app-server when codex.model or codex.model_reasoning_effort is set".to_string(),
             ));
         }
         Ok(())

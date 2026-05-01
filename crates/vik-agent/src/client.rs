@@ -28,7 +28,7 @@ pub struct CodexIssueContext {
 impl CodexAppServerClient {
     pub fn new(config: CodexConfig) -> Self {
         Self {
-            command: config.command.clone(),
+            command: codex_spawn_command(&config),
             config,
             tools: DynamicTools::default(),
         }
@@ -145,6 +145,69 @@ impl CodexAppServerClient {
         let _ = process.child.kill().await;
         Ok(())
     }
+}
+
+pub(crate) fn codex_spawn_command(config: &CodexConfig) -> String {
+    let args = codex_model_config_args(config);
+    if args.is_empty() {
+        return config.command.clone();
+    }
+
+    let joined_args = args.join(" ");
+    if let Some((prefix, app_server_command)) = config.split_command_at_app_server() {
+        let prefix = prefix.trim_end();
+        let app_server_command = app_server_command.trim_start();
+        if prefix.is_empty() {
+            format!("{joined_args} {app_server_command}")
+        } else {
+            format!("{prefix} {joined_args} {app_server_command}")
+        }
+    } else {
+        let command = config.command.trim();
+        format!("{command} {joined_args}")
+    }
+}
+
+fn codex_model_config_args(config: &CodexConfig) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(model) = config.model.as_deref().map(str::trim)
+        && !model.is_empty()
+    {
+        args.push(format!(
+            "--config {}",
+            shell_single_quote(&format!("model={}", toml_string(model)))
+        ));
+    }
+    if let Some(effort) = config.model_reasoning_effort.as_deref().map(str::trim)
+        && !effort.is_empty()
+    {
+        args.push(format!(
+            "--config {}",
+            shell_single_quote(&format!("model_reasoning_effort={effort}"))
+        ));
+    }
+    args
+}
+
+fn toml_string(value: &str) -> String {
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('"');
+    for ch in value.chars() {
+        match ch {
+            '\\' => quoted.push_str("\\\\"),
+            '"' => quoted.push_str("\\\""),
+            '\n' => quoted.push_str("\\n"),
+            '\r' => quoted.push_str("\\r"),
+            '\t' => quoted.push_str("\\t"),
+            _ => quoted.push(ch),
+        }
+    }
+    quoted.push('"');
+    quoted
+}
+
+fn shell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn emit_lifecycle_event(
