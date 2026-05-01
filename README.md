@@ -40,6 +40,9 @@ Enable the optional HTTP status server:
 cargo run -p vik-cli -- ./WORKFLOW.md --port 3000
 ```
 
+Daemon logs are JSON lines on stdout and in a daily file under `logging.dir`. If
+`logging.dir` is omitted, Vik writes to `<workspace.root>/.vik/logs/vik.log.<date>`.
+
 ## Workflow Templates
 
 - `WORKFLOW.md` is the single default workflow. It keeps the upstream OpenAI Elixir workflow text

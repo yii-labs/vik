@@ -31,6 +31,11 @@ pub struct WorkspaceConfig {
     pub root: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LoggingConfig {
+    pub dir: PathBuf,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HooksConfig {
     pub after_create: Option<String>,
@@ -152,6 +157,7 @@ pub struct ServiceConfig {
     pub tracker: TrackerConfig,
     pub polling: PollingConfig,
     pub workspace: WorkspaceConfig,
+    pub logging: LoggingConfig,
     pub hooks: HooksConfig,
     pub agent: AgentConfig,
     pub codex: CodexConfig,
@@ -168,6 +174,7 @@ impl ServiceConfig {
         let tracker_map = get_map(&definition.config, "tracker");
         let polling_map = get_map(&definition.config, "polling");
         let workspace_map = get_map(&definition.config, "workspace");
+        let logging_map = get_map(&definition.config, "logging");
         let hooks_map = get_map(&definition.config, "hooks");
         let agent_map = get_map(&definition.config, "agent");
         let codex_map = get_map(&definition.config, "codex");
@@ -203,6 +210,10 @@ impl ServiceConfig {
             .map(|raw| expand_path_value(&raw, &workflow_dir))
             .transpose()?
             .unwrap_or_else(|| env::temp_dir().join("vik_workspaces"));
+        let logging_dir = string_value(logging_map, "dir")
+            .map(|raw| expand_path_value(&raw, &workflow_dir))
+            .transpose()?
+            .unwrap_or_else(|| workspace_root.join(".vik").join("logs"));
 
         let hooks = HooksConfig {
             after_create: string_value(hooks_map, "after_create"),
@@ -262,6 +273,7 @@ impl ServiceConfig {
             workspace: WorkspaceConfig {
                 root: workspace_root,
             },
+            logging: LoggingConfig { dir: logging_dir },
             hooks,
             agent: AgentConfig {
                 max_concurrent_agents,
