@@ -2,6 +2,7 @@ use serde_json::json;
 use std::path::Path;
 use vik_workflow::{CodexConfig, TrackerConfig};
 
+use crate::client::codex_spawn_command;
 use crate::event::extract_usage;
 use crate::process::{permission_approval_result, thread_start_params, turn_start_params};
 use crate::tools::DynamicTools;
@@ -28,6 +29,29 @@ fn session_id_composes_thread_and_turn() {
         vik_core::session_id("thread-1", "turn-2"),
         "thread-1-turn-2"
     );
+}
+
+#[test]
+fn codex_spawn_command_inserts_model_config_before_app_server() {
+    let config = CodexConfig {
+        command: "codex --config shell_environment_policy.inherit=all app-server".to_string(),
+        model: Some("gpt-5.5".to_string()),
+        model_reasoning_effort: Some("xhigh".to_string()),
+        ..CodexConfig::default()
+    };
+    assert_eq!(
+        codex_spawn_command(&config),
+        "codex --config shell_environment_policy.inherit=all --config 'model=\"gpt-5.5\"' --config 'model_reasoning_effort=xhigh' app-server"
+    );
+}
+
+#[test]
+fn codex_spawn_command_keeps_command_when_model_config_absent() {
+    let config = CodexConfig {
+        command: "codex --config shell_environment_policy.inherit=all app-server".to_string(),
+        ..CodexConfig::default()
+    };
+    assert_eq!(codex_spawn_command(&config), config.command);
 }
 
 #[test]

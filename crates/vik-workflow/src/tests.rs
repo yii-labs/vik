@@ -77,6 +77,25 @@ fn applies_defaults_and_path_resolution() {
 }
 
 #[test]
+fn parses_codex_model_fields() {
+    let def = parse_workflow_content(
+        PathBuf::from("WORKFLOW.md"),
+        "---\ntracker:\n  kind: linear\ncodex:\n  command: codex --config shell_environment_policy.inherit=all app-server\n  model: gpt-5.5\n  model_reasoning_effort: xhigh\n---\nBody",
+    )
+    .unwrap();
+    let config = ServiceConfig::from_definition(&def).unwrap();
+    assert_eq!(
+        config.codex.command,
+        "codex --config shell_environment_policy.inherit=all app-server"
+    );
+    assert_eq!(config.codex.model.as_deref(), Some("gpt-5.5"));
+    assert_eq!(
+        config.codex.model_reasoning_effort.as_deref(),
+        Some("xhigh")
+    );
+}
+
+#[test]
 fn strict_prompt_render_fails_on_unknown() {
     let def = WorkflowDefinition {
         path: PathBuf::from("WORKFLOW.md"),
