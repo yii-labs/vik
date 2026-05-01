@@ -1,5 +1,7 @@
 use serde_json::json;
+use vik_workflow::CodexConfig;
 
+use crate::client::build_codex_command;
 use crate::event::extract_usage;
 
 #[test]
@@ -33,4 +35,27 @@ fn thread_start_payload_uses_workspace_cwd() {
         "ephemeral": true
     });
     assert_eq!(payload["cwd"], "/tmp/workspace");
+}
+
+#[test]
+fn codex_command_inserts_dynamic_model_config_before_app_server() {
+    let config = CodexConfig {
+        command: "codex --config shell_environment_policy.inherit=all app-server".into(),
+        model: Some("gpt-5.5".into()),
+        model_reasoning_effort: Some("xhigh".into()),
+        ..CodexConfig::default()
+    };
+    assert_eq!(
+        build_codex_command(&config),
+        "codex --config shell_environment_policy.inherit=all --config 'model=\"gpt-5.5\"' --config 'model_reasoning_effort=\"xhigh\"' app-server"
+    );
+}
+
+#[test]
+fn codex_command_keeps_base_command_without_dynamic_config() {
+    let config = CodexConfig {
+        command: "codex app-server".into(),
+        ..CodexConfig::default()
+    };
+    assert_eq!(build_codex_command(&config), "codex app-server");
 }

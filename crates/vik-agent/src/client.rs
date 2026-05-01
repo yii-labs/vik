@@ -26,7 +26,7 @@ pub struct CodexIssueContext {
 impl CodexAppServerClient {
     pub fn new(config: CodexConfig) -> Self {
         Self {
-            command: config.command.clone(),
+            command: build_codex_command(&config),
             config,
         }
     }
@@ -93,4 +93,63 @@ impl CodexAppServerClient {
         let _ = process.child.kill().await;
         Ok(())
     }
+}
+
+pub(crate) fn build_codex_command(config: &CodexConfig) -> String {
+    let dynamic_args = dynamic_config_args(config);
+    if dynamic_args.is_empty() {
+        return config.command.clone();
+    }
+
+    let command = config.command.trim_end();
+    if let Some(prefix) = command.strip_suffix(" app-server") {
+        format!(
+            "{} {} app-server",
+            prefix.trim_end(),
+            dynamic_args.join(" ")
+        )
+    } else {
+        format!("{command} {}", dynamic_args.join(" "))
+    }
+}
+
+fn dynamic_config_args(config: &CodexConfig) -> Vec<String> {
+    [
+        ("model", config.model.as_deref()),
+        (
+            "model_reasoning_effort",
+            config.model_reasoning_effort.as_deref(),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(key, value)| value.and_then(|value| codex_config_arg(key, value)))
+    .collect()
+}
+
+fn codex_config_arg(key: &str, value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "--config {}",
+        shell_quote(&format!("{key}={}", toml_string(value)))
+    ))
+}
+
+fn toml_string(value: &str) -> String {
+    serde_json::to_string(value).expect("string serialization should not fail")
+}
+
+fn shell_quote(value: &str) -> String {
+    let mut quoted = String::from("'");
+    for ch in value.chars() {
+        if ch == '\'' {
+            quoted.push_str("'\\''");
+        } else {
+            quoted.push(ch);
+        }
+    }
+    quoted.push('\'');
+    quoted
 }

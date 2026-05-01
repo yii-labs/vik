@@ -49,6 +49,7 @@ cargo run -p vik-cli -- ./WORKFLOW.md --port 3000
 This implementation targets trusted local automation environments.
 
 - Codex app-server launches with `bash -lc <codex.command>` in the per-issue workspace.
+  `codex.model` and `codex.model_reasoning_effort` become CLI `--config` flags at spawn time.
 - Command, file-change, and permission approvals are answered with session acceptance.
 - User-input and elicitation requests return protocol errors, so runs do not wait forever.
 - Unsupported dynamic tool calls return structured failure output and do not stall the session.

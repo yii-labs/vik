@@ -51,6 +51,8 @@ pub struct AgentConfig {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CodexConfig {
     pub command: String,
+    pub model: Option<String>,
+    pub model_reasoning_effort: Option<String>,
     pub approval_policy: Option<serde_json::Value>,
     pub thread_sandbox: Option<serde_json::Value>,
     pub turn_sandbox_policy: Option<serde_json::Value>,
@@ -149,6 +151,8 @@ impl ServiceConfig {
         let codex = CodexConfig {
             command: string_value(codex_map, "command")
                 .unwrap_or_else(|| "codex app-server".to_string()),
+            model: string_value(codex_map, "model"),
+            model_reasoning_effort: string_value(codex_map, "model_reasoning_effort"),
             approval_policy: json_value(codex_map, "approval_policy"),
             thread_sandbox: json_value(codex_map, "thread_sandbox"),
             turn_sandbox_policy: json_value(codex_map, "turn_sandbox_policy"),
