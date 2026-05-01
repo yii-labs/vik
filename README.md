@@ -1,6 +1,7 @@
 # Vik
 
-Rust implementation of the draft Vik service specification.
+Vik is a Rust implementation of [Symphony](https://github.com/openai/symphony),
+adapted for the draft Vik service specification.
 
 Vik is a long-running daemon that reads Linear issues, creates one isolated workspace per
 issue, and runs Codex app-server sessions inside those workspaces.
