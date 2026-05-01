@@ -26,7 +26,9 @@ agent:
   max_concurrent_agents: 10
   max_turns: 20
 codex:
-  command: codex --config shell_environment_policy.inherit=all --config 'model="gpt-5.5"' --config model_reasoning_effort=xhigh app-server
+  command: codex --config shell_environment_policy.inherit=all app-server
+  model: "gpt-5.5"
+  model_reasoning_effort: xhigh
   approval_policy: never
   approvals_reviewer: auto_review
   thread_sandbox: workspace-write
