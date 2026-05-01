@@ -1,0 +1,24 @@
+[package]
+name = "vik-orchestrator"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait = "0.1.89"
+chrono = "0.4.44"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+vik-core = { version = "0.1.0", path = "../vik-core" }
+vik-workflow = { version = "0.1.0", path = "../vik-workflow" }
+vik-workspace = { version = "0.1.0", path = "../vik-workspace" }
+thiserror = "2.0.18"
+tokio = { version = "1.52.1", features = [
+  "sync",
+  "time",
+  "macros",
+  "rt-multi-thread",
+] }
+tracing = "0.1.43"
