@@ -53,7 +53,7 @@ jobs:
           set -euo pipefail
           command -v gh
           command -v codex
-          gh api user --jq .login >/dev/null
+          gh auth status --hostname github.com
           codex --version
 
       - name: Run Codex oneshot review
@@ -102,11 +102,9 @@ jobs:
               --raw-field body="$(cat "${comment_file}")" \
               >/dev/null
           else
-            gh api \
-              --method POST \
-              "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
-              --raw-field body="$(cat "${comment_file}")" \
-              >/dev/null
+            gh pr comment "${PR_NUMBER}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --body-file "${comment_file}"
           fi
 
       - name: Fail on Codex review error
