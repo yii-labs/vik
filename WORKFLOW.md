@@ -19,7 +19,7 @@ workspace:
   root: ~/code/vik-workspaces
 hooks:
   after_create: |
-    git clone --depth 1 git@github.com:forehalo/vik .
+    git clone --depth 1 git@github.com:yii-labs/vik .
   before_run: |
     git status .
 agent:
