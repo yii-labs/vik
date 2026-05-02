@@ -22,9 +22,9 @@ struct Args {
     #[arg(long)]
     port: Option<u16>,
 
-    /// Bind address for HTTP status server. Defaults to 127.0.0.1.
-    #[arg(long, value_name = "ADDR")]
-    host: Option<IpAddr>,
+    /// HTTP status server bind address. Defaults to 127.0.0.1.
+    #[arg(long, alias = "host", value_name = "ADDR")]
+    bind_address: Option<IpAddr>,
 
     /// Validate workflow and exit.
     #[arg(long)]
@@ -74,7 +74,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(port) = port {
         let orch_for_state = Arc::clone(&orchestrator);
         let orch_for_issue = Arc::clone(&orchestrator);
-        let addr = http_addr(args.host, port);
+        let addr = http_addr(args.bind_address, port);
         let bound = serve(
             addr,
             HttpState {
