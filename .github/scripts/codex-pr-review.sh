@@ -24,6 +24,7 @@ require_env GITHUB_WORKSPACE
 require_env PR_NUMBER
 require_env BASE_REF
 require_env CODEX_REVIEW_OUTPUT
+require_env GH_TOKEN
 
 review_workspace="${REVIEW_WORKSPACE:-${GITHUB_WORKSPACE:-}}"
 prompt_file="${CODEX_REVIEW_PROMPT:-.github/codex/prompts/pr-review.md}"
@@ -36,6 +37,7 @@ fi
 require_cmd codex
 require_cmd gh
 require_cmd git
+require_cmd base64
 
 cd "${review_workspace}"
 
@@ -47,9 +49,15 @@ fi
 mkdir -p "$(dirname "${CODEX_REVIEW_OUTPUT}")"
 : >"${CODEX_REVIEW_OUTPUT}"
 
-gh auth status --hostname github.com >/dev/null
+gh auth status --active --hostname github.com >/dev/null
 
-git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+basic_auth="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+GIT_CONFIG_COUNT=1 \
+  GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+  GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${basic_auth}" \
+  git fetch --no-tags "https://github.com/${GITHUB_REPOSITORY}.git" \
+    "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+unset basic_auth
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "${tmp_dir}"' EXIT
