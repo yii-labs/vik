@@ -13,7 +13,7 @@ FROM node:${NODE_VERSION}-bookworm-slim AS runtime
 ARG CODEX_PACKAGE=@openai/codex@0.128.0
 
 ENV HOME=/home/vik \
-    VIK_WORKFLOW_PATH=/workflow/WORKFLOW.md \
+    VIK_WORKFLOW_PATH=/home/vik/code/vik-workspaces/WORKFLOW.md \
     CODEX_HOME=/home/vik/.codex \
     GH_CONFIG_DIR=/home/vik/.config/gh \
     GH_PROMPT_DISABLED=1 \
@@ -46,14 +46,14 @@ RUN apt-get update \
 COPY --from=builder /src/target/release/vik /usr/local/bin/vik
 COPY docker/entrypoint.sh /usr/local/bin/vik-entrypoint
 
-RUN useradd --create-home --shell /bin/bash vik \
-    && mkdir -p /workflow /workspaces "${CODEX_HOME}" "${GH_CONFIG_DIR}" \
-    && chown -R vik:vik /workflow /workspaces /home/vik \
+RUN mkdir -p /home/vik/code/vik-workspaces "${CODEX_HOME}" "${GH_CONFIG_DIR}" \
+    && useradd --home-dir /home/vik --no-create-home --shell /bin/bash vik \
+    && chown -R vik:vik /home/vik \
     && chmod +x /usr/local/bin/vik-entrypoint
 
 USER vik
-WORKDIR /workflow
-VOLUME ["/workflow"]
+WORKDIR /home/vik/code/vik-workspaces
+VOLUME ["/home/vik/code/vik-workspaces"]
 
 ENTRYPOINT ["/usr/local/bin/vik-entrypoint"]
 CMD []

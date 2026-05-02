@@ -31,7 +31,7 @@ fi
 
 if [[ "$uses_default_workflow" -eq 1 && ! -f "$VIK_WORKFLOW_PATH" ]]; then
     echo "missing workflow file: $VIK_WORKFLOW_PATH" >&2
-    echo "mount WORKFLOW.md to /workflow/WORKFLOW.md or set VIK_WORKFLOW_PATH" >&2
+    echo "mount a workspace directory containing WORKFLOW.md or set VIK_WORKFLOW_PATH" >&2
     exit 64
 fi
 

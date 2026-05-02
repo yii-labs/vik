@@ -51,14 +51,14 @@ Build the worker image:
 docker build -t vik:local .
 ```
 
-Run a config check with only `WORKFLOW.md` mounted:
+Run a config check with the workspace directory mounted:
 
 ```sh
 docker run --rm \
   --env LINEAR_API_KEY \
   --env GH_TOKEN \
   --env OPENAI_API_KEY \
-  -v "$PWD/WORKFLOW.md:/workflow/WORKFLOW.md:ro" \
+  -v "$PWD:/home/vik/code/vik-workspaces" \
   vik:local --check
 ```
 
@@ -69,12 +69,14 @@ docker run --rm \
   --env LINEAR_API_KEY \
   --env GH_TOKEN \
   --env OPENAI_API_KEY \
-  -v "$PWD/WORKFLOW.md:/workflow/WORKFLOW.md:ro" \
+  -v "$PWD:/home/vik/code/vik-workspaces" \
   vik:local
 ```
 
 The image includes `vik`, `gh`, `codex`, `git`, and `openssh-client`. The default command is
-`vik /workflow/WORKFLOW.md`; set `VIK_WORKFLOW_PATH` when mounting the file elsewhere.
+`vik /home/vik/code/vik-workspaces/WORKFLOW.md`. The mounted directory must contain
+`WORKFLOW.md` and is also the default `workspace.root` used by the repository workflow. Set
+`VIK_WORKFLOW_PATH` when mounting the file elsewhere.
 
 Pass environment variables explicitly with Docker `--env NAME` or `--env NAME=value`. Add every
 GitHub CLI or Codex variable the workflow needs, including any `GH_*`, `GITHUB_*`, `CODEX_*`,
@@ -84,7 +86,8 @@ environment when Vik starts them. `LINEAR_API_KEY` must be passed this way unles
 provides `tracker.api_key`.
 
 If workflow hooks use SSH remotes, pass SSH credentials separately or switch hooks to HTTPS with a
-GitHub token. The minimal Docker path above only mounts `WORKFLOW.md`.
+GitHub token. The minimal Docker path above only mounts one workspace directory containing
+`WORKFLOW.md`; it does not copy local config files.
 
 ## Workflow Templates
 
