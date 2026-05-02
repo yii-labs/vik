@@ -43,6 +43,42 @@ cargo run -p vik-cli -- ./WORKFLOW.md --port 3000
 Daemon logs are JSON lines on stdout and in a daily file under `logging.dir`. If
 `logging.dir` is omitted, Vik writes to `<workspace.root>/.vik/logs/vik.log.<date>`.
 
+## Docker
+
+Build the worker image:
+
+```sh
+docker build -t vik:local .
+```
+
+Run a config check with only `WORKFLOW.md` mounted:
+
+```sh
+docker run --rm $(./docker/env-passthrough.sh) \
+  -v "$PWD/WORKFLOW.md:/workflow/WORKFLOW.md:ro" \
+  vik:local --check
+```
+
+Run the daemon:
+
+```sh
+docker run --rm $(./docker/env-passthrough.sh) \
+  -v "$PWD/WORKFLOW.md:/workflow/WORKFLOW.md:ro" \
+  vik:local
+```
+
+The image includes `vik`, `gh`, `codex`, `git`, and `openssh-client`. The default command is
+`vik /workflow/WORKFLOW.md`; set `VIK_WORKFLOW_PATH` when mounting the file elsewhere.
+
+`docker/env-passthrough.sh` prints Docker `--env` flags for known GitHub CLI, Codex/OpenAI,
+Linear, provider, proxy, and certificate variables from the host shell. Docker then passes those
+variables into the container without copying local config files. `gh` and `codex` also inherit the
+container environment when Vik starts them. `LINEAR_API_KEY` must be passed this way unless the
+workflow file provides `tracker.api_key`.
+
+If workflow hooks use SSH remotes, pass SSH credentials separately or switch hooks to HTTPS with a
+GitHub token. The minimal Docker path above only mounts `WORKFLOW.md`.
+
 ## Workflow Templates
 
 - `WORKFLOW.md` is the single default workflow. It keeps the upstream OpenAI Elixir workflow text
