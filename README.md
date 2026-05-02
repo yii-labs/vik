@@ -24,7 +24,7 @@ repository polls a Linear project, creates one workspace per active issue, and s
 Codex app-server session in each workspace.
 
 For first-time setup, follow [Workflow Initialization](docs/workflow-init.md). It covers
-GitHub CLI authentication, Linear API key creation, and an agent-ready bootstrap script.
+GitHub CLI authentication, Linear API key creation, and an agent-ready execution checklist.
 
 Basic local flow:
 

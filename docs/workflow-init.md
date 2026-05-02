@@ -1,7 +1,16 @@
 # Workflow Initialization
 
-Use this guide to prepare a local Vik workspace for unattended Linear issue
-orchestration.
+Use this file as an executable checklist for a human operator or AI agent with
+shell access. Follow it from top to bottom. Use browser automation only for login
+or settings pages when a browser tool is available.
+
+## Execution Rules
+
+- Work only inside the current Vik repository.
+- Never print, log, or commit secret values.
+- Stop and record a blocker if required GitHub or Linear credentials are missing
+  and no token or browser-based setup path is available.
+- Do not start the daemon until workflow validation passes.
 
 ## Prerequisites
 
@@ -11,10 +20,22 @@ orchestration.
 - Codex CLI with `app-server` support.
 - Linear access to the target workspace and project.
 
-## GitHub Authentication
+## 1. Confirm Repository
 
-Vik workflow hooks use GitHub for repository clone, branch, push, and PR operations.
-Authenticate GitHub CLI before starting the daemon.
+Run these checks from the repository root:
+
+```sh
+test -f WORKFLOW.md
+test -f Cargo.toml
+git rev-parse --show-toplevel
+```
+
+Continue only when the reported git root is the Vik repository.
+
+## 2. Authenticate GitHub
+
+Vik workflow hooks use GitHub for repository clone, branch, push, and PR
+operations.
 
 Official docs:
 
@@ -28,7 +49,14 @@ Check current auth:
 gh auth status --hostname github.com
 ```
 
-Interactive browser flow:
+If auth succeeds, continue.
+
+If auth fails and `GH_TOKEN` or `GITHUB_TOKEN` is already exported, keep that
+token in the environment for headless `gh` operations. The token must have
+repository access for clone, push, PR creation, labels, comments, and review
+reads.
+
+If auth fails and a browser tool is available, run the browser login flow:
 
 ```sh
 gh auth login --hostname github.com --git-protocol ssh --web
@@ -36,89 +64,94 @@ gh auth setup-git --hostname github.com
 gh auth status --hostname github.com
 ```
 
-Headless automation can use `GH_TOKEN` or `GITHUB_TOKEN` instead. The token must have
-repository access for clone, push, PR creation, labels, comments, and review reads.
+If auth still fails and no usable token exists, stop with a GitHub auth blocker.
 
-## Linear API Key
+## 3. Configure Linear API Key
 
-Vik uses Linear's GraphQL API. For local automation, use a Linear personal API key.
+Vik uses Linear's GraphQL API. For local automation, use a Linear personal API
+key.
 
 Official docs:
 
 - Linear GraphQL API getting started: <https://linear.app/developers/graphql>
 - Linear API keys overview: <https://linear.app/docs/api-and-webhooks>
 
-Create a key:
+Check for an existing key:
+
+```sh
+test -n "${LINEAR_API_KEY:-}" || { test -f .env && grep -q '^LINEAR_API_KEY=' .env; }
+```
+
+If a key is already available, continue. Do not print the key.
+
+If no key exists and a browser tool is available:
 
 1. Open Linear.
 2. Go to Settings, Account, Security & Access.
 3. Create a personal API key.
-4. Grant the smallest permissions that still allow Vik to read issues and update issue
-   metadata for the target project.
-5. Copy the key once and store it in `.env` or a secret manager.
+4. Grant the smallest permissions that still allow Vik to read issues and update
+   issue metadata for the target project.
+5. Copy the key once.
 
-Configure the local environment, replacing `lin_api_xxx` with the real key:
+Store the key in `.env`, replacing `lin_api_xxx` with the real key:
 
 ```sh
-cp .env.example .env
-sed -i.bak 's/^LINEAR_API_KEY=.*/LINEAR_API_KEY=lin_api_xxx/' .env
-rm .env.bak
+test -f .env || cp .env.example .env
+if grep -q '^LINEAR_API_KEY=' .env; then
+  sed -i.bak 's/^LINEAR_API_KEY=.*/LINEAR_API_KEY=lin_api_xxx/' .env
+else
+  printf '\nLINEAR_API_KEY=lin_api_xxx\n' >> .env
+fi
+rm -f .env.bak
 ```
 
-Do not commit `.env`. The workflow also accepts an already exported `LINEAR_API_KEY`.
+Do not commit `.env`. If no key can be created or supplied, stop with a Linear
+key blocker.
 
-## Workflow Configuration
+## 4. Review Workflow Configuration
 
 Review the front matter in `WORKFLOW.md`:
 
 - `tracker.project_slug` must match the Linear project slug.
 - `tracker.active_states` controls which issue states Vik can claim.
 - `tracker.terminal_states` controls cleanup and stop behavior.
-- `workspace.root` must be a directory where Vik may create per-issue workspaces.
+- `workspace.root` must be a directory where Vik may create per-issue
+  workspaces.
 - `hooks.after_create` must clone the repository into the empty issue workspace.
 - `codex.command` must launch `codex app-server`.
 
-Validate the workflow before dispatch:
+Update only values that do not match the target environment.
+
+## 5. Validate Workflow
+
+Run validation before dispatch:
 
 ```sh
-cargo run -p vik-cli -- ./WORKFLOW.md --check
+cargo run --locked -p vik-cli -- ./WORKFLOW.md --check
 ```
+
+Continue only when validation reports the workflow is valid.
+
+## 6. Start Workflow
 
 Start the daemon:
 
 ```sh
-cargo run -p vik-cli -- ./WORKFLOW.md
+cargo run --locked -p vik-cli -- ./WORKFLOW.md
 ```
 
 Enable the local HTTP status server when needed:
 
 ```sh
-cargo run -p vik-cli -- ./WORKFLOW.md --port 3000
+cargo run --locked -p vik-cli -- ./WORKFLOW.md --port 3000
 ```
 
-## Agent Bootstrap Instructions
+## Completion Report
 
-The following prompt can be given to an AI agent that has shell access and, when
-available, a browser tool:
+Report only:
 
-```text
-Initialize this Vik workspace for unattended issue orchestration.
-
-Rules:
-- Work only inside the current repository.
-- Never print or commit secrets.
-- Use browser automation only for login pages or settings pages when the browser tool is available.
-- If required GitHub or Linear credentials are missing and no in-session auth path exists, record a blocker and stop.
-
-Steps:
-1. Confirm the current directory is the Vik repository.
-2. Run `gh auth status --hostname github.com`.
-3. If GitHub CLI is not authenticated and a browser tool is available, run `gh auth login --hostname github.com --git-protocol ssh --web`, complete the browser flow, then run `gh auth setup-git --hostname github.com`.
-4. If GitHub CLI is not authenticated and no browser tool or token is available, stop with a GitHub auth blocker.
-5. Ensure a Linear API key is available from `LINEAR_API_KEY` or `.env`.
-6. If no key is available and a browser tool is available, open Linear settings, create a personal API key under Account > Security & Access, and store it as `LINEAR_API_KEY` in `.env`.
-7. If no key is available and no browser tool can create one, stop with a Linear key blocker.
-8. Review `WORKFLOW.md`; update `tracker.project_slug`, `workspace.root`, hooks, and `codex.command` only when they do not match the target environment.
-9. Run `cargo run -p vik-cli -- ./WORKFLOW.md --check`.
-10. Report the validation result and any blockers. Do not include secret values.
-```
+- GitHub auth status, without token values.
+- Linear key presence, without key values.
+- Workflow validation result.
+- Daemon start command used, if started.
+- Any blocker and the exact missing credential or permission.
