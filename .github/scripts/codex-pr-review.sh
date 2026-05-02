@@ -25,13 +25,19 @@ require_env PR_NUMBER
 require_env BASE_REF
 require_env CODEX_REVIEW_OUTPUT
 
+review_workspace="${REVIEW_WORKSPACE:-${GITHUB_WORKSPACE:-}}"
 prompt_file="${CODEX_REVIEW_PROMPT:-.github/codex/prompts/pr-review.md}"
+
+if [[ -z "${review_workspace}" ]]; then
+  echo "Missing required environment variable: REVIEW_WORKSPACE or GITHUB_WORKSPACE" >&2
+  exit 2
+fi
 
 require_cmd codex
 require_cmd gh
 require_cmd git
 
-cd "${GITHUB_WORKSPACE}"
+cd "${review_workspace}"
 
 if [[ ! -f "${prompt_file}" ]]; then
   echo "Missing Codex review prompt: ${prompt_file}" >&2
@@ -56,8 +62,6 @@ gh pr view "${PR_NUMBER}" \
   --json title,url,body,author,baseRefName,headRefName,files \
   >"${pr_context}"
 
-pr_title="$(gh pr view "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json title --jq '.title')"
-
 {
   cat "${prompt_file}"
   printf '\n## Pull Request Context\n\n'
@@ -67,9 +71,8 @@ pr_title="$(gh pr view "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json title
 } >"${review_prompt}"
 
 set +e
-codex exec review \
+env -u GH_TOKEN -u GITHUB_TOKEN codex exec --sandbox read-only review \
   --base "origin/${BASE_REF}" \
-  --title "${pr_title}" \
   --ephemeral \
   --output-last-message "${CODEX_REVIEW_OUTPUT}" \
   - <"${review_prompt}"
@@ -83,6 +86,7 @@ if [[ ! -s "${CODEX_REVIEW_OUTPUT}" ]]; then
 Codex review failed before producing a final review message.
 
 - command: \`codex exec review --base origin/${BASE_REF}\`
+- sandbox: \`read-only\`
 - exit code: ${codex_status}
 EOF
 fi
