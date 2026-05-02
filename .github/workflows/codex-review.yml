@@ -35,6 +35,15 @@ jobs:
             ${{ github.event.pull_request.base.ref }} \
             +refs/pull/${{ github.event.pull_request.number }}/head
 
+      - name: Verify OpenAI API key secret
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "::error::Set the OPENAI_API_KEY repository secret to enable Codex reviews."
+            exit 1
+          fi
+
       - name: Run Codex
         id: run_codex
         uses: openai/codex-action@v1
