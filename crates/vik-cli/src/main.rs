@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{fs, io};
 
-use clap::Parser;
+mod service;
+
+use clap::{Parser, Subcommand};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 use vik_agent::LocalAgentWorker;
@@ -15,6 +17,9 @@ use vik_workflow::WorkflowReloader;
 #[derive(Debug, Parser)]
 #[command(name = "vik", version, about = "Run Vik coding-agent orchestrator")]
 struct Args {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     /// Path to WORKFLOW.md. Defaults to ./WORKFLOW.md.
     workflow: Option<PathBuf>,
 
@@ -25,6 +30,12 @@ struct Args {
     /// Validate workflow and exit.
     #[arg(long)]
     check: bool,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Manage Vik as a detached local service.
+    Service(service::ServiceArgs),
 }
 
 #[tokio::main]
@@ -38,10 +49,24 @@ async fn main() {
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     load_dotenv()?;
     let args = Args::parse();
-    let reloader = WorkflowReloader::start(args.workflow.clone())?;
+    if let Some(command) = args.command {
+        match command {
+            Command::Service(args) => return service::run(args).await,
+        }
+    }
+
+    run_daemon(args.workflow, args.port, args.check).await
+}
+
+async fn run_daemon(
+    workflow: Option<PathBuf>,
+    port: Option<u16>,
+    check: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let reloader = WorkflowReloader::start(workflow)?;
     let loaded = reloader.current().clone();
     loaded.config.validate_for_dispatch()?;
-    if args.check {
+    if check {
         println!("workflow valid: {}", loaded.definition.path.display());
         return Ok(());
     }
@@ -64,9 +89,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let worker = Arc::new(LocalAgentWorker::new(Arc::clone(&tracker)));
     let orchestrator = Arc::new(Orchestrator::new(Arc::clone(&tracker), worker, reloader));
 
-    let port = args
-        .port
-        .or(loaded.config.server.as_ref().map(|server| server.port));
+    let port = port.or(loaded.config.server.as_ref().map(|server| server.port));
     if let Some(port) = port {
         let orch_for_state = Arc::clone(&orchestrator);
         let orch_for_issue = Arc::clone(&orchestrator);

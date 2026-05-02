@@ -1,0 +1,595 @@
+use std::env;
+use std::error::Error;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use clap::{Args as ClapArgs, Subcommand};
+use serde::{Deserialize, Serialize};
+use vik_workflow::load_effective_workflow;
+
+#[derive(Debug, ClapArgs)]
+pub(crate) struct ServiceArgs {
+    #[command(subcommand)]
+    command: ServiceCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum ServiceCommand {
+    /// Install service state and start Vik in the background.
+    Install(RunArgs),
+    /// Remove service state and stop Vik if it is running.
+    Uninstall(WorkflowArg),
+    /// Print current service status.
+    Status(WorkflowArg),
+    /// Print recent service logs.
+    Logs(LogsArgs),
+    /// Start Vik in the background.
+    Start(RunArgs),
+    /// Stop a running Vik service.
+    Stop(WorkflowArg),
+    /// Stop then start Vik in the background.
+    Restart(RunArgs),
+}
+
+#[derive(Debug, Clone, ClapArgs)]
+struct RunArgs {
+    /// Path to WORKFLOW.md. Defaults to ./WORKFLOW.md.
+    workflow: Option<PathBuf>,
+
+    /// Enable HTTP status server. Overrides server.port from WORKFLOW.md.
+    #[arg(long)]
+    port: Option<u16>,
+}
+
+#[derive(Debug, Clone, ClapArgs)]
+struct WorkflowArg {
+    /// Path to WORKFLOW.md. Defaults to ./WORKFLOW.md.
+    workflow: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, ClapArgs)]
+struct LogsArgs {
+    /// Path to WORKFLOW.md. Defaults to ./WORKFLOW.md.
+    workflow: Option<PathBuf>,
+
+    /// Number of recent lines to print.
+    #[arg(long, default_value_t = 100)]
+    lines: usize,
+
+    /// Continue printing appended log output.
+    #[arg(long)]
+    follow: bool,
+}
+
+#[derive(Debug)]
+struct ServiceTarget {
+    workflow_path: PathBuf,
+    service_dir: PathBuf,
+    state_path: PathBuf,
+    log_path: PathBuf,
+    cwd: PathBuf,
+    port: Option<u16>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ServiceState {
+    version: u32,
+    workflow_path: PathBuf,
+    cwd: PathBuf,
+    pid: Option<u32>,
+    status: StoredStatus,
+    started_at_unix: Option<u64>,
+    stopped_at_unix: Option<u64>,
+    log_path: PathBuf,
+    port: Option<u16>,
+    command: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredStatus {
+    Running,
+    Stopped,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeStatus {
+    Running,
+    Stopped,
+    Stale,
+}
+
+pub(crate) async fn run(args: ServiceArgs) -> Result<(), Box<dyn Error>> {
+    match args.command {
+        ServiceCommand::Install(args) => {
+            let target = load_target(args.workflow, args.port, true)?;
+            start_service(&target, "installed")?;
+        }
+        ServiceCommand::Uninstall(args) => {
+            let target = load_target(args.workflow, None, false)?;
+            uninstall_service(&target)?;
+        }
+        ServiceCommand::Status(args) => {
+            let target = load_target(args.workflow, None, false)?;
+            print_status(&target)?;
+        }
+        ServiceCommand::Logs(args) => {
+            let target = load_target(args.workflow, None, false)?;
+            print_logs(&target, args.lines, args.follow)?;
+        }
+        ServiceCommand::Start(args) => {
+            let target = load_target(args.workflow, args.port, true)?;
+            start_service(&target, "started")?;
+        }
+        ServiceCommand::Stop(args) => {
+            let target = load_target(args.workflow, None, false)?;
+            stop_service(&target, false)?;
+        }
+        ServiceCommand::Restart(args) => {
+            let target = load_target(args.workflow, args.port, true)?;
+            stop_service(&target, false)?;
+            start_service(&target, "restarted")?;
+        }
+    }
+    Ok(())
+}
+
+fn load_target(
+    workflow: Option<PathBuf>,
+    port: Option<u16>,
+    require_dispatch_config: bool,
+) -> Result<ServiceTarget, Box<dyn Error>> {
+    let loaded = load_effective_workflow(workflow)?;
+    if require_dispatch_config {
+        loaded.config.validate_for_dispatch()?;
+    }
+    let workflow_path = fs::canonicalize(&loaded.definition.path)?;
+    let cwd = env::current_dir()?;
+    let service_dir = loaded.config.workspace.root.join(".vik").join("service");
+    let name = service_name(&workflow_path);
+    Ok(ServiceTarget {
+        workflow_path,
+        service_dir: service_dir.clone(),
+        state_path: service_dir.join(format!("{name}.json")),
+        log_path: service_dir.join(format!("{name}.log")),
+        cwd,
+        port,
+    })
+}
+
+fn start_service(target: &ServiceTarget, verb: &str) -> Result<(), Box<dyn Error>> {
+    if let Some(state) = read_state(&target.state_path)?
+        && classify_state(&state) == RuntimeStatus::Running
+    {
+        println!(
+            "service already running: pid={} log={}",
+            state.pid.unwrap_or_default(),
+            state.log_path.display()
+        );
+        return Ok(());
+    }
+
+    fs::create_dir_all(&target.service_dir)?;
+    let executable = env::current_exe()?;
+    let mut command = Command::new(&executable);
+    for arg in daemon_args(target) {
+        command.arg(arg);
+    }
+    command.current_dir(&target.cwd);
+    detach_command(&mut command);
+
+    let log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&target.log_path)?;
+    let err_log = log.try_clone()?;
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(err_log));
+
+    let child = command.spawn()?;
+    let pid = child.id();
+    let state = ServiceState {
+        version: 1,
+        workflow_path: target.workflow_path.clone(),
+        cwd: target.cwd.clone(),
+        pid: Some(pid),
+        status: StoredStatus::Running,
+        started_at_unix: Some(now_unix()),
+        stopped_at_unix: None,
+        log_path: target.log_path.clone(),
+        port: target.port,
+        command: display_command(&executable, target),
+    };
+    write_state(&target.state_path, &state)?;
+    println!(
+        "service {verb}: pid={} state={} log={}",
+        pid,
+        target.state_path.display(),
+        target.log_path.display()
+    );
+    Ok(())
+}
+
+fn stop_service(target: &ServiceTarget, remove_state: bool) -> Result<(), Box<dyn Error>> {
+    let Some(mut state) = read_state(&target.state_path)? else {
+        println!("service not installed: {}", target.state_path.display());
+        return Ok(());
+    };
+
+    match classify_state(&state) {
+        RuntimeStatus::Running => {
+            let pid = state.pid.unwrap_or_default();
+            terminate_pid(pid)?;
+            state.status = StoredStatus::Stopped;
+            state.stopped_at_unix = Some(now_unix());
+            println!("service stopped: pid={pid}");
+        }
+        RuntimeStatus::Stopped => {
+            println!("service already stopped: {}", target.state_path.display());
+        }
+        RuntimeStatus::Stale => {
+            state.status = StoredStatus::Stopped;
+            state.stopped_at_unix = Some(now_unix());
+            println!(
+                "service stale: pid={} is not running",
+                state.pid.unwrap_or_default()
+            );
+        }
+    }
+
+    if remove_state {
+        remove_state_file(&target.state_path)?;
+    } else {
+        write_state(&target.state_path, &state)?;
+    }
+    Ok(())
+}
+
+fn uninstall_service(target: &ServiceTarget) -> Result<(), Box<dyn Error>> {
+    stop_service(target, true)?;
+    println!("service uninstalled: {}", target.state_path.display());
+    Ok(())
+}
+
+fn print_status(target: &ServiceTarget) -> Result<(), Box<dyn Error>> {
+    let Some(state) = read_state(&target.state_path)? else {
+        println!("not installed: {}", target.state_path.display());
+        return Ok(());
+    };
+
+    match classify_state(&state) {
+        RuntimeStatus::Running => println!(
+            "running: pid={} workflow={} log={}",
+            state.pid.unwrap_or_default(),
+            state.workflow_path.display(),
+            state.log_path.display()
+        ),
+        RuntimeStatus::Stopped => println!(
+            "stopped: workflow={} log={}",
+            state.workflow_path.display(),
+            state.log_path.display()
+        ),
+        RuntimeStatus::Stale => println!(
+            "stale: pid={} workflow={} log={}",
+            state.pid.unwrap_or_default(),
+            state.workflow_path.display(),
+            state.log_path.display()
+        ),
+    }
+    Ok(())
+}
+
+fn print_logs(target: &ServiceTarget, lines: usize, follow: bool) -> Result<(), Box<dyn Error>> {
+    let path = read_state(&target.state_path)?
+        .map(|state| state.log_path)
+        .unwrap_or_else(|| target.log_path.clone());
+    if !path.exists() {
+        println!("service logs not found: {}", path.display());
+        return Ok(());
+    }
+
+    print_recent_lines(&path, lines)?;
+    if follow {
+        follow_log(&path)?;
+    }
+    Ok(())
+}
+
+fn read_state(path: &Path) -> Result<Option<ServiceState>, Box<dyn Error>> {
+    match fs::read_to_string(path) {
+        Ok(body) => Ok(Some(serde_json::from_str(&body)?)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn write_state(path: &Path, state: &ServiceState) -> Result<(), Box<dyn Error>> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, format!("{}\n", serde_json::to_string_pretty(state)?))?;
+    Ok(())
+}
+
+fn remove_state_file(path: &Path) -> Result<(), Box<dyn Error>> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn classify_state(state: &ServiceState) -> RuntimeStatus {
+    match (state.status, state.pid) {
+        (StoredStatus::Running, Some(pid)) if process_matches_state(pid, state) => {
+            RuntimeStatus::Running
+        }
+        (StoredStatus::Running, Some(_)) => RuntimeStatus::Stale,
+        _ => RuntimeStatus::Stopped,
+    }
+}
+
+fn daemon_args(target: &ServiceTarget) -> Vec<String> {
+    let mut args = vec![target.workflow_path.display().to_string()];
+    if let Some(port) = target.port {
+        args.push("--port".to_string());
+        args.push(port.to_string());
+    }
+    args
+}
+
+fn display_command(executable: &Path, target: &ServiceTarget) -> Vec<String> {
+    let mut command = vec![executable.display().to_string()];
+    command.extend(daemon_args(target));
+    command
+}
+
+fn service_name(workflow_path: &Path) -> String {
+    let stem = workflow_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .map(sanitize_name_part)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "workflow".to_string());
+    format!(
+        "{stem}-{:016x}",
+        fnv1a64(workflow_path.to_string_lossy().as_bytes())
+    )
+}
+
+fn sanitize_name_part(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' || ch == '-' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+fn print_recent_lines(path: &Path, lines: usize) -> io::Result<()> {
+    let body = fs::read_to_string(path)?;
+    let collected: Vec<&str> = body.lines().collect();
+    let start = collected.len().saturating_sub(lines);
+    for line in &collected[start..] {
+        println!("{line}");
+    }
+    Ok(())
+}
+
+fn follow_log(path: &Path) -> io::Result<()> {
+    let mut offset = fs::metadata(path)?.len();
+    loop {
+        thread::sleep(Duration::from_secs(1));
+        let mut file = OpenOptions::new().read(true).open(path)?;
+        file.seek(SeekFrom::Start(offset))?;
+        let mut chunk = String::new();
+        file.read_to_string(&mut chunk)?;
+        if !chunk.is_empty() {
+            print!("{chunk}");
+            io::stdout().flush()?;
+            offset += chunk.len() as u64;
+        }
+    }
+}
+
+fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+#[cfg(unix)]
+fn detach_command(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+}
+
+#[cfg(windows)]
+fn detach_command(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+}
+
+#[cfg(unix)]
+fn process_alive(pid: u32) -> bool {
+    let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    if result == 0 {
+        return true;
+    }
+    io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(unix)]
+fn process_matches_state(pid: u32, state: &ServiceState) -> bool {
+    if !process_alive(pid) {
+        return false;
+    }
+    Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "command="])
+        .output()
+        .ok()
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .is_some_and(|command| command.contains(state.workflow_path.to_string_lossy().as_ref()))
+}
+
+#[cfg(windows)]
+fn process_alive(pid: u32) -> bool {
+    Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}")])
+        .output()
+        .map(|output| String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()))
+        .unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn process_matches_state(pid: u32, _state: &ServiceState) -> bool {
+    process_alive(pid)
+}
+
+#[cfg(unix)]
+fn terminate_pid(pid: u32) -> io::Result<()> {
+    if !process_alive(pid) {
+        return Ok(());
+    }
+    let result = unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+    if result != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if wait_until_dead(pid, Duration::from_secs(5)) {
+        return Ok(());
+    }
+    let result = unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+    if result != 0 && process_alive(pid) {
+        return Err(io::Error::last_os_error());
+    }
+    let _ = wait_until_dead(pid, Duration::from_secs(2));
+    Ok(())
+}
+
+#[cfg(windows)]
+fn terminate_pid(pid: u32) -> io::Result<()> {
+    if !process_alive(pid) {
+        return Ok(());
+    }
+    let status = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("taskkill failed for pid {pid}"),
+        ))
+    }
+}
+
+fn wait_until_dead(pid: u32, timeout: Duration) -> bool {
+    let start = SystemTime::now();
+    while process_alive(pid) {
+        if start.elapsed().unwrap_or_default() >= timeout {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn service_name_is_ascii_and_stable() {
+        let path = PathBuf::from("/tmp/Vik Workflow/WORKFLOW.md");
+
+        let name = service_name(&path);
+
+        assert_eq!(name, service_name(&path));
+        assert!(name.starts_with("WORKFLOW-"));
+        assert!(
+            name.chars()
+                .all(|ch| { ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' || ch == '-' })
+        );
+    }
+
+    #[test]
+    fn daemon_args_include_workflow_and_optional_port() {
+        let target = ServiceTarget {
+            workflow_path: PathBuf::from("/tmp/vik/WORKFLOW.md"),
+            service_dir: PathBuf::from("/tmp/vik/.vik/service"),
+            state_path: PathBuf::from("/tmp/vik/.vik/service/state.json"),
+            log_path: PathBuf::from("/tmp/vik/.vik/service/service.log"),
+            cwd: PathBuf::from("/tmp/vik"),
+            port: Some(3000),
+        };
+
+        assert_eq!(
+            daemon_args(&target),
+            vec!["/tmp/vik/WORKFLOW.md", "--port", "3000"]
+        );
+    }
+
+    #[test]
+    fn stopped_state_classifies_as_stopped_without_pid_probe() {
+        let state = ServiceState {
+            version: 1,
+            workflow_path: PathBuf::from("/tmp/vik/WORKFLOW.md"),
+            cwd: PathBuf::from("/tmp/vik"),
+            pid: Some(999_999),
+            status: StoredStatus::Stopped,
+            started_at_unix: Some(1),
+            stopped_at_unix: Some(2),
+            log_path: PathBuf::from("/tmp/vik/service.log"),
+            port: None,
+            command: vec![],
+        };
+
+        assert_eq!(classify_state(&state), RuntimeStatus::Stopped);
+    }
+
+    #[test]
+    fn recent_log_lines_are_limited() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("service.log");
+        fs::write(&path, "one\ntwo\nthree\n").unwrap();
+
+        let body = fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = body.lines().collect();
+        let start = lines.len().saturating_sub(2);
+
+        assert_eq!(&lines[start..], ["two", "three"]);
+    }
+}
