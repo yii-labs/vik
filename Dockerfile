@@ -47,11 +47,10 @@ COPY --from=builder /src/target/release/vik /usr/local/bin/vik
 COPY docker/entrypoint.sh /usr/local/bin/vik-entrypoint
 
 RUN mkdir -p /home/vik/code/vik-workspaces "${CODEX_HOME}" "${GH_CONFIG_DIR}" \
-    && useradd --home-dir /home/vik --no-create-home --shell /bin/bash vik \
-    && chown -R vik:vik /home/vik \
+    && chown -R node:node /home/vik \
     && chmod +x /usr/local/bin/vik-entrypoint
 
-USER vik
+USER node
 WORKDIR /home/vik/code/vik-workspaces
 VOLUME ["/home/vik/code/vik-workspaces"]
 
