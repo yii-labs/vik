@@ -144,11 +144,13 @@ fn load_target(
     port: Option<u16>,
     require_dispatch_config: bool,
 ) -> Result<ServiceTarget, Box<dyn Error>> {
-    let loaded = load_effective_workflow(workflow)?;
-    if require_dispatch_config {
+    let workflow_path = if require_dispatch_config {
+        let loaded = load_effective_workflow(workflow)?;
         loaded.config.validate_for_dispatch()?;
-    }
-    let workflow_path = fs::canonicalize(&loaded.definition.path)?;
+        fs::canonicalize(&loaded.definition.path)?
+    } else {
+        resolve_workflow_path(workflow)?
+    };
     let cwd = env::current_dir()?;
     let service_dir = service_dir_for_workflow(&workflow_path);
     let name = service_name(&workflow_path);
@@ -160,6 +162,20 @@ fn load_target(
         cwd,
         port,
     })
+}
+
+fn resolve_workflow_path(workflow: Option<PathBuf>) -> io::Result<PathBuf> {
+    let path = workflow.unwrap_or_else(|| PathBuf::from("WORKFLOW.md"));
+    let absolute = if path.is_absolute() {
+        path
+    } else {
+        env::current_dir()?.join(path)
+    };
+    match fs::canonicalize(&absolute) {
+        Ok(path) => Ok(path),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(absolute),
+        Err(err) => Err(err),
+    }
 }
 
 fn start_service(target: &ServiceTarget, verb: &str) -> Result<(), Box<dyn Error>> {
@@ -509,7 +525,7 @@ fn process_matches_state(pid: u32, state: &ServiceState) -> bool {
     let Ok(command) = String::from_utf8(output.stdout) else {
         return true;
     };
-    command.contains(state.workflow_path.to_string_lossy().as_ref())
+    command_mentions_workflow(&command, &state.workflow_path)
 }
 
 #[cfg(windows)]
@@ -522,8 +538,32 @@ fn process_alive(pid: u32) -> bool {
 }
 
 #[cfg(windows)]
-fn process_matches_state(pid: u32, _state: &ServiceState) -> bool {
-    process_alive(pid)
+fn process_matches_state(pid: u32, state: &ServiceState) -> bool {
+    if !process_alive(pid) {
+        return false;
+    }
+    let filter = format!("ProcessId = {pid}");
+    let Ok(output) = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            &format!("(Get-CimInstance Win32_Process -Filter '{filter}').CommandLine"),
+        ])
+        .output()
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    command_mentions_workflow(
+        String::from_utf8_lossy(&output.stdout).as_ref(),
+        &state.workflow_path,
+    )
+}
+
+fn command_mentions_workflow(command: &str, workflow_path: &Path) -> bool {
+    command.contains(workflow_path.to_string_lossy().as_ref())
 }
 
 #[cfg(unix)]
@@ -666,6 +706,48 @@ mod tests {
             first.service_dir,
             expected_root.join(".vik").join("service")
         );
+    }
+
+    #[test]
+    fn management_target_does_not_parse_invalid_workflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflow_path = dir.path().join("WORKFLOW.md");
+        fs::write(&workflow_path, "---\ntracker: [\n---\nBody").unwrap();
+
+        let target = load_target(Some(workflow_path.clone()), None, false).unwrap();
+
+        assert_eq!(
+            target.service_dir,
+            fs::canonicalize(dir.path())
+                .unwrap()
+                .join(".vik")
+                .join("service")
+        );
+    }
+
+    #[test]
+    fn management_target_survives_missing_workflow_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflow_path = dir.path().join("WORKFLOW.md");
+
+        let target = load_target(Some(workflow_path.clone()), None, false).unwrap();
+
+        assert_eq!(target.workflow_path, workflow_path);
+        assert_eq!(target.service_dir, dir.path().join(".vik").join("service"));
+    }
+
+    #[test]
+    fn command_match_requires_workflow_path() {
+        let workflow_path = PathBuf::from("/tmp/vik/WORKFLOW.md");
+
+        assert!(command_mentions_workflow(
+            "vik /tmp/vik/WORKFLOW.md --port 3000",
+            &workflow_path
+        ));
+        assert!(!command_mentions_workflow(
+            "vik /tmp/other/WORKFLOW.md",
+            &workflow_path
+        ));
     }
 
     #[test]
