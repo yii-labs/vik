@@ -18,4 +18,18 @@ Write a GitHub comment-ready Markdown response:
 - Start with `## Codex Review`.
 - If there are no blocking findings, write `No blocking findings found.`
 - For each finding, include severity, file path, line or function, impact, and a concrete fix.
+- When a finding maps to a changed line, include this hidden block immediately
+  after the finding so the workflow can publish it as an inline review comment:
+
+  ```text
+  <!-- codex-review-comment
+  path: relative/path/from/repo/root.rs
+  line: 123
+  body:
+  Severity: high
+  Impact: Short impact.
+  Fix: Concrete fix.
+  -->
+  ```
+
 - Keep the response concise and actionable.

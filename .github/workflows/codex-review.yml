@@ -78,6 +78,7 @@ jobs:
           github-token: ${{ github.token }}
           script: |
             const fs = require('fs');
+            const { buildReviewPayload } = require(`${process.env.GITHUB_WORKSPACE}/trusted/.github/scripts/codex-review-comments.js`);
             const outputPath = process.env.CODEX_REVIEW_OUTPUT;
 
             let body = '';
@@ -85,20 +86,20 @@ jobs:
               body = fs.readFileSync(outputPath, 'utf8').trim();
             }
 
-            if (!body) {
-              body = [
-                '## Codex Review',
-                '',
-                'Codex review did not produce output. Check the workflow logs.',
-              ].join('\n');
-            }
+            const pull_number = Number(process.env.PR_NUMBER);
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number,
+              per_page: 100,
+            });
 
             await github.rest.pulls.createReview({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: Number(process.env.PR_NUMBER),
+              pull_number,
               event: 'COMMENT',
-              body: `<!-- codex-review -->\n${body}`,
+              ...buildReviewPayload(body, files),
             });
 
       - name: Fail on Codex review error
