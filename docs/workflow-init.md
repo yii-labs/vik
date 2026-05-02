@@ -79,7 +79,17 @@ Official docs:
 Check for an existing key:
 
 ```sh
-test -n "${LINEAR_API_KEY:-}" || { test -f .env && grep -q '^LINEAR_API_KEY=' .env; }
+existing_key="${LINEAR_API_KEY:-}"
+if [ -z "$existing_key" ] && [ -f .env ]; then
+  existing_key="$(grep '^LINEAR_API_KEY=' .env | tail -n 1 | cut -d= -f2-)"
+fi
+
+case "$existing_key" in
+  lin_api_xxx|"") echo 'No real Linear API key is configured.' >&2; exit 1 ;;
+  lin_api_*) ;;
+  *) echo 'Configured LINEAR_API_KEY must start with lin_api_.' >&2; exit 1 ;;
+esac
+unset existing_key
 ```
 
 If a key is already available, continue. Do not print the key.
@@ -106,6 +116,7 @@ stty echo
 printf '\n' >&2
 
 case "$LINEAR_API_KEY" in
+  lin_api_xxx|"") echo 'LINEAR_API_KEY must be a real Linear API key.' >&2; exit 1 ;;
   lin_api_*) ;;
   *) echo 'LINEAR_API_KEY must start with lin_api_.' >&2; exit 1 ;;
 esac
