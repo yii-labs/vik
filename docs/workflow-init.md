@@ -93,16 +93,43 @@ If no key exists and a browser tool is available:
    issue metadata for the target project.
 5. Copy the key once.
 
-Store the key in `.env`, replacing `lin_api_xxx` with the real key:
+Store the real key in `.env`. Paste the copied key into the prompt. The value is
+not echoed:
 
 ```sh
 test -f .env || cp .env.example .env
-if grep -q '^LINEAR_API_KEY=' .env; then
-  sed -i.bak 's/^LINEAR_API_KEY=.*/LINEAR_API_KEY=lin_api_xxx/' .env
-else
-  printf '\nLINEAR_API_KEY=lin_api_xxx\n' >> .env
+
+printf 'Paste Linear API key: ' >&2
+stty -echo
+IFS= read -r LINEAR_API_KEY
+stty echo
+printf '\n' >&2
+
+case "$LINEAR_API_KEY" in
+  lin_api_*) ;;
+  *) echo 'LINEAR_API_KEY must start with lin_api_.' >&2; exit 1 ;;
+esac
+
+tmp="$(mktemp)"
+updated=0
+while IFS= read -r line || [ -n "$line" ]; do
+  case "$line" in
+    LINEAR_API_KEY=*)
+      printf 'LINEAR_API_KEY=%s\n' "$LINEAR_API_KEY" >> "$tmp"
+      updated=1
+      ;;
+    *)
+      printf '%s\n' "$line" >> "$tmp"
+      ;;
+  esac
+done < .env
+
+if [ "$updated" -eq 0 ]; then
+  printf 'LINEAR_API_KEY=%s\n' "$LINEAR_API_KEY" >> "$tmp"
 fi
-rm -f .env.bak
+
+mv "$tmp" .env
+unset LINEAR_API_KEY
 ```
 
 Do not commit `.env`. If no key can be created or supplied, stop with a Linear
