@@ -13,6 +13,7 @@ pub struct OrchestratorState {
     pub poll_interval_ms: u64,
     pub max_concurrent_agents: usize,
     pub running: HashMap<String, RunningEntry>,
+    pub issue_identifiers: HashMap<String, String>,
     pub claimed: HashSet<String>,
     pub retry_attempts: HashMap<String, RetryEntry>,
     pub completed: HashSet<String>,
@@ -28,6 +29,7 @@ impl OrchestratorState {
             poll_interval_ms: config.polling.interval_ms,
             max_concurrent_agents: config.agent.max_concurrent_agents,
             running: HashMap::new(),
+            issue_identifiers: HashMap::new(),
             claimed: HashSet::new(),
             retry_attempts: HashMap::new(),
             completed: HashSet::new(),
@@ -51,6 +53,8 @@ impl OrchestratorState {
         delay_ms: u64,
         error: Option<String>,
     ) {
+        self.issue_identifiers
+            .insert(issue_id.clone(), identifier.clone());
         self.claimed.insert(issue_id.clone());
         self.retry_attempts.insert(
             issue_id.clone(),

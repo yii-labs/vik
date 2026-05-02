@@ -73,6 +73,9 @@ where
             outcome
         });
         let mut state = self.state.lock().await;
+        state
+            .issue_identifiers
+            .insert(issue_id.clone(), issue_identifier.clone());
         state.claimed.insert(issue_id.clone());
         state.retry_attempts.remove(&issue_id);
         state.running.insert(

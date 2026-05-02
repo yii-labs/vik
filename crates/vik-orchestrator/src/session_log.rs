@@ -1,15 +1,35 @@
-use std::collections::VecDeque;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
+use tokio::task;
 use vik_core::{
     AttemptSnapshot, CodexSessionLogEntry, IssueDebugSnapshot, RecentEvent, WorkspacePathSnapshot,
     sanitize_workspace_key,
 };
 
 const SESSION_LOG_DIR: &str = "codex-session-logs";
+const SESSION_LOG_TAIL_CHUNK_BYTES: u64 = 16 * 1024;
+
+pub(crate) async fn append_session_log_blocking(
+    logging_dir: PathBuf,
+    entry: CodexSessionLogEntry,
+) -> io::Result<PathBuf> {
+    task::spawn_blocking(move || append_session_log(&logging_dir, &entry))
+        .await
+        .map_err(|err| io::Error::other(format!("session log append task failed: {err}")))?
+}
+
+pub(crate) async fn read_session_logs_blocking(
+    logging_dir: PathBuf,
+    issue_identifier: String,
+    limit: usize,
+) -> io::Result<Vec<CodexSessionLogEntry>> {
+    task::spawn_blocking(move || read_session_logs(&logging_dir, &issue_identifier, limit))
+        .await
+        .map_err(|err| io::Error::other(format!("session log read task failed: {err}")))?
+}
 
 pub(crate) fn append_session_log(
     logging_dir: &Path,
@@ -34,24 +54,22 @@ pub(crate) fn read_session_logs(
     limit: usize,
 ) -> io::Result<Vec<CodexSessionLogEntry>> {
     let path = session_log_path(logging_dir, issue_identifier);
-    let file = match File::open(path) {
+    if limit > 0 {
+        return read_recent_session_logs(&path, limit);
+    }
+    let file = match File::open(&path) {
         Ok(file) => file,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(err) => return Err(err),
     };
-    let mut entries = VecDeque::new();
+    let mut entries = Vec::new();
     for line in BufReader::new(file).lines() {
         let line = line?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let entry: CodexSessionLogEntry = serde_json::from_str(&line).map_err(io::Error::other)?;
-        entries.push_back(entry);
-        if limit > 0 && entries.len() > limit {
-            entries.pop_front();
+        if let Some(entry) = parse_session_log_line(&line) {
+            entries.push(entry);
         }
     }
-    Ok(entries.into_iter().collect())
+    Ok(entries)
 }
 
 pub(crate) fn attach_session_logs(
@@ -101,18 +119,7 @@ fn recent_events_from_logs(logs: &[CodexSessionLogEntry]) -> Vec<RecentEvent> {
 }
 
 fn next_sequence(path: &Path) -> io::Result<u64> {
-    let file = match File::open(path) {
-        Ok(file) => file,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(1),
-        Err(err) => return Err(err),
-    };
-    let mut count = 0_u64;
-    for line in BufReader::new(file).lines() {
-        if !line?.trim().is_empty() {
-            count += 1;
-        }
-    }
-    Ok(count + 1)
+    Ok(last_sequence(path)?.unwrap_or_default() + 1)
 }
 
 fn session_log_path(logging_dir: &Path, issue_identifier: &str) -> PathBuf {
@@ -120,4 +127,97 @@ fn session_log_path(logging_dir: &Path, issue_identifier: &str) -> PathBuf {
         "{}.jsonl",
         sanitize_workspace_key(issue_identifier)
     ))
+}
+
+fn read_recent_session_logs(path: &Path, limit: usize) -> io::Result<Vec<CodexSessionLogEntry>> {
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err),
+    };
+    let mut position = file.seek(SeekFrom::End(0))?;
+    let mut buffer = Vec::new();
+    loop {
+        if position == 0 {
+            let mut entries = parse_session_log_buffer(&buffer, true);
+            if entries.len() > limit {
+                entries.drain(0..entries.len() - limit);
+            }
+            return Ok(entries);
+        }
+        let read_len = position.min(SESSION_LOG_TAIL_CHUNK_BYTES) as usize;
+        position -= read_len as u64;
+        file.seek(SeekFrom::Start(position))?;
+        let mut chunk = vec![0; read_len];
+        file.read_exact(&mut chunk)?;
+        chunk.extend_from_slice(&buffer);
+        buffer = chunk;
+
+        let mut entries = parse_session_log_buffer(&buffer, position == 0);
+        if entries.len() >= limit {
+            entries.drain(0..entries.len() - limit);
+            return Ok(entries);
+        }
+    }
+}
+
+fn last_sequence(path: &Path) -> io::Result<Option<u64>> {
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    let mut position = file.seek(SeekFrom::End(0))?;
+    let mut buffer = Vec::new();
+    loop {
+        if position == 0 {
+            return Ok(parse_session_log_buffer(&buffer, true)
+                .into_iter()
+                .rev()
+                .find_map(|entry| (entry.sequence > 0).then_some(entry.sequence)));
+        }
+        let read_len = position.min(SESSION_LOG_TAIL_CHUNK_BYTES) as usize;
+        position -= read_len as u64;
+        file.seek(SeekFrom::Start(position))?;
+        let mut chunk = vec![0; read_len];
+        file.read_exact(&mut chunk)?;
+        chunk.extend_from_slice(&buffer);
+        buffer = chunk;
+
+        if let Some(sequence) = parse_session_log_buffer(&buffer, position == 0)
+            .into_iter()
+            .rev()
+            .find_map(|entry| (entry.sequence > 0).then_some(entry.sequence))
+        {
+            return Ok(Some(sequence));
+        }
+    }
+}
+
+fn parse_session_log_buffer(buffer: &[u8], includes_file_start: bool) -> Vec<CodexSessionLogEntry> {
+    let start = if includes_file_start {
+        0
+    } else {
+        match buffer.iter().position(|byte| *byte == b'\n') {
+            Some(index) => index + 1,
+            None => buffer.len(),
+        }
+    };
+    String::from_utf8_lossy(&buffer[start..])
+        .lines()
+        .filter_map(parse_session_log_line)
+        .collect()
+}
+
+fn parse_session_log_line(line: &str) -> Option<CodexSessionLogEntry> {
+    if line.trim().is_empty() {
+        return None;
+    }
+    match serde_json::from_str(line) {
+        Ok(entry) => Some(entry),
+        Err(err) => {
+            tracing::warn!(error=%err, "session_log_line_parse outcome=skipped");
+            None
+        }
+    }
 }

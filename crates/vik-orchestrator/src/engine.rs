@@ -11,7 +11,8 @@ use crate::dispatch::{should_dispatch, sort_for_dispatch};
 use crate::error::OrchestratorError;
 use crate::gate::{DispatchDecision, DispatchGate};
 use crate::session_log::{
-    append_session_log, attach_session_logs, issue_debug_from_session_logs, read_session_logs,
+    append_session_log_blocking, attach_session_logs, issue_debug_from_session_logs,
+    read_session_logs_blocking,
 };
 use crate::state::OrchestratorState;
 
@@ -73,17 +74,18 @@ where
     ) -> Option<vik_core::IssueDebugSnapshot> {
         let snapshot = self.state.lock().await.issue_debug(issue_identifier);
         let logging_dir = self.current_loaded().await.config.logging.dir;
-        let logs = match read_session_logs(&logging_dir, issue_identifier, 50) {
-            Ok(logs) => logs,
-            Err(err) => {
-                tracing::warn!(
-                    issue_identifier,
-                    error=%err,
-                    "session_log_read outcome=failed"
-                );
-                Vec::new()
-            }
-        };
+        let logs =
+            match read_session_logs_blocking(logging_dir, issue_identifier.to_string(), 50).await {
+                Ok(logs) => logs,
+                Err(err) => {
+                    tracing::warn!(
+                        issue_identifier,
+                        error=%err,
+                        "session_log_read outcome=failed"
+                    );
+                    Vec::new()
+                }
+            };
         match snapshot {
             Some(snapshot) => Some(attach_session_logs(snapshot, logs)),
             None => issue_debug_from_session_logs(issue_identifier, logs),
@@ -117,10 +119,12 @@ where
                 Some(event) = self.next_agent_event() => {
                     let log_entry = self.state.lock().await.apply_agent_event(event);
                     let logging_dir = self.current_loaded().await.config.logging.dir;
-                    if let Err(err) = append_session_log(&logging_dir, &log_entry) {
+                    let issue_id = log_entry.issue_id.clone();
+                    let issue_identifier = log_entry.issue_identifier.clone();
+                    if let Err(err) = append_session_log_blocking(logging_dir, log_entry).await {
                         tracing::warn!(
-                            issue_id=%log_entry.issue_id,
-                            issue_identifier=%log_entry.issue_identifier,
+                            issue_id=%issue_id,
+                            issue_identifier=%issue_identifier,
                             error=%err,
                             "session_log_append outcome=failed"
                         );

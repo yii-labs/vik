@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io::Write;
 
 use chrono::{TimeZone, Utc};
 use serde_json::json;
@@ -246,6 +247,86 @@ async fn codex_session_log_persists_for_reopen() {
         reloaded[0].raw.pointer("/params/message/text"),
         Some(&json!("done"))
     );
+}
+
+#[tokio::test]
+async fn late_agent_event_uses_known_issue_identifier_after_worker_exit() {
+    let config = config();
+    let mut state = OrchestratorState::new(&config);
+    let mut current_issue = issue("A", Some(1), 1, "Todo");
+    current_issue.identifier = "VIK-11".into();
+    let handle = tokio::spawn(async { WorkerOutcome::normal(&issue("A", Some(1), 1, "Todo")) });
+    state.running.insert(
+        "A".into(),
+        RunningEntry {
+            issue: current_issue.clone(),
+            identifier: current_issue.identifier.clone(),
+            retry_attempt: None,
+            started_at: Utc::now(),
+            workspace_path: None,
+            session_id: None,
+            turn_count: 0,
+            last_event: None,
+            last_message: None,
+            last_event_at: None,
+            tokens: TokenUsage::default(),
+            last_reported_input_tokens: 0,
+            last_reported_output_tokens: 0,
+            last_reported_total_tokens: 0,
+            abort: handle,
+        },
+    );
+    state.on_worker_exit(WorkerOutcome::normal(&current_issue), &config);
+
+    let entry = state.apply_agent_event(AgentEvent {
+        issue_id: "A".into(),
+        event: "item/completed".into(),
+        timestamp: Utc::now(),
+        codex_app_server_pid: None,
+        session: Some(vik_core::LiveSession::new("thread-1", "turn-1")),
+        usage: None,
+        rate_limits: None,
+        message: Some("tail event".into()),
+        raw: json!({ "method": "item/completed" }),
+    });
+
+    assert_eq!(entry.issue_identifier, "VIK-11");
+}
+
+#[test]
+fn session_log_read_skips_malformed_lines_and_continues_sequence() {
+    let dir = tempfile::tempdir().unwrap();
+    let event = AgentEvent {
+        issue_id: "A".into(),
+        event: "turn/completed".into(),
+        timestamp: Utc::now(),
+        codex_app_server_pid: None,
+        session: Some(vik_core::LiveSession::new("thread-1", "turn-1")),
+        usage: None,
+        rate_limits: None,
+        message: Some("first".into()),
+        raw: json!({ "method": "turn/completed" }),
+    };
+    let mut first = vik_core::CodexSessionLogEntry::from_agent_event("VIK-11", &event);
+    first.message = Some("first".into());
+    let path = append_session_log(dir.path(), &first).unwrap();
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    writeln!(file, "{{not json").unwrap();
+    drop(file);
+
+    let mut second = first.clone();
+    second.message = Some("second".into());
+    append_session_log(dir.path(), &second).unwrap();
+
+    let reloaded = read_session_logs(dir.path(), "VIK-11", 50).unwrap();
+    assert_eq!(reloaded.len(), 2);
+    assert_eq!(reloaded[0].sequence, 1);
+    assert_eq!(reloaded[0].message.as_deref(), Some("first"));
+    assert_eq!(reloaded[1].sequence, 2);
+    assert_eq!(reloaded[1].message.as_deref(), Some("second"));
 }
 
 #[test]

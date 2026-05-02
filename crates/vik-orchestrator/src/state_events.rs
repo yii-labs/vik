@@ -11,7 +11,12 @@ impl OrchestratorState {
             .running
             .get(&event.issue_id)
             .map(|entry| entry.identifier.clone())
+            .or_else(|| self.issue_identifiers.get(&event.issue_id).cloned())
             .unwrap_or_default();
+        if !issue_identifier.is_empty() {
+            self.issue_identifiers
+                .insert(event.issue_id.clone(), issue_identifier.clone());
+        }
         let session_id = event
             .session
             .as_ref()
@@ -79,6 +84,8 @@ impl OrchestratorState {
             error=?outcome.error,
             "worker_exit outcome=received"
         );
+        self.issue_identifiers
+            .insert(outcome.issue_id.clone(), outcome.issue_identifier.clone());
         let running = self.running.remove(&outcome.issue_id);
         if let Some(entry) = running {
             self.codex_totals.seconds_running += (outcome.finished_at - entry.started_at)
