@@ -57,11 +57,12 @@ Create a key:
    metadata for the target project.
 5. Copy the key once and store it in `.env` or a secret manager.
 
-Configure the local environment:
+Configure the local environment, replacing `lin_api_xxx` with the real key:
 
 ```sh
 cp .env.example .env
-printf 'LINEAR_API_KEY=lin_api_xxx\n' > .env
+sed -i.bak 's/^LINEAR_API_KEY=.*/LINEAR_API_KEY=lin_api_xxx/' .env
+rm .env.bak
 ```
 
 Do not commit `.env`. The workflow also accepts an already exported `LINEAR_API_KEY`.
