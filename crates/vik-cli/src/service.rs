@@ -150,7 +150,7 @@ fn load_target(
     }
     let workflow_path = fs::canonicalize(&loaded.definition.path)?;
     let cwd = env::current_dir()?;
-    let service_dir = loaded.config.workspace.root.join(".vik").join("service");
+    let service_dir = service_dir_for_workflow(&workflow_path);
     let name = service_name(&workflow_path);
     Ok(ServiceTarget {
         workflow_path,
@@ -176,13 +176,14 @@ fn start_service(target: &ServiceTarget, verb: &str) -> Result<(), Box<dyn Error
     }
 
     let port = effective_service_port(target.port, previous_state.as_ref());
+    let cwd = effective_service_cwd(target, previous_state.as_ref());
     fs::create_dir_all(&target.service_dir)?;
     let executable = env::current_exe()?;
     let mut command = Command::new(&executable);
     for arg in daemon_args(target, port) {
         command.arg(arg);
     }
-    command.current_dir(&target.cwd);
+    command.current_dir(&cwd);
     detach_command(&mut command);
 
     let log = OpenOptions::new()
@@ -200,7 +201,7 @@ fn start_service(target: &ServiceTarget, verb: &str) -> Result<(), Box<dyn Error
     let state = ServiceState {
         version: 1,
         workflow_path: target.workflow_path.clone(),
-        cwd: target.cwd.clone(),
+        cwd,
         pid: Some(pid),
         status: StoredStatus::Running,
         started_at_unix: Some(now_unix()),
@@ -224,6 +225,12 @@ fn effective_service_port(
     previous_state: Option<&ServiceState>,
 ) -> Option<u16> {
     requested_port.or_else(|| previous_state.and_then(|state| state.port))
+}
+
+fn effective_service_cwd(target: &ServiceTarget, previous_state: Option<&ServiceState>) -> PathBuf {
+    previous_state
+        .map(|state| state.cwd.clone())
+        .unwrap_or_else(|| target.cwd.clone())
 }
 
 fn stop_service(target: &ServiceTarget, remove_state: bool) -> Result<bool, Box<dyn Error>> {
@@ -359,6 +366,14 @@ fn display_command(executable: &Path, target: &ServiceTarget, port: Option<u16>)
     let mut command = vec![executable.display().to_string()];
     command.extend(daemon_args(target, port));
     command
+}
+
+fn service_dir_for_workflow(workflow_path: &Path) -> PathBuf {
+    workflow_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(".vik")
+        .join("service")
 }
 
 fn service_name(workflow_path: &Path) -> String {
@@ -625,6 +640,35 @@ mod tests {
     }
 
     #[test]
+    fn effective_service_cwd_reuses_stored_cwd() {
+        let target = service_target_with_cwd(PathBuf::from("/tmp/new-cwd"));
+        let state = service_state_with_cwd(PathBuf::from("/tmp/installed-cwd"), None);
+
+        assert_eq!(
+            effective_service_cwd(&target, Some(&state)),
+            PathBuf::from("/tmp/installed-cwd")
+        );
+    }
+
+    #[test]
+    fn load_target_state_path_survives_workspace_root_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflow_path = dir.path().join("WORKFLOW.md");
+        write_workflow(&workflow_path, "work-a");
+        let first = load_target(Some(workflow_path.clone()), None, false).unwrap();
+
+        write_workflow(&workflow_path, "work-b");
+        let second = load_target(Some(workflow_path.clone()), None, false).unwrap();
+
+        assert_eq!(first.state_path, second.state_path);
+        let expected_root = fs::canonicalize(dir.path()).unwrap();
+        assert_eq!(
+            first.service_dir,
+            expected_root.join(".vik").join("service")
+        );
+    }
+
+    #[test]
     fn stopped_state_classifies_as_stopped_without_pid_probe() {
         let state = ServiceState {
             version: 1,
@@ -643,10 +687,14 @@ mod tests {
     }
 
     fn service_state_with_port(port: Option<u16>) -> ServiceState {
+        service_state_with_cwd(PathBuf::from("/tmp/vik"), port)
+    }
+
+    fn service_state_with_cwd(cwd: PathBuf, port: Option<u16>) -> ServiceState {
         ServiceState {
             version: 1,
             workflow_path: PathBuf::from("/tmp/vik/WORKFLOW.md"),
-            cwd: PathBuf::from("/tmp/vik"),
+            cwd,
             pid: None,
             status: StoredStatus::Stopped,
             started_at_unix: Some(1),
@@ -655,6 +703,27 @@ mod tests {
             port,
             command: vec![],
         }
+    }
+
+    fn service_target_with_cwd(cwd: PathBuf) -> ServiceTarget {
+        ServiceTarget {
+            workflow_path: PathBuf::from("/tmp/vik/WORKFLOW.md"),
+            service_dir: PathBuf::from("/tmp/vik/.vik/service"),
+            state_path: PathBuf::from("/tmp/vik/.vik/service/state.json"),
+            log_path: PathBuf::from("/tmp/vik/.vik/service/service.log"),
+            cwd,
+            port: None,
+        }
+    }
+
+    fn write_workflow(path: &Path, workspace_root: &str) {
+        fs::write(
+            path,
+            format!(
+                "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\nworkspace:\n  root: {workspace_root}\n---\nBody"
+            ),
+        )
+        .unwrap();
     }
 
     #[test]
