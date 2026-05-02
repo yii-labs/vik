@@ -1,5 +1,5 @@
-ARG RUST_VERSION=1.95
-ARG NODE_VERSION=22
+ARG RUST_VERSION=1.95.0
+ARG NODE_VERSION=22.21.1
 
 FROM rust:${RUST_VERSION}-bookworm AS builder
 
@@ -10,7 +10,7 @@ RUN cargo build --locked --release -p vik-cli
 
 FROM node:${NODE_VERSION}-bookworm-slim AS runtime
 
-ARG CODEX_PACKAGE=@openai/codex@latest
+ARG CODEX_PACKAGE=@openai/codex@0.128.0
 
 ENV HOME=/home/vik \
     VIK_WORKFLOW_PATH=/workflow/WORKFLOW.md \

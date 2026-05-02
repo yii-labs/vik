@@ -54,7 +54,10 @@ docker build -t vik:local .
 Run a config check with only `WORKFLOW.md` mounted:
 
 ```sh
-docker run --rm $(./docker/env-passthrough.sh) \
+docker run --rm \
+  --env LINEAR_API_KEY \
+  --env GH_TOKEN \
+  --env OPENAI_API_KEY \
   -v "$PWD/WORKFLOW.md:/workflow/WORKFLOW.md:ro" \
   vik:local --check
 ```
@@ -62,7 +65,10 @@ docker run --rm $(./docker/env-passthrough.sh) \
 Run the daemon:
 
 ```sh
-docker run --rm $(./docker/env-passthrough.sh) \
+docker run --rm \
+  --env LINEAR_API_KEY \
+  --env GH_TOKEN \
+  --env OPENAI_API_KEY \
   -v "$PWD/WORKFLOW.md:/workflow/WORKFLOW.md:ro" \
   vik:local
 ```
@@ -70,11 +76,12 @@ docker run --rm $(./docker/env-passthrough.sh) \
 The image includes `vik`, `gh`, `codex`, `git`, and `openssh-client`. The default command is
 `vik /workflow/WORKFLOW.md`; set `VIK_WORKFLOW_PATH` when mounting the file elsewhere.
 
-`docker/env-passthrough.sh` prints Docker `--env` flags for known GitHub CLI, Codex/OpenAI,
-Linear, provider, proxy, and certificate variables from the host shell. Docker then passes those
-variables into the container without copying local config files. `gh` and `codex` also inherit the
-container environment when Vik starts them. `LINEAR_API_KEY` must be passed this way unless the
-workflow file provides `tracker.api_key`.
+Pass environment variables explicitly with Docker `--env NAME` or `--env NAME=value`. Add every
+GitHub CLI or Codex variable the workflow needs, including any `GH_*`, `GITHUB_*`, `CODEX_*`,
+`OPENAI_*`, provider, proxy, or certificate variables. Docker then passes only those variables into
+the container without copying local config files. `gh` and `codex` inherit the container
+environment when Vik starts them. `LINEAR_API_KEY` must be passed this way unless the workflow file
+provides `tracker.api_key`.
 
 If workflow hooks use SSH remotes, pass SSH credentials separately or switch hooks to HTTPS with a
 GitHub token. The minimal Docker path above only mounts `WORKFLOW.md`.
