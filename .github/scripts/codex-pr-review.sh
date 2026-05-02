@@ -49,15 +49,22 @@ fi
 mkdir -p "$(dirname "${CODEX_REVIEW_OUTPUT}")"
 : >"${CODEX_REVIEW_OUTPUT}"
 
-gh auth status --active --hostname github.com >/dev/null
-
 basic_auth="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
-GIT_CONFIG_COUNT=1 \
-  GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
-  GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${basic_auth}" \
-  git fetch --no-tags "https://github.com/${GITHUB_REPOSITORY}.git" \
-    "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+git_auth_key='http.https://github.com/.extraheader'
+git config --local "${git_auth_key}" "AUTHORIZATION: basic ${basic_auth}"
 unset basic_auth
+
+set +e
+git fetch --no-tags "https://github.com/${GITHUB_REPOSITORY}.git" \
+  "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+fetch_status=$?
+set -e
+git config --local --unset-all "${git_auth_key}" >/dev/null 2>&1 || true
+unset git_auth_key
+
+if [[ "${fetch_status}" -ne 0 ]]; then
+  exit "${fetch_status}"
+fi
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "${tmp_dir}"' EXIT
