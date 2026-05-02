@@ -55,7 +55,7 @@ jobs:
           mkdir -p "${GH_CONFIG_DIR}"
           command -v gh
           command -v codex
-          gh auth status --hostname github.com --active
+          gh auth status --active --hostname github.com
           codex --version
 
       - name: Run Codex oneshot review
@@ -101,12 +101,14 @@ jobs:
             gh api \
               --method PATCH \
               "repos/${GITHUB_REPOSITORY}/issues/comments/${existing_comment_id}" \
-              --raw-field body="$(cat "${comment_file}")" \
+              --field "body=@${comment_file}" \
               >/dev/null
           else
-            gh pr comment "${PR_NUMBER}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --body-file "${comment_file}"
+            gh api \
+              --method POST \
+              "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              --field "body=@${comment_file}" \
+              >/dev/null
           fi
 
       - name: Fail on Codex review error
