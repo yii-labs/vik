@@ -26,7 +26,9 @@ jobs:
     env:
       BASE_REF: ${{ github.event.pull_request.base.ref }}
       CODEX_REVIEW_PROMPT: ${{ github.workspace }}/trusted/.github/codex/prompts/pr-review.md
-      GH_CONFIG_DIR: ${{ runner.temp }}/gh-config
+      CODEX_REVIEW_DIR: ${{ github.workspace }}/.codex-review
+      CODEX_REVIEW_OUTPUT: ${{ github.workspace }}/.codex-review/codex-review.md
+      GH_CONFIG_DIR: ${{ github.workspace }}/.codex-review/gh-config
       GH_TOKEN: ${{ github.token }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
       REVIEW_WORKSPACE: ${{ github.workspace }}/review
@@ -52,6 +54,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [[ -z "${CODEX_REVIEW_DIR}" || "${CODEX_REVIEW_DIR}" != "${GITHUB_WORKSPACE}/.codex-review" ]]; then
+            echo "Unexpected CODEX_REVIEW_DIR: ${CODEX_REVIEW_DIR}" >&2
+            exit 2
+          fi
+          rm -rf "${CODEX_REVIEW_DIR}"
           mkdir -p "${GH_CONFIG_DIR}"
           command -v gh
           command -v codex
@@ -62,16 +69,12 @@ jobs:
         id: codex
         continue-on-error: true
         shell: bash
-        env:
-          CODEX_REVIEW_OUTPUT: ${{ runner.temp }}/codex-review.md
         run: |
           "${GITHUB_WORKSPACE}/trusted/.github/scripts/codex-pr-review.sh"
 
       - name: Post Codex review comment
         if: always()
         shell: bash
-        env:
-          CODEX_REVIEW_OUTPUT: ${{ runner.temp }}/codex-review.md
         run: |
           set -euo pipefail
 
