@@ -1,5 +1,6 @@
 use serde_json::json;
 use std::path::Path;
+use vik_core::HostPlatform;
 use vik_workflow::{CodexConfig, TrackerConfig};
 
 use crate::client::{
@@ -79,7 +80,7 @@ fn codex_spawn_process_command_uses_shell_on_posix() {
         ..CodexConfig::default()
     };
     assert_eq!(
-        codex_spawn_process_command_for_platform(&config, false).unwrap(),
+        codex_spawn_process_command_for_platform(&config, HostPlatform::Posix).unwrap(),
         CodexSpawnCommand {
             program: "bash".to_string(),
             args: vec![
@@ -98,7 +99,7 @@ fn codex_spawn_process_command_uses_direct_args_on_windows() {
         ..CodexConfig::default()
     };
     assert_eq!(
-        codex_spawn_process_command_for_platform(&config, true).unwrap(),
+        codex_spawn_process_command_for_platform(&config, HostPlatform::Windows).unwrap(),
         CodexSpawnCommand {
             program: "codex".to_string(),
             args: vec![
@@ -116,7 +117,7 @@ fn codex_spawn_process_command_rejects_invalid_windows_command_quoting() {
         command: "codex 'app-server".to_string(),
         ..CodexConfig::default()
     };
-    assert!(codex_spawn_process_command_for_platform(&config, true).is_err());
+    assert!(codex_spawn_process_command_for_platform(&config, HostPlatform::Windows).is_err());
 }
 
 #[test]

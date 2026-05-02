@@ -2,7 +2,7 @@ use std::future::Future;
 use std::path::Path;
 
 use serde_json::json;
-use vik_core::{AgentEvent, LiveSession, PosixShell, ShellInvocation};
+use vik_core::{AgentEvent, HostPlatform, LiveSession, PosixShell, ShellInvocation};
 use vik_workflow::CodexConfig;
 
 use crate::error::AgentError;
@@ -165,28 +165,29 @@ impl CodexAppServerClient {
 pub(crate) fn codex_spawn_process_command(
     config: &CodexConfig,
 ) -> Result<CodexSpawnCommand, AgentError> {
-    codex_spawn_process_command_for_platform(config, cfg!(windows))
+    codex_spawn_process_command_for_platform(config, HostPlatform::current())
 }
 
 pub(crate) fn codex_spawn_process_command_for_platform(
     config: &CodexConfig,
-    is_windows: bool,
+    platform: HostPlatform,
 ) -> Result<CodexSpawnCommand, AgentError> {
-    if is_windows {
-        return codex_spawn_direct_command(config);
+    match platform {
+        HostPlatform::Windows => codex_spawn_direct_command(config),
+        HostPlatform::Posix => {
+            let command = codex_spawn_command(config);
+            let shell = ShellInvocation::for_platform(&command, platform, PosixShell::Bash);
+            Ok(CodexSpawnCommand {
+                program: shell.program().to_string(),
+                args: shell
+                    .args()
+                    .iter()
+                    .map(|arg| (*arg).to_string())
+                    .chain(std::iter::once(command))
+                    .collect(),
+            })
+        }
     }
-
-    let command = codex_spawn_command(config);
-    let shell = ShellInvocation::for_platform(&command, false, PosixShell::Bash);
-    Ok(CodexSpawnCommand {
-        program: shell.program().to_string(),
-        args: shell
-            .args()
-            .iter()
-            .map(|arg| (*arg).to_string())
-            .chain(std::iter::once(command))
-            .collect(),
-    })
 }
 
 pub(crate) fn codex_spawn_command(config: &CodexConfig) -> String {

@@ -7,6 +7,24 @@ pub enum PosixShell {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostPlatform {
+    Posix,
+    Windows,
+}
+
+impl HostPlatform {
+    #[cfg(windows)]
+    pub fn current() -> Self {
+        Self::Windows
+    }
+
+    #[cfg(not(windows))]
+    pub fn current() -> Self {
+        Self::Posix
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShellInvocation<'a> {
     program: &'static str,
     args: &'static [&'static str],
@@ -15,28 +33,27 @@ pub struct ShellInvocation<'a> {
 
 impl<'a> ShellInvocation<'a> {
     pub fn for_current_platform(command: &'a str, posix_shell: PosixShell) -> Self {
-        Self::for_platform(command, cfg!(windows), posix_shell)
+        Self::for_platform(command, HostPlatform::current(), posix_shell)
     }
 
-    pub fn for_platform(command: &'a str, is_windows: bool, posix_shell: PosixShell) -> Self {
-        if is_windows {
-            return Self {
+    pub fn for_platform(command: &'a str, platform: HostPlatform, posix_shell: PosixShell) -> Self {
+        match platform {
+            HostPlatform::Windows => Self {
                 program: "powershell.exe",
                 args: &["-NoProfile", "-NonInteractive", "-Command"],
                 command,
-            };
-        }
-
-        match posix_shell {
-            PosixShell::Bash => Self {
-                program: "bash",
-                args: &["-lc"],
-                command,
             },
-            PosixShell::Sh => Self {
-                program: "sh",
-                args: &["-lc"],
-                command,
+            HostPlatform::Posix => match posix_shell {
+                PosixShell::Bash => Self {
+                    program: "bash",
+                    args: &["-lc"],
+                    command,
+                },
+                PosixShell::Sh => Self {
+                    program: "sh",
+                    args: &["-lc"],
+                    command,
+                },
             },
         }
     }
@@ -100,11 +117,15 @@ pub fn blocker_is_terminal(blocker: &BlockerRef, terminal_states: &[String]) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{PosixShell, ShellInvocation};
+    use super::{HostPlatform, PosixShell, ShellInvocation};
 
     #[test]
     fn shell_invocation_uses_powershell_on_windows() {
-        let shell = ShellInvocation::for_platform("codex app-server", true, PosixShell::Bash);
+        let shell = ShellInvocation::for_platform(
+            "codex app-server",
+            HostPlatform::Windows,
+            PosixShell::Bash,
+        );
 
         assert_eq!(shell.program(), "powershell.exe");
         assert_eq!(shell.args(), &["-NoProfile", "-NonInteractive", "-Command"]);
@@ -113,8 +134,12 @@ mod tests {
 
     #[test]
     fn shell_invocation_preserves_posix_shell_choice() {
-        let bash = ShellInvocation::for_platform("codex app-server", false, PosixShell::Bash);
-        let sh = ShellInvocation::for_platform("git status .", false, PosixShell::Sh);
+        let bash = ShellInvocation::for_platform(
+            "codex app-server",
+            HostPlatform::Posix,
+            PosixShell::Bash,
+        );
+        let sh = ShellInvocation::for_platform("git status .", HostPlatform::Posix, PosixShell::Sh);
 
         assert_eq!(bash.program(), "bash");
         assert_eq!(bash.args(), &["-lc"]);
