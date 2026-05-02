@@ -213,11 +213,7 @@ pub(crate) fn codex_spawn_command(config: &CodexConfig) -> String {
 
 fn codex_spawn_direct_command(config: &CodexConfig) -> Result<CodexSpawnCommand, AgentError> {
     let raw_command = config.command.trim();
-    let Some(mut argv) = shlex::split(raw_command) else {
-        return Err(AgentError::InvalidCodexCommand(
-            "codex.command has invalid shell quoting".to_string(),
-        ));
-    };
+    let mut argv = split_windows_command_line(raw_command);
     if argv.is_empty() {
         return Err(AgentError::InvalidCodexCommand(
             "codex.command is empty".to_string(),
@@ -242,6 +238,54 @@ fn codex_spawn_direct_command(config: &CodexConfig) -> Result<CodexSpawnCommand,
         program,
         args: argv,
     })
+}
+
+fn split_windows_command_line(command: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut backslashes = 0_usize;
+    let mut in_quotes = false;
+    let mut saw_arg = false;
+
+    for ch in command.chars() {
+        match ch {
+            '\\' => {
+                backslashes += 1;
+                saw_arg = true;
+            }
+            '"' => {
+                current.extend(std::iter::repeat_n('\\', backslashes / 2));
+                if backslashes.is_multiple_of(2) {
+                    in_quotes = !in_quotes;
+                    saw_arg = true;
+                } else {
+                    current.push('"');
+                    saw_arg = true;
+                }
+                backslashes = 0;
+            }
+            ch if ch.is_whitespace() && !in_quotes => {
+                current.extend(std::iter::repeat_n('\\', backslashes));
+                backslashes = 0;
+                if saw_arg {
+                    args.push(std::mem::take(&mut current));
+                    saw_arg = false;
+                }
+            }
+            ch => {
+                current.extend(std::iter::repeat_n('\\', backslashes));
+                backslashes = 0;
+                current.push(ch);
+                saw_arg = true;
+            }
+        }
+    }
+
+    current.extend(std::iter::repeat_n('\\', backslashes));
+    if saw_arg {
+        args.push(current);
+    }
+    args
 }
 
 fn codex_model_config_shell_args(config: &CodexConfig) -> Vec<String> {

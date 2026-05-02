@@ -112,12 +112,38 @@ fn codex_spawn_process_command_uses_direct_args_on_windows() {
 }
 
 #[test]
-fn codex_spawn_process_command_rejects_invalid_windows_command_quoting() {
+fn codex_spawn_process_command_preserves_windows_paths() {
     let config = CodexConfig {
-        command: "codex 'app-server".to_string(),
+        command: r"C:\Users\me\bin\codex.exe app-server".to_string(),
+        model: Some("gpt-5.5".to_string()),
         ..CodexConfig::default()
     };
-    assert!(codex_spawn_process_command_for_platform(&config, HostPlatform::Windows).is_err());
+    assert_eq!(
+        codex_spawn_process_command_for_platform(&config, HostPlatform::Windows).unwrap(),
+        CodexSpawnCommand {
+            program: r"C:\Users\me\bin\codex.exe".to_string(),
+            args: vec![
+                "--config".to_string(),
+                "model=\"gpt-5.5\"".to_string(),
+                "app-server".to_string(),
+            ],
+        }
+    );
+}
+
+#[test]
+fn codex_spawn_process_command_preserves_quoted_windows_paths() {
+    let config = CodexConfig {
+        command: r#""C:\Program Files\Codex\codex.exe" app-server --stdio"#.to_string(),
+        ..CodexConfig::default()
+    };
+    assert_eq!(
+        codex_spawn_process_command_for_platform(&config, HostPlatform::Windows).unwrap(),
+        CodexSpawnCommand {
+            program: r"C:\Program Files\Codex\codex.exe".to_string(),
+            args: vec!["app-server".to_string(), "--stdio".to_string()],
+        }
+    );
 }
 
 #[test]
