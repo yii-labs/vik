@@ -15,7 +15,12 @@ use vik_tracker::{DEFAULT_LINEAR_ENDPOINT, LinearClient, LinearClientConfig};
 use vik_workflow::WorkflowReloader;
 
 #[derive(Debug, Parser)]
-#[command(name = "vik", version, about = "Run Vik coding-agent orchestrator")]
+#[command(
+    name = "vik",
+    version,
+    about = "Run Vik coding-agent orchestrator",
+    args_conflicts_with_subcommands = true
+)]
 struct Args {
     #[command(subcommand)]
     command: Option<Command>,
@@ -209,5 +214,14 @@ mod tests {
         let err = load_dotenv_path(&env_path).unwrap_err().to_string();
 
         assert!(err.contains("failed to load"));
+    }
+
+    #[test]
+    fn daemon_flags_conflict_with_service_subcommands() {
+        let err = Args::try_parse_from(["vik", "--port", "3000", "service", "status"])
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("cannot be used with"));
     }
 }

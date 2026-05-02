@@ -1,7 +1,8 @@
+use std::collections::VecDeque;
 use std::env;
 use std::error::Error;
 use std::fs::{self, OpenOptions};
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -127,11 +128,11 @@ pub(crate) async fn run(args: ServiceArgs) -> Result<(), Box<dyn Error>> {
         }
         ServiceCommand::Stop(args) => {
             let target = load_target(args.workflow, None, false)?;
-            stop_service(&target, false)?;
+            let _ = stop_service(&target, false)?;
         }
         ServiceCommand::Restart(args) => {
             let target = load_target(args.workflow, args.port, true)?;
-            stop_service(&target, false)?;
+            let _ = stop_service(&target, false)?;
             start_service(&target, "restarted")?;
         }
     }
@@ -216,10 +217,10 @@ fn start_service(target: &ServiceTarget, verb: &str) -> Result<(), Box<dyn Error
     Ok(())
 }
 
-fn stop_service(target: &ServiceTarget, remove_state: bool) -> Result<(), Box<dyn Error>> {
+fn stop_service(target: &ServiceTarget, remove_state: bool) -> Result<bool, Box<dyn Error>> {
     let Some(mut state) = read_state(&target.state_path)? else {
         println!("service not installed: {}", target.state_path.display());
-        return Ok(());
+        return Ok(false);
     };
 
     match classify_state(&state) {
@@ -248,12 +249,13 @@ fn stop_service(target: &ServiceTarget, remove_state: bool) -> Result<(), Box<dy
     } else {
         write_state(&target.state_path, &state)?;
     }
-    Ok(())
+    Ok(true)
 }
 
 fn uninstall_service(target: &ServiceTarget) -> Result<(), Box<dyn Error>> {
-    stop_service(target, true)?;
-    println!("service uninstalled: {}", target.state_path.display());
+    if stop_service(target, true)? {
+        println!("service uninstalled: {}", target.state_path.display());
+    }
     Ok(())
 }
 
@@ -386,13 +388,27 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 }
 
 fn print_recent_lines(path: &Path, lines: usize) -> io::Result<()> {
-    let body = fs::read_to_string(path)?;
-    let collected: Vec<&str> = body.lines().collect();
-    let start = collected.len().saturating_sub(lines);
-    for line in &collected[start..] {
+    for line in recent_log_lines(path, lines)? {
         println!("{line}");
     }
     Ok(())
+}
+
+fn recent_log_lines(path: &Path, lines: usize) -> io::Result<Vec<String>> {
+    if lines == 0 {
+        return Ok(Vec::new());
+    }
+
+    let file = OpenOptions::new().read(true).open(path)?;
+    let reader = BufReader::new(file);
+    let mut recent = VecDeque::with_capacity(lines);
+    for line in reader.lines() {
+        if recent.len() == lines {
+            recent.pop_front();
+        }
+        recent.push_back(line?);
+    }
+    Ok(recent.into_iter().collect())
 }
 
 fn follow_log(path: &Path) -> io::Result<()> {
@@ -456,12 +472,20 @@ fn process_matches_state(pid: u32, state: &ServiceState) -> bool {
     if !process_alive(pid) {
         return false;
     }
-    Command::new("ps")
+
+    let Ok(output) = Command::new("ps")
         .args(["-p", &pid.to_string(), "-o", "command="])
         .output()
-        .ok()
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .is_some_and(|command| command.contains(state.workflow_path.to_string_lossy().as_ref()))
+    else {
+        return true;
+    };
+    if !output.status.success() {
+        return true;
+    }
+    let Ok(command) = String::from_utf8(output.stdout) else {
+        return true;
+    };
+    command.contains(state.workflow_path.to_string_lossy().as_ref())
 }
 
 #[cfg(windows)]
@@ -586,10 +610,19 @@ mod tests {
         let path = dir.path().join("service.log");
         fs::write(&path, "one\ntwo\nthree\n").unwrap();
 
-        let body = fs::read_to_string(&path).unwrap();
-        let lines: Vec<&str> = body.lines().collect();
-        let start = lines.len().saturating_sub(2);
+        let lines = recent_log_lines(&path, 2).unwrap();
 
-        assert_eq!(&lines[start..], ["two", "three"]);
+        assert_eq!(lines, ["two", "three"]);
+    }
+
+    #[test]
+    fn recent_log_lines_supports_zero_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("service.log");
+        fs::write(&path, "one\ntwo\nthree\n").unwrap();
+
+        let lines = recent_log_lines(&path, 0).unwrap();
+
+        assert!(lines.is_empty());
     }
 }
