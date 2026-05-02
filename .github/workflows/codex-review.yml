@@ -11,7 +11,7 @@ on:
 permissions:
   contents: read
   issues: write
-  pull-requests: read
+  pull-requests: write
 
 concurrency:
   group: codex-review-${{ github.event.pull_request.number }}
@@ -26,6 +26,7 @@ jobs:
     env:
       BASE_REF: ${{ github.event.pull_request.base.ref }}
       CODEX_REVIEW_PROMPT: ${{ github.workspace }}/trusted/.github/codex/prompts/pr-review.md
+      GH_CONFIG_DIR: ${{ runner.temp }}/gh-config
       GH_TOKEN: ${{ github.token }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
       REVIEW_WORKSPACE: ${{ github.workspace }}/review
@@ -51,9 +52,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p "${GH_CONFIG_DIR}"
           command -v gh
           command -v codex
-          gh auth status --hostname github.com
+          gh auth status --hostname github.com --active
           codex --version
 
       - name: Run Codex oneshot review
