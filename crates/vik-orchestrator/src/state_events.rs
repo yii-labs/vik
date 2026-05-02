@@ -1,4 +1,4 @@
-use vik_core::{AgentEvent, RecentEvent, WorkerExitKind, WorkerOutcome};
+use vik_core::{AgentEvent, CodexSessionLogEntry, RecentEvent, WorkerExitKind, WorkerOutcome};
 use vik_workflow::ServiceConfig;
 
 use crate::CONTINUATION_RETRY_MS;
@@ -6,7 +6,7 @@ use crate::dispatch::failure_backoff_ms;
 use crate::state::OrchestratorState;
 
 impl OrchestratorState {
-    pub fn apply_agent_event(&mut self, event: AgentEvent) {
+    pub fn apply_agent_event(&mut self, event: AgentEvent) -> CodexSessionLogEntry {
         let issue_identifier = self
             .running
             .get(&event.issue_id)
@@ -24,6 +24,7 @@ impl OrchestratorState {
             codex_event=%event.event,
             "codex_update outcome=received"
         );
+        let log_entry = CodexSessionLogEntry::from_agent_event(issue_identifier, &event);
         if let Some(entry) = self.running.get_mut(&event.issue_id) {
             entry.last_event = Some(event.event.clone());
             entry.last_message = event.message.clone();
@@ -67,6 +68,7 @@ impl OrchestratorState {
         {
             events.drain(0..events.len() - 50);
         }
+        log_entry
     }
 
     pub fn on_worker_exit(&mut self, outcome: WorkerOutcome, config: &ServiceConfig) {

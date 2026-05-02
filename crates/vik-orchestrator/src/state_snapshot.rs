@@ -100,6 +100,7 @@ impl OrchestratorState {
             running,
             retry,
             recent_events,
+            session_logs: Vec::new(),
             last_error,
             tracked: Value::Object(Default::default()),
         })

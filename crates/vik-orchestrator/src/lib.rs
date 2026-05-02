@@ -5,6 +5,7 @@ mod gate;
 mod lifecycle;
 mod reconcile;
 mod retry;
+mod session_log;
 mod state;
 mod state_events;
 mod state_snapshot;

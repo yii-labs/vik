@@ -116,6 +116,65 @@ pub struct AgentEvent {
     pub raw: Value,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CodexSessionLogEntry {
+    #[serde(default)]
+    pub sequence: u64,
+    pub issue_id: String,
+    pub issue_identifier: String,
+    pub source: String,
+    pub role: Option<String>,
+    pub event: String,
+    pub timestamp: DateTime<Utc>,
+    pub session_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub turn_id: Option<String>,
+    pub turn_count: Option<u32>,
+    pub codex_app_server_pid: Option<String>,
+    pub usage: Option<TokenUsage>,
+    pub rate_limits: Option<Value>,
+    pub message: Option<String>,
+    pub raw: Value,
+}
+
+impl CodexSessionLogEntry {
+    pub fn from_agent_event(issue_identifier: impl Into<String>, event: &AgentEvent) -> Self {
+        let session = event.session.as_ref();
+        let issue_identifier = issue_identifier.into();
+        let issue_identifier = if issue_identifier.trim().is_empty() {
+            event.issue_id.clone()
+        } else {
+            issue_identifier
+        };
+        Self {
+            sequence: 0,
+            issue_id: event.issue_id.clone(),
+            issue_identifier,
+            source: "codex_app_server".to_string(),
+            role: extract_role(&event.raw),
+            event: event.event.clone(),
+            timestamp: event.timestamp,
+            session_id: session.map(|session| session.session_id.clone()),
+            thread_id: session.map(|session| session.thread_id.clone()),
+            turn_id: session.map(|session| session.turn_id.clone()),
+            turn_count: session.map(|session| session.turn_count),
+            codex_app_server_pid: event.codex_app_server_pid.clone(),
+            usage: event.usage,
+            rate_limits: event.rate_limits.clone(),
+            message: event.message.clone(),
+            raw: event.raw.clone(),
+        }
+    }
+}
+
+fn extract_role(raw: &Value) -> Option<String> {
+    raw.pointer("/params/message/role")
+        .or_else(|| raw.pointer("/params/item/role"))
+        .or_else(|| raw.pointer("/params/role"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenUsage {
     pub input_tokens: u64,

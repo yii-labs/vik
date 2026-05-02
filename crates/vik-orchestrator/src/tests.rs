@@ -8,6 +8,7 @@ use vik_workflow::{
     TrackerConfig, WorkspaceConfig,
 };
 
+use crate::session_log::{append_session_log, issue_debug_from_session_logs, read_session_logs};
 use crate::{
     OrchestratorState, RunningEntry, failure_backoff_ms, should_dispatch, sort_for_dispatch,
 };
@@ -177,4 +178,105 @@ async fn lifecycle_event_without_session_updates_running_status() {
     assert_eq!(running.last_message.as_deref(), Some("starting"));
     assert!(running.last_event_at.is_some());
     assert_eq!(state.recent_events["A"][0].event, "codex_thread_starting");
+}
+
+#[tokio::test]
+async fn codex_session_log_persists_for_reopen() {
+    let config = config();
+    let mut state = OrchestratorState::new(&config);
+    let current_issue = issue("A", Some(1), 1, "Todo");
+    let handle = tokio::spawn(async { WorkerOutcome::normal(&issue("A", Some(1), 1, "Todo")) });
+    state.running.insert(
+        "A".into(),
+        RunningEntry {
+            issue: current_issue,
+            identifier: "VIK-11".into(),
+            retry_attempt: None,
+            started_at: Utc::now(),
+            workspace_path: None,
+            session_id: None,
+            turn_count: 0,
+            last_event: None,
+            last_message: None,
+            last_event_at: None,
+            tokens: TokenUsage::default(),
+            last_reported_input_tokens: 0,
+            last_reported_output_tokens: 0,
+            last_reported_total_tokens: 0,
+            abort: handle,
+        },
+    );
+
+    let entry = state.apply_agent_event(AgentEvent {
+        issue_id: "A".into(),
+        event: "item/completed".into(),
+        timestamp: Utc::now(),
+        codex_app_server_pid: Some("123".into()),
+        session: Some(vik_core::LiveSession::new("thread-1", "turn-1")),
+        usage: Some(TokenUsage {
+            input_tokens: 1,
+            output_tokens: 2,
+            total_tokens: 3,
+        }),
+        rate_limits: None,
+        message: Some("done".into()),
+        raw: json!({
+            "method": "item/completed",
+            "params": {
+                "message": {
+                    "role": "assistant",
+                    "text": "done"
+                }
+            }
+        }),
+    });
+    let dir = tempfile::tempdir().unwrap();
+    append_session_log(dir.path(), &entry).unwrap();
+
+    let reloaded = read_session_logs(dir.path(), "VIK-11", 50).unwrap();
+    assert_eq!(reloaded.len(), 1);
+    assert_eq!(reloaded[0].sequence, 1);
+    assert_eq!(reloaded[0].issue_identifier, "VIK-11");
+    assert_eq!(reloaded[0].source, "codex_app_server");
+    assert_eq!(reloaded[0].role.as_deref(), Some("assistant"));
+    assert_eq!(reloaded[0].session_id.as_deref(), Some("thread-1-turn-1"));
+    assert_eq!(reloaded[0].message.as_deref(), Some("done"));
+    assert_eq!(reloaded[0].usage.unwrap().total_tokens, 3);
+    assert_eq!(
+        reloaded[0].raw.pointer("/params/message/text"),
+        Some(&json!("done"))
+    );
+}
+
+#[test]
+fn issue_debug_can_be_rebuilt_from_persisted_session_logs() {
+    let event = AgentEvent {
+        issue_id: "A".into(),
+        event: "turn/completed".into(),
+        timestamp: Utc::now(),
+        codex_app_server_pid: None,
+        session: Some(vik_core::LiveSession::new("thread-1", "turn-1")),
+        usage: None,
+        rate_limits: None,
+        message: Some("complete".into()),
+        raw: json!({
+            "method": "turn/completed",
+            "params": {
+                "turn": {
+                    "id": "turn-1",
+                    "status": "completed"
+                }
+            }
+        }),
+    };
+    let logs = vec![vik_core::CodexSessionLogEntry::from_agent_event(
+        "VIK-11", &event,
+    )];
+
+    let snapshot = issue_debug_from_session_logs("VIK-11", logs.clone()).unwrap();
+    assert_eq!(snapshot.status, "persisted");
+    assert_eq!(snapshot.issue_identifier, "VIK-11");
+    assert_eq!(snapshot.issue_id.as_deref(), Some("A"));
+    assert_eq!(snapshot.recent_events[0].event, "turn/completed");
+    assert_eq!(snapshot.session_logs, logs);
 }

@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{RetryEntry, TokenTotals, TokenUsage};
+use crate::{CodexSessionLogEntry, RetryEntry, TokenTotals, TokenUsage};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeStateView {
@@ -63,6 +63,7 @@ pub struct IssueDebugSnapshot {
     pub running: Option<RunningRow>,
     pub retry: Option<RetryRow>,
     pub recent_events: Vec<RecentEvent>,
+    pub session_logs: Vec<CodexSessionLogEntry>,
     pub last_error: Option<String>,
     pub tracked: Value,
 }
