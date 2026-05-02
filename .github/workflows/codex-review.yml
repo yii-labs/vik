@@ -26,7 +26,6 @@ jobs:
     env:
       BASE_REF: ${{ github.event.pull_request.base.ref }}
       CODEX_REVIEW_PROMPT: ${{ github.workspace }}/trusted/.github/codex/prompts/pr-review.md
-      GH_CONFIG_DIR: ${{ runner.temp }}/gh-config
       GH_TOKEN: ${{ github.token }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
       REVIEW_WORKSPACE: ${{ github.workspace }}/review
@@ -52,7 +51,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "${GH_CONFIG_DIR}"
+          gh_config_dir="${RUNNER_TEMP}/gh-config"
+          mkdir -p "${gh_config_dir}"
+          echo "GH_CONFIG_DIR=${gh_config_dir}" >>"${GITHUB_ENV}"
+          export GH_CONFIG_DIR="${gh_config_dir}"
           command -v gh
           command -v codex
           gh auth status --hostname github.com --active
@@ -84,29 +86,39 @@ jobs:
           fi
 
           comment_file="$(mktemp)"
-          trap 'rm -f "${comment_file}"' EXIT
+          lookup_error="$(mktemp)"
+          trap 'rm -f "${comment_file}" "${lookup_error}"' EXIT
           {
             echo '<!-- codex-review -->'
             cat "${CODEX_REVIEW_OUTPUT}"
           } >"${comment_file}"
 
-          existing_comment_id="$(
+          if ! existing_comment_id="$(
             gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
               --paginate \
               --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- codex-review -->"))) | .id' \
+              2>"${lookup_error}" \
               | tail -n 1
-          )"
+          )"; then
+            echo "::warning::Unable to look up existing Codex review comment. Trying to create a new comment."
+            cat "${lookup_error}" >&2
+            existing_comment_id=""
+          fi
 
           if [[ -n "${existing_comment_id}" ]]; then
-            gh api \
+            if ! gh api \
               --method PATCH \
               "repos/${GITHUB_REPOSITORY}/issues/comments/${existing_comment_id}" \
               --raw-field body="$(cat "${comment_file}")" \
-              >/dev/null
+              >/dev/null; then
+              echo "::warning::Unable to update Codex review comment. See logs for the review result."
+            fi
           else
-            gh pr comment "${PR_NUMBER}" \
+            if ! gh pr comment "${PR_NUMBER}" \
               --repo "${GITHUB_REPOSITORY}" \
-              --body-file "${comment_file}"
+              --body-file "${comment_file}"; then
+              echo "::warning::Unable to create Codex review comment. See logs for the review result."
+            fi
           fi
 
       - name: Fail on Codex review error

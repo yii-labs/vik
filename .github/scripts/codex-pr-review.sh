@@ -47,7 +47,11 @@ fi
 mkdir -p "$(dirname "${CODEX_REVIEW_OUTPUT}")"
 : >"${CODEX_REVIEW_OUTPUT}"
 
-gh auth status --hostname github.com >/dev/null
+if [[ -n "${GH_CONFIG_DIR:-}" ]]; then
+  mkdir -p "${GH_CONFIG_DIR}"
+fi
+
+gh auth status --hostname github.com --active >/dev/null
 
 git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
 
