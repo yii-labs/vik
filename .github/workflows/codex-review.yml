@@ -1,0 +1,113 @@
+name: Codex pull request review
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: codex-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  codex-review:
+    name: Codex review
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft == false
+    runs-on: self-hosted
+    timeout-minutes: 45
+    env:
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
+      CODEX_REVIEW_PROMPT: ${{ github.workspace }}/trusted/.github/codex/prompts/pr-review.md
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      REVIEW_WORKSPACE: ${{ github.workspace }}/review
+
+    steps:
+      - name: Checkout trusted review tools
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout pull request
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: review
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify runner tools and auth
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v gh
+          command -v codex
+          gh auth status --hostname github.com
+          codex --version
+
+      - name: Run Codex oneshot review
+        id: codex
+        continue-on-error: true
+        shell: bash
+        env:
+          CODEX_REVIEW_OUTPUT: ${{ runner.temp }}/codex-review.md
+        run: |
+          "${GITHUB_WORKSPACE}/trusted/.github/scripts/codex-pr-review.sh"
+
+      - name: Post Codex review comment
+        if: always()
+        shell: bash
+        env:
+          CODEX_REVIEW_OUTPUT: ${{ runner.temp }}/codex-review.md
+        run: |
+          set -euo pipefail
+
+          if [[ ! -s "${CODEX_REVIEW_OUTPUT}" ]]; then
+            printf '%s\n' \
+              '## Codex Review' \
+              '' \
+              'Codex review did not produce output. Check the workflow logs.' \
+              >"${CODEX_REVIEW_OUTPUT}"
+          fi
+
+          comment_file="$(mktemp)"
+          trap 'rm -f "${comment_file}"' EXIT
+          {
+            echo '<!-- codex-review -->'
+            cat "${CODEX_REVIEW_OUTPUT}"
+          } >"${comment_file}"
+
+          existing_comment_id="$(
+            gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              --paginate \
+              --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- codex-review -->"))) | .id' \
+              | tail -n 1
+          )"
+
+          if [[ -n "${existing_comment_id}" ]]; then
+            gh api \
+              --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/issues/comments/${existing_comment_id}" \
+              --raw-field body="$(cat "${comment_file}")" \
+              >/dev/null
+          else
+            gh pr comment "${PR_NUMBER}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --body-file "${comment_file}"
+          fi
+
+      - name: Fail on Codex review error
+        if: steps.codex.outcome == 'failure'
+        shell: bash
+        run: exit 1
