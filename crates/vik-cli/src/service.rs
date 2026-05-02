@@ -507,19 +507,34 @@ fn terminate_pid(pid: u32) -> io::Result<()> {
     if !process_alive(pid) {
         return Ok(());
     }
-    let result = unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
-    if result != 0 {
-        return Err(io::Error::last_os_error());
-    }
+    signal_service_process_group(pid, libc::SIGTERM)?;
     if wait_until_dead(pid, Duration::from_secs(5)) {
         return Ok(());
     }
-    let result = unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
-    if result != 0 && process_alive(pid) {
-        return Err(io::Error::last_os_error());
-    }
+    signal_service_process_group(pid, libc::SIGKILL)?;
     let _ = wait_until_dead(pid, Duration::from_secs(2));
     Ok(())
+}
+
+#[cfg(unix)]
+fn signal_service_process_group(pid: u32, signal: libc::c_int) -> io::Result<()> {
+    // Services call setsid() on spawn, so the service pid is also the process group id.
+    let process_group = -(pid as libc::pid_t);
+    let result = unsafe { libc::kill(process_group, signal) };
+    if result == 0 {
+        return Ok(());
+    }
+    let group_err = io::Error::last_os_error();
+    if group_err.raw_os_error() != Some(libc::ESRCH) || !process_alive(pid) {
+        return Err(group_err);
+    }
+
+    let result = unsafe { libc::kill(pid as libc::pid_t, signal) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
 }
 
 #[cfg(windows)]
@@ -624,5 +639,59 @@ mod tests {
         let lines = recent_log_lines(&path, 0).unwrap();
 
         assert!(lines.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn signal_service_process_group_stops_unix_descendants() {
+        let dir = tempfile::tempdir().unwrap();
+        let child_pid_path = dir.path().join("child.pid");
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg("sleep 60 & echo $! > \"$CHILD_PID_FILE\"; wait")
+            .env("CHILD_PID_FILE", &child_pid_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        detach_command(&mut command);
+
+        let mut child = command.spawn().unwrap();
+        let service_pid = child.id();
+        let child_pid = read_child_pid(&child_pid_path);
+
+        signal_service_process_group(service_pid, libc::SIGTERM).unwrap();
+        let _ = child.wait();
+
+        assert!(wait_for_dead(child_pid, Duration::from_secs(2)));
+    }
+
+    #[cfg(unix)]
+    fn read_child_pid(path: &Path) -> u32 {
+        let start = SystemTime::now();
+        loop {
+            if let Ok(body) = fs::read_to_string(path)
+                && let Ok(pid) = body.trim().parse()
+            {
+                return pid;
+            }
+            assert!(
+                start.elapsed().unwrap_or_default() < Duration::from_secs(2),
+                "child pid file was not written"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[cfg(unix)]
+    fn wait_for_dead(pid: u32, timeout: Duration) -> bool {
+        let start = SystemTime::now();
+        while process_alive(pid) {
+            if start.elapsed().unwrap_or_default() >= timeout {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        true
     }
 }
