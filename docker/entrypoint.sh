@@ -16,16 +16,19 @@ uses_default_workflow=0
 if [[ $# -eq 0 ]]; then
     set -- vik "$VIK_WORKFLOW_PATH"
     uses_default_workflow=1
-elif [[ "$1" == "--check" ]]; then
-    shift
-    set -- vik "$VIK_WORKFLOW_PATH" --check "$@"
+elif [[ "$1" =~ ^(--help|-h|--version|-V)$ ]]; then
+    set -- vik "$@"
+elif [[ "$1" == -* ]]; then
+    set -- vik "$VIK_WORKFLOW_PATH" "$@"
     uses_default_workflow=1
 elif [[ "$1" == "vik" && $# -eq 1 ]]; then
     set -- vik "$VIK_WORKFLOW_PATH"
     uses_default_workflow=1
-elif [[ "$1" == "vik" && "${2:-}" == "--check" ]]; then
-    shift 2
-    set -- vik "$VIK_WORKFLOW_PATH" --check "$@"
+elif [[ "$1" == "vik" && "${2:-}" =~ ^(--help|-h|--version|-V)$ ]]; then
+    :
+elif [[ "$1" == "vik" && "${2:-}" == -* ]]; then
+    shift
+    set -- vik "$VIK_WORKFLOW_PATH" "$@"
     uses_default_workflow=1
 fi
 

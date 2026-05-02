@@ -76,7 +76,8 @@ docker run --rm \
 The image includes `vik`, `gh`, `codex`, `git`, and `openssh-client`. The default command is
 `vik /home/vik/code/vik-workspaces/WORKFLOW.md`. The mounted directory must contain
 `WORKFLOW.md` and is also the default `workspace.root` used by the repository workflow. Set
-`VIK_WORKFLOW_PATH` when mounting the file elsewhere.
+`VIK_WORKFLOW_PATH` when mounting the file elsewhere. Pass Vik flags after the image name, such as
+`vik:local --port 3000`.
 
 Pass environment variables explicitly with Docker `--env NAME` or `--env NAME=value`. Add every
 GitHub CLI or Codex variable the workflow needs, including any `GH_*`, `GITHUB_*`, `CODEX_*`,
