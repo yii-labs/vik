@@ -1,0 +1,82 @@
+name: Codex pull request review
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: codex-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  codex-review:
+    name: Codex review
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft == false
+    runs-on: self-hosted
+    timeout-minutes: 45
+    env:
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
+      CODEX_REVIEW_OUTPUT: ${{ runner.temp }}/codex-review.md
+      CODEX_REVIEW_PROMPT: .github/codex/prompts/pr-review.md
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+
+    steps:
+      - name: Checkout pull request
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Verify runner tools and auth
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v gh
+          command -v codex
+          gh auth status --hostname github.com
+          codex --version
+
+      - name: Run Codex oneshot review
+        id: codex
+        continue-on-error: true
+        shell: bash
+        run: .github/scripts/codex-pr-review.sh
+
+      - name: Post Codex review comment
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! -s "${CODEX_REVIEW_OUTPUT}" ]]; then
+            printf '%s\n' \
+              '## Codex Review' \
+              '' \
+              'Codex review did not produce output. Check the workflow logs.' \
+              >"${CODEX_REVIEW_OUTPUT}"
+          fi
+
+          comment_file="$(mktemp)"
+          {
+            echo '<!-- codex-review -->'
+            cat "${CODEX_REVIEW_OUTPUT}"
+          } >"${comment_file}"
+
+          gh pr comment "${PR_NUMBER}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --body-file "${comment_file}"
+
+      - name: Fail on Codex review error
+        if: steps.codex.outcome == 'failure'
+        shell: bash
+        run: exit 1
