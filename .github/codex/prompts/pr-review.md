@@ -13,7 +13,7 @@ Focus on:
 
 Do not flag style, naming, formatting, broad refactors, or optional improvements.
 
-Write a GitHub comment-ready Markdown response:
+Write a GitHub pull request review-ready Markdown response:
 
 - Start with `## Codex Review`.
 - If there are no blocking findings, write `No blocking findings found.`

@@ -71,7 +71,7 @@ jobs:
         run: |
           "${GITHUB_WORKSPACE}/trusted/.github/scripts/codex-pr-review.sh"
 
-      - name: Post Codex review comment
+      - name: Submit Codex pull request review
         if: always()
         shell: bash
         run: |
@@ -92,25 +92,35 @@ jobs:
             cat "${CODEX_REVIEW_OUTPUT}"
           } >"${comment_file}"
 
-          existing_comment_id="$(
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            --paginate \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- codex-review -->"))) | .id' \
+            | while read -r existing_comment_id; do
+              if [[ -n "${existing_comment_id}" ]]; then
+                gh api \
+                  --method DELETE \
+                  "repos/${GITHUB_REPOSITORY}/issues/comments/${existing_comment_id}" \
+                  >/dev/null
+              fi
+            done
+
+          gh api \
+            --method POST \
+            "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
+            --field event=COMMENT \
+            --field "body=@${comment_file}" \
+            >/dev/null
+
+          remaining_issue_comment_id="$(
             gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
               --paginate \
               --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- codex-review -->"))) | .id' \
               | tail -n 1
           )"
 
-          if [[ -n "${existing_comment_id}" ]]; then
-            gh api \
-              --method PATCH \
-              "repos/${GITHUB_REPOSITORY}/issues/comments/${existing_comment_id}" \
-              --field "body=@${comment_file}" \
-              >/dev/null
-          else
-            gh api \
-              --method POST \
-              "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
-              --field "body=@${comment_file}" \
-              >/dev/null
+          if [[ -n "${remaining_issue_comment_id}" ]]; then
+            echo "Codex review marker issue comment still exists: ${remaining_issue_comment_id}" >&2
+            exit 1
           fi
 
       - name: Fail on Codex review error
