@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${VIK_WORKFLOW_PATH:=/workflow/WORKFLOW.md}"
+: "${VIK_WORKFLOW_PATH:=/vik-workspace/WORKFLOW.md}"
 : "${CODEX_HOME:=$HOME/.codex}"
 : "${GH_CONFIG_DIR:=$HOME/.config/gh}"
 

@@ -58,7 +58,7 @@ docker run --rm \
   --env LINEAR_API_KEY \
   --env GH_TOKEN \
   --env OPENAI_API_KEY \
-  -v "$PWD:/home/vik/code/vik-workspaces" \
+  -v "$PWD:/vik-workspace" \
   vik:local --check
 ```
 
@@ -69,15 +69,25 @@ docker run --rm \
   --env LINEAR_API_KEY \
   --env GH_TOKEN \
   --env OPENAI_API_KEY \
-  -v "$PWD:/home/vik/code/vik-workspaces" \
+  -v "$PWD:/vik-workspace" \
   vik:local
 ```
 
 The image includes `vik`, `gh`, `codex`, `git`, and `openssh-client`. The default command is
-`vik /home/vik/code/vik-workspaces/WORKFLOW.md`. The mounted directory must contain
-`WORKFLOW.md` and is also the default `workspace.root` used by the repository workflow. Set
-`VIK_WORKFLOW_PATH` when mounting the file elsewhere. Pass Vik flags after the image name, such as
-`vik:local --port 3000`.
+`vik /vik-workspace/WORKFLOW.md`. The mounted directory must contain `WORKFLOW.md`. For the
+standard container layout, keep workflow state in that same mounted directory:
+
+```text
+/vik-workspace
+  .vik/
+  WORKFLOW.md
+  <issue-clone-1>/
+  <issue-clone-2>/
+```
+
+Set `workspace.root` to `.` or `/vik-workspace` in `WORKFLOW.md` so `.vik` state and issue clones
+stay under the mount. Set `VIK_WORKFLOW_PATH` when mounting the workflow file elsewhere. Pass Vik
+flags after the image name, such as `vik:local --port 3000`.
 
 The runtime uses the base image `node` user, which has UID/GID 1000 for common Linux bind mounts.
 If the host workspace uses a different owner, pass a matching Docker `--user` value. The image keeps
