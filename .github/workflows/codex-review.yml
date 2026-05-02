@@ -11,7 +11,7 @@ on:
 permissions:
   contents: read
   issues: write
-  pull-requests: read
+  pull-requests: write
 
 concurrency:
   group: codex-review-${{ github.event.pull_request.number }}
@@ -25,7 +25,9 @@ jobs:
     timeout-minutes: 45
     env:
       BASE_REF: ${{ github.event.pull_request.base.ref }}
-      CODEX_REVIEW_PROMPT: ${{ github.workspace }}/trusted/.github/codex/prompts/pr-review.md
+      CODEX_REVIEW_DIR: ${{ github.workspace }}/.codex-review
+      CODEX_REVIEW_OUTPUT: ${{ github.workspace }}/.codex-review/codex-review.md
+      GH_CONFIG_DIR: ${{ github.workspace }}/.codex-review/gh-config
       GH_TOKEN: ${{ github.token }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
       REVIEW_WORKSPACE: ${{ github.workspace }}/review
@@ -51,61 +53,54 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [[ -z "${CODEX_REVIEW_DIR}" || "${CODEX_REVIEW_DIR}" != "${GITHUB_WORKSPACE}/.codex-review" ]]; then
+            echo "Unexpected CODEX_REVIEW_DIR: ${CODEX_REVIEW_DIR}" >&2
+            exit 2
+          fi
+          rm -rf "${CODEX_REVIEW_DIR}"
+          mkdir -p "${GH_CONFIG_DIR}"
           command -v gh
           command -v codex
-          gh auth status --hostname github.com
+          gh auth status --active --hostname github.com
           codex --version
 
       - name: Run Codex oneshot review
         id: codex
         continue-on-error: true
         shell: bash
-        env:
-          CODEX_REVIEW_OUTPUT: ${{ runner.temp }}/codex-review.md
         run: |
           "${GITHUB_WORKSPACE}/trusted/.github/scripts/codex-pr-review.sh"
 
-      - name: Post Codex review comment
+      - name: Submit Codex pull request review
         if: always()
-        shell: bash
-        env:
-          CODEX_REVIEW_OUTPUT: ${{ runner.temp }}/codex-review.md
-        run: |
-          set -euo pipefail
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const fs = require('fs');
+            const { buildReviewPayload } = require(`${process.env.GITHUB_WORKSPACE}/trusted/.github/scripts/codex-review-comments.js`);
+            const outputPath = process.env.CODEX_REVIEW_OUTPUT;
 
-          if [[ ! -s "${CODEX_REVIEW_OUTPUT}" ]]; then
-            printf '%s\n' \
-              '## Codex Review' \
-              '' \
-              'Codex review did not produce output. Check the workflow logs.' \
-              >"${CODEX_REVIEW_OUTPUT}"
-          fi
+            let body = '';
+            if (outputPath && fs.existsSync(outputPath)) {
+              body = fs.readFileSync(outputPath, 'utf8').trim();
+            }
 
-          comment_file="$(mktemp)"
-          trap 'rm -f "${comment_file}"' EXIT
-          {
-            echo '<!-- codex-review -->'
-            cat "${CODEX_REVIEW_OUTPUT}"
-          } >"${comment_file}"
+            const pull_number = Number(process.env.PR_NUMBER);
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number,
+              per_page: 100,
+            });
 
-          existing_comment_id="$(
-            gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
-              --paginate \
-              --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- codex-review -->"))) | .id' \
-              | tail -n 1
-          )"
-
-          if [[ -n "${existing_comment_id}" ]]; then
-            gh api \
-              --method PATCH \
-              "repos/${GITHUB_REPOSITORY}/issues/comments/${existing_comment_id}" \
-              --raw-field body="$(cat "${comment_file}")" \
-              >/dev/null
-          else
-            gh pr comment "${PR_NUMBER}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --body-file "${comment_file}"
-          fi
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number,
+              event: 'COMMENT',
+              ...buildReviewPayload(body, files),
+            });
 
       - name: Fail on Codex review error
         if: steps.codex.outcome == 'failure'
