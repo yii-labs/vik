@@ -22,6 +22,7 @@ require_cmd() {
 require_env GITHUB_REPOSITORY
 require_env GITHUB_WORKSPACE
 require_env BASE_REF
+require_env CODEX_REVIEW_JSON
 require_env CODEX_REVIEW_OUTPUT
 require_env GH_TOKEN
 
@@ -40,6 +41,8 @@ cd "${review_workspace}"
 
 mkdir -p "$(dirname "${CODEX_REVIEW_OUTPUT}")"
 : >"${CODEX_REVIEW_OUTPUT}"
+mkdir -p "$(dirname "${CODEX_REVIEW_JSON}")"
+: >"${CODEX_REVIEW_JSON}"
 
 basic_auth="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
 git_auth_key='http.https://github.com/.extraheader'
@@ -63,8 +66,10 @@ set +e
 # current Codex CLI rejects combining `review --base` with a prompt argument.
 env -u GH_TOKEN -u GITHUB_TOKEN codex exec --sandbox read-only review \
   --base "origin/${BASE_REF}" \
+  --json \
   --ephemeral \
-  --output-last-message "${CODEX_REVIEW_OUTPUT}"
+  --output-last-message "${CODEX_REVIEW_OUTPUT}" \
+  >"${CODEX_REVIEW_JSON}"
 codex_status=$?
 set -e
 
@@ -74,7 +79,7 @@ if [[ ! -s "${CODEX_REVIEW_OUTPUT}" ]]; then
 
 Codex review failed before producing a final review message.
 
-- command: \`codex exec review --base origin/${BASE_REF}\`
+- command: \`codex exec review --base origin/${BASE_REF} --json\`
 - sandbox: \`read-only\`
 - exit code: ${codex_status}
 EOF
