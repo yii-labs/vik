@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::time;
-use vik_core::{AgentEvent, LiveSession};
+use vik_core::{AgentEvent, LiveSession, PosixShell, ShellInvocation};
 use vik_workflow::CodexConfig;
 
 use crate::error::AgentError;
@@ -30,13 +30,16 @@ impl JsonlRpcProcess {
         cwd: &Path,
         tools: DynamicTools,
     ) -> Result<Self, AgentError> {
-        let mut child = Command::new("bash")
-            .arg("-lc")
-            .arg(command)
+        let shell = ShellInvocation::for_current_platform(command, PosixShell::Bash);
+        let mut child = Command::new(shell.program());
+        child
+            .args(shell.args())
+            .arg(shell.command())
             .current_dir(cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = child
             .spawn()
             .map_err(|err| AgentError::CodexNotFound(err.to_string()))?;
         let stdin = child.stdin.take().ok_or(AgentError::PortExit)?;

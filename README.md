@@ -67,7 +67,8 @@ This implementation targets trusted local automation environments.
   are configured.
 - User-input and elicitation requests return protocol errors, so runs do not wait forever.
 - Unsupported dynamic tool calls return structured failure output and do not stall the session.
-- Hooks are trusted `WORKFLOW.md` shell scripts and run inside the workspace.
+- Hooks are trusted `WORKFLOW.md` shell scripts and run inside the workspace through the host
+  platform shell.
 
 ## Safety
 
