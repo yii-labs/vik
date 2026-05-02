@@ -22,6 +22,10 @@ struct Args {
     #[arg(long)]
     port: Option<u16>,
 
+    /// HTTP status server bind address. Defaults to 127.0.0.1.
+    #[arg(long, value_name = "ADDR")]
+    bind_address: Option<IpAddr>,
+
     /// Validate workflow and exit.
     #[arg(long)]
     check: bool,
@@ -70,7 +74,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(port) = port {
         let orch_for_state = Arc::clone(&orchestrator);
         let orch_for_issue = Arc::clone(&orchestrator);
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+        let host = args.bind_address.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
+        let addr = SocketAddr::new(host, port);
         let bound = serve(
             addr,
             HttpState {
