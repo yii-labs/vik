@@ -107,7 +107,7 @@ enum RuntimeStatus {
 pub(crate) async fn run(args: ServiceArgs) -> Result<(), Box<dyn Error>> {
     match args.command {
         ServiceCommand::Install(args) => {
-            let target = load_target(args.workflow, args.port, true)?;
+            let target = load_dispatch_target(args.workflow, args.port)?;
             start_service(&target, "installed")?;
         }
         ServiceCommand::Uninstall(args) => {
@@ -123,7 +123,7 @@ pub(crate) async fn run(args: ServiceArgs) -> Result<(), Box<dyn Error>> {
             print_logs(&target, args.lines, args.follow)?;
         }
         ServiceCommand::Start(args) => {
-            let target = load_target(args.workflow, args.port, true)?;
+            let target = load_dispatch_target(args.workflow, args.port)?;
             start_service(&target, "started")?;
         }
         ServiceCommand::Stop(args) => {
@@ -131,7 +131,7 @@ pub(crate) async fn run(args: ServiceArgs) -> Result<(), Box<dyn Error>> {
             let _ = stop_service(&target, false)?;
         }
         ServiceCommand::Restart(args) => {
-            let target = load_target(args.workflow, args.port, true)?;
+            let target = load_dispatch_target(args.workflow, args.port)?;
             let _ = stop_service(&target, false)?;
             start_service(&target, "restarted")?;
         }
@@ -164,6 +164,17 @@ fn load_target(
     })
 }
 
+fn load_dispatch_target(
+    workflow: Option<PathBuf>,
+    port: Option<u16>,
+) -> Result<ServiceTarget, Box<dyn Error>> {
+    let management_target = load_target(workflow, port, false)?;
+    let previous_state = read_state(&management_target.state_path)?;
+    let dotenv_dir = effective_service_cwd(&management_target, previous_state.as_ref());
+    load_dotenv_from_dir(&dotenv_dir)?;
+    load_target(Some(management_target.workflow_path), port, true)
+}
+
 fn resolve_workflow_path(workflow: Option<PathBuf>) -> io::Result<PathBuf> {
     let path = workflow.unwrap_or_else(|| PathBuf::from("WORKFLOW.md"));
     let absolute = if path.is_absolute() {
@@ -176,6 +187,18 @@ fn resolve_workflow_path(workflow: Option<PathBuf>) -> io::Result<PathBuf> {
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(absolute),
         Err(err) => Err(err),
     }
+}
+
+fn load_dotenv_from_dir(dir: &Path) -> Result<(), Box<dyn Error>> {
+    for ancestor in dir.ancestors() {
+        let path = ancestor.join(".env");
+        match dotenvy::from_path(&path) {
+            Ok(_) => return Ok(()),
+            Err(dotenvy::Error::Io(err)) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(format!("failed to load {}: {err}", path.display()).into()),
+        }
+    }
+    Ok(())
 }
 
 fn start_service(target: &ServiceTarget, verb: &str) -> Result<(), Box<dyn Error>> {
@@ -751,6 +774,19 @@ mod tests {
     }
 
     #[test]
+    fn load_dotenv_from_dir_walks_parent_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("nested").join("service");
+        fs::create_dir_all(&nested).unwrap();
+        let key = unique_env_key("SERVICE");
+        fs::write(dir.path().join(".env"), format!("{key}=from_service_dir\n")).unwrap();
+
+        load_dotenv_from_dir(&nested).unwrap();
+
+        assert_eq!(env::var(key).unwrap(), "from_service_dir");
+    }
+
+    #[test]
     fn stopped_state_classifies_as_stopped_without_pid_probe() {
         let state = ServiceState {
             version: 1,
@@ -806,6 +842,14 @@ mod tests {
             ),
         )
         .unwrap();
+    }
+
+    fn unique_env_key(suffix: &str) -> String {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        format!("VIK_TEST_SERVICE_DOTENV_{nanos}_{suffix}")
     }
 
     #[test]

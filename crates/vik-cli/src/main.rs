@@ -52,7 +52,6 @@ async fn main() {
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    load_dotenv()?;
     let args = Args::parse();
     if let Some(command) = args.command {
         match command {
@@ -60,6 +59,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    load_dotenv()?;
     run_daemon(args.workflow, args.port, args.check).await
 }
 
