@@ -25,6 +25,7 @@ jobs:
 
   workflow-config:
     name: Workflow config
+    needs: codex-review
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -43,6 +44,7 @@ jobs:
 
   rust:
     name: Rust
+    needs: codex-review
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
