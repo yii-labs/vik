@@ -87,7 +87,22 @@ standard container layout, keep workflow state in that same mounted directory:
 
 Set `workspace.root` to `.` or `/vik-workspace` in `WORKFLOW.md` so `.vik` state and issue clones
 stay under the mount. Set `VIK_WORKFLOW_PATH` when mounting the workflow file elsewhere. Pass Vik
-flags after the image name, such as `vik:local --port 3000`.
+flags after the image name.
+
+To publish the optional HTTP status server from Docker, bind the server to all container interfaces:
+
+```sh
+docker run --rm \
+  --env LINEAR_API_KEY \
+  --env GH_TOKEN \
+  --env OPENAI_API_KEY \
+  -p 3000:3000 \
+  -v "$PWD:/vik-workspace" \
+  vik:local --host 0.0.0.0 --port 3000
+```
+
+Without `--host 0.0.0.0`, the status server binds to `127.0.0.1` inside the container and Docker
+bridge port publishing cannot reach it from the host.
 
 The runtime uses the base image `node` user, which has UID/GID 1000 for common Linux bind mounts.
 If the host workspace uses a different owner, pass a matching Docker `--user` value. The image keeps
