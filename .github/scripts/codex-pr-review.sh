@@ -47,7 +47,7 @@ fi
 mkdir -p "$(dirname "${CODEX_REVIEW_OUTPUT}")"
 : >"${CODEX_REVIEW_OUTPUT}"
 
-gh auth status --hostname github.com >/dev/null
+gh api user --jq .login >/dev/null
 
 git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
 
