@@ -49,12 +49,27 @@ Check current auth:
 gh auth status --hostname github.com
 ```
 
-If auth succeeds, continue.
+If auth succeeds, verify the default SSH clone path. The checked-in
+`WORKFLOW.md` uses `git@github.com:yii-labs/vik`, so token-only `gh` auth is not
+enough for the default workflow hook:
 
-If auth fails and `GH_TOKEN` or `GITHUB_TOKEN` is already exported, keep that
-token in the environment for headless `gh` operations. The token must have
-repository access for clone, push, PR creation, labels, comments, and review
-reads.
+```sh
+git ls-remote git@github.com:yii-labs/vik HEAD >/dev/null
+```
+
+If this succeeds, continue.
+
+If `GH_TOKEN` or `GITHUB_TOKEN` is already exported, keep that token in the
+environment for headless `gh` operations. The token must have repository access
+for push, PR creation, labels, comments, and review reads. For token-only clone
+setup, switch the local workflow clone hook to HTTPS, then verify HTTPS git auth:
+
+```sh
+perl -0pi.bak -e 's#git clone --depth 1 git@github.com:yii-labs/vik \.#git clone --depth 1 https://github.com/yii-labs/vik .#' WORKFLOW.md
+rm -f WORKFLOW.md.bak
+gh auth setup-git --hostname github.com
+git ls-remote https://github.com/yii-labs/vik HEAD >/dev/null
+```
 
 If auth fails and a browser tool is available, run the browser login flow:
 
@@ -62,9 +77,11 @@ If auth fails and a browser tool is available, run the browser login flow:
 gh auth login --hostname github.com --git-protocol ssh --web
 gh auth setup-git --hostname github.com
 gh auth status --hostname github.com
+git ls-remote git@github.com:yii-labs/vik HEAD >/dev/null
 ```
 
-If auth still fails and no usable token exists, stop with a GitHub auth blocker.
+If neither SSH clone auth nor the HTTPS token clone path works, stop with a
+GitHub auth blocker.
 
 ## 3. Configure Linear API Key
 
