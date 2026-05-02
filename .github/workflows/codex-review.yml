@@ -25,7 +25,6 @@ jobs:
     timeout-minutes: 45
     env:
       BASE_REF: ${{ github.event.pull_request.base.ref }}
-      CODEX_REVIEW_PROMPT: ${{ github.workspace }}/trusted/.github/codex/prompts/pr-review.md
       CODEX_REVIEW_DIR: ${{ github.workspace }}/.codex-review
       CODEX_REVIEW_OUTPUT: ${{ github.workspace }}/.codex-review/codex-review.md
       GH_CONFIG_DIR: ${{ github.workspace }}/.codex-review/gh-config
