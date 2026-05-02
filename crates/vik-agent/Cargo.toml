@@ -15,6 +15,7 @@ reqwest = { version = "0.13.3", default-features = false, features = [
 ] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
+shlex = "1.3.0"
 vik-core = { version = "0.1.0", path = "../vik-core" }
 vik-workflow = { version = "0.1.0", path = "../vik-workflow" }
 vik-workspace = { version = "0.1.0", path = "../vik-workspace" }

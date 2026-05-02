@@ -2,7 +2,9 @@ use serde_json::json;
 use std::path::Path;
 use vik_workflow::{CodexConfig, TrackerConfig};
 
-use crate::client::codex_spawn_command;
+use crate::client::{
+    CodexSpawnCommand, codex_spawn_command, codex_spawn_process_command_for_platform,
+};
 use crate::event::extract_usage;
 use crate::process::{permission_approval_result, thread_start_params, turn_start_params};
 use crate::tools::DynamicTools;
@@ -67,6 +69,54 @@ fn codex_spawn_command_keeps_command_when_model_config_absent() {
         ..CodexConfig::default()
     };
     assert_eq!(codex_spawn_command(&config), config.command);
+}
+
+#[test]
+fn codex_spawn_process_command_uses_shell_on_posix() {
+    let config = CodexConfig {
+        command: "codex --config shell_environment_policy.inherit=all app-server".to_string(),
+        model: Some("gpt-5.5".to_string()),
+        ..CodexConfig::default()
+    };
+    assert_eq!(
+        codex_spawn_process_command_for_platform(&config, false).unwrap(),
+        CodexSpawnCommand {
+            program: "bash".to_string(),
+            args: vec![
+                "-lc".to_string(),
+                "codex --config shell_environment_policy.inherit=all --config 'model=\"gpt-5.5\"' app-server".to_string(),
+            ],
+        }
+    );
+}
+
+#[test]
+fn codex_spawn_process_command_uses_direct_args_on_windows() {
+    let config = CodexConfig {
+        command: "codex app-server".to_string(),
+        model: Some("gpt-o'clock".to_string()),
+        ..CodexConfig::default()
+    };
+    assert_eq!(
+        codex_spawn_process_command_for_platform(&config, true).unwrap(),
+        CodexSpawnCommand {
+            program: "codex".to_string(),
+            args: vec![
+                "--config".to_string(),
+                "model=\"gpt-o'clock\"".to_string(),
+                "app-server".to_string(),
+            ],
+        }
+    );
+}
+
+#[test]
+fn codex_spawn_process_command_rejects_invalid_windows_command_quoting() {
+    let config = CodexConfig {
+        command: "codex 'app-server".to_string(),
+        ..CodexConfig::default()
+    };
+    assert!(codex_spawn_process_command_for_platform(&config, true).is_err());
 }
 
 #[test]

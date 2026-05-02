@@ -9,6 +9,13 @@ pub enum AgentError {
     InvalidWorkspaceCwd,
     #[error("codex_not_found: {0}")]
     CodexNotFound(String),
+    #[error("invalid_codex_command: {0}")]
+    InvalidCodexCommand(String),
+    #[error("process_spawn_failed: {program}: {source}")]
+    ProcessSpawn {
+        program: String,
+        source: std::io::Error,
+    },
     #[error("response_timeout")]
     ResponseTimeout,
     #[error("turn_timeout")]

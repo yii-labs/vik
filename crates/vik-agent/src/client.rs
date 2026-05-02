@@ -2,7 +2,7 @@ use std::future::Future;
 use std::path::Path;
 
 use serde_json::json;
-use vik_core::{AgentEvent, LiveSession};
+use vik_core::{AgentEvent, LiveSession, PosixShell, ShellInvocation};
 use vik_workflow::CodexConfig;
 
 use crate::error::AgentError;
@@ -14,9 +14,24 @@ const CONTINUATION_PROMPT: &str = "Continue working on this Linear issue. Check 
 
 #[derive(Debug, Clone)]
 pub struct CodexAppServerClient {
-    command: String,
     config: CodexConfig,
     tools: DynamicTools,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CodexSpawnCommand {
+    pub(crate) program: String,
+    pub(crate) args: Vec<String>,
+}
+
+impl CodexSpawnCommand {
+    pub(crate) fn program(&self) -> &str {
+        &self.program
+    }
+
+    pub(crate) fn args(&self) -> &[String] {
+        &self.args
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -28,7 +43,6 @@ pub struct CodexIssueContext {
 impl CodexAppServerClient {
     pub fn new(config: CodexConfig) -> Self {
         Self {
-            command: codex_spawn_command(&config),
             config,
             tools: DynamicTools::default(),
         }
@@ -61,8 +75,9 @@ impl CodexAppServerClient {
             "codex_process_starting",
             json!({}),
         );
+        let command = codex_spawn_process_command(&self.config)?;
         let mut process =
-            JsonlRpcProcess::spawn(&self.command, workspace_path, self.tools.clone()).await?;
+            JsonlRpcProcess::spawn(&command, workspace_path, self.tools.clone()).await?;
         process.configure_timeouts(&self.config);
         emit_lifecycle_event(
             &mut on_event,
@@ -147,8 +162,35 @@ impl CodexAppServerClient {
     }
 }
 
+pub(crate) fn codex_spawn_process_command(
+    config: &CodexConfig,
+) -> Result<CodexSpawnCommand, AgentError> {
+    codex_spawn_process_command_for_platform(config, cfg!(windows))
+}
+
+pub(crate) fn codex_spawn_process_command_for_platform(
+    config: &CodexConfig,
+    is_windows: bool,
+) -> Result<CodexSpawnCommand, AgentError> {
+    if is_windows {
+        return codex_spawn_direct_command(config);
+    }
+
+    let command = codex_spawn_command(config);
+    let shell = ShellInvocation::for_platform(&command, false, PosixShell::Bash);
+    Ok(CodexSpawnCommand {
+        program: shell.program().to_string(),
+        args: shell
+            .args()
+            .iter()
+            .map(|arg| (*arg).to_string())
+            .chain(std::iter::once(command))
+            .collect(),
+    })
+}
+
 pub(crate) fn codex_spawn_command(config: &CodexConfig) -> String {
-    let args = codex_model_config_args(config);
+    let args = codex_model_config_shell_args(config);
     if args.is_empty() {
         return config.command.clone();
     }
@@ -168,25 +210,68 @@ pub(crate) fn codex_spawn_command(config: &CodexConfig) -> String {
     }
 }
 
-fn codex_model_config_args(config: &CodexConfig) -> Vec<String> {
+fn codex_spawn_direct_command(config: &CodexConfig) -> Result<CodexSpawnCommand, AgentError> {
+    let raw_command = config.command.trim();
+    let Some(mut argv) = shlex::split(raw_command) else {
+        return Err(AgentError::InvalidCodexCommand(
+            "codex.command has invalid shell quoting".to_string(),
+        ));
+    };
+    if argv.is_empty() {
+        return Err(AgentError::InvalidCodexCommand(
+            "codex.command is empty".to_string(),
+        ));
+    }
+
+    let program = argv.remove(0);
+    let args = codex_model_config_process_args(config);
+    if args.is_empty() {
+        return Ok(CodexSpawnCommand {
+            program,
+            args: argv,
+        });
+    }
+
+    if let Some(index) = argv.iter().position(|arg| arg == "app-server") {
+        argv.splice(index..index, args);
+    } else {
+        argv.extend(args);
+    }
+    Ok(CodexSpawnCommand {
+        program,
+        args: argv,
+    })
+}
+
+fn codex_model_config_shell_args(config: &CodexConfig) -> Vec<String> {
+    codex_model_config_values(config)
+        .into_iter()
+        .map(|value| format!("--config {}", shell_single_quote(&value)))
+        .collect()
+}
+
+fn codex_model_config_process_args(config: &CodexConfig) -> Vec<String> {
     let mut args = Vec::new();
+    for value in codex_model_config_values(config) {
+        args.push("--config".to_string());
+        args.push(value);
+    }
+    args
+}
+
+fn codex_model_config_values(config: &CodexConfig) -> Vec<String> {
+    let mut values = Vec::new();
     if let Some(model) = config.model.as_deref().map(str::trim)
         && !model.is_empty()
     {
-        args.push(format!(
-            "--config {}",
-            shell_single_quote(&format!("model={}", toml_string(model)))
-        ));
+        values.push(format!("model={}", toml_string(model)));
     }
     if let Some(effort) = config.model_reasoning_effort.as_deref().map(str::trim)
         && !effort.is_empty()
     {
-        args.push(format!(
-            "--config {}",
-            shell_single_quote(&format!("model_reasoning_effort={effort}"))
-        ));
+        values.push(format!("model_reasoning_effort={effort}"));
     }
-    args
+    values
 }
 
 fn toml_string(value: &str) -> String {

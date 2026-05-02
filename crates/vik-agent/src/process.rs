@@ -7,9 +7,10 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::time;
-use vik_core::{AgentEvent, LiveSession, PosixShell, ShellInvocation};
+use vik_core::{AgentEvent, LiveSession};
 use vik_workflow::CodexConfig;
 
+use crate::client::CodexSpawnCommand;
 use crate::error::AgentError;
 use crate::event::{agent_event, extract_rate_limits, extract_usage, summarize_message, truncate};
 use crate::tools::DynamicTools;
@@ -26,22 +27,21 @@ pub(crate) struct JsonlRpcProcess {
 
 impl JsonlRpcProcess {
     pub(crate) async fn spawn(
-        command: &str,
+        command: &CodexSpawnCommand,
         cwd: &Path,
         tools: DynamicTools,
     ) -> Result<Self, AgentError> {
-        let shell = ShellInvocation::for_current_platform(command, PosixShell::Bash);
-        let mut child = Command::new(shell.program());
+        let mut child = Command::new(command.program());
         child
-            .args(shell.args())
-            .arg(shell.command())
+            .args(command.args())
             .current_dir(cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let mut child = child
-            .spawn()
-            .map_err(|err| AgentError::CodexNotFound(err.to_string()))?;
+        let mut child = child.spawn().map_err(|source| AgentError::ProcessSpawn {
+            program: command.program().to_string(),
+            source,
+        })?;
         let stdin = child.stdin.take().ok_or(AgentError::PortExit)?;
         let stdout = child.stdout.take().ok_or(AgentError::PortExit)?;
         if let Some(stderr) = child.stderr.take() {
