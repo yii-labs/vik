@@ -25,7 +25,6 @@ jobs:
     timeout-minutes: 45
     env:
       BASE_REF: ${{ github.event.pull_request.base.ref }}
-      CODEX_REVIEW_OUTPUT: ${{ runner.temp }}/codex-review.md
       CODEX_REVIEW_PROMPT: ${{ github.workspace }}/trusted/.github/codex/prompts/pr-review.md
       GH_TOKEN: ${{ github.token }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -59,11 +58,16 @@ jobs:
         id: codex
         continue-on-error: true
         shell: bash
-        run: "${GITHUB_WORKSPACE}/trusted/.github/scripts/codex-pr-review.sh"
+        env:
+          CODEX_REVIEW_OUTPUT: ${{ runner.temp }}/codex-review.md
+        run: |
+          "${GITHUB_WORKSPACE}/trusted/.github/scripts/codex-pr-review.sh"
 
       - name: Post Codex review comment
         if: always()
         shell: bash
+        env:
+          CODEX_REVIEW_OUTPUT: ${{ runner.temp }}/codex-review.md
         run: |
           set -euo pipefail
 
