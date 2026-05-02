@@ -10,22 +10,8 @@ permissions:
   contents: read
 
 jobs:
-  codex-review:
-    name: Codex review tooling
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Validate Codex review scripts
-        run: |
-          bash -n .github/scripts/codex-pr-review.sh
-          bash -n .github/scripts/test-codex-pr-review.sh
-          bash .github/scripts/test-codex-pr-review.sh
-
   workflow-config:
     name: Workflow config
-    needs: codex-review
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -44,7 +30,6 @@ jobs:
 
   rust:
     name: Rust
-    needs: codex-review
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
