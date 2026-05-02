@@ -163,8 +163,9 @@ fn load_target(
 }
 
 fn start_service(target: &ServiceTarget, verb: &str) -> Result<(), Box<dyn Error>> {
-    if let Some(state) = read_state(&target.state_path)?
-        && classify_state(&state) == RuntimeStatus::Running
+    let previous_state = read_state(&target.state_path)?;
+    if let Some(state) = &previous_state
+        && classify_state(state) == RuntimeStatus::Running
     {
         println!(
             "service already running: pid={} log={}",
@@ -174,10 +175,11 @@ fn start_service(target: &ServiceTarget, verb: &str) -> Result<(), Box<dyn Error
         return Ok(());
     }
 
+    let port = effective_service_port(target.port, previous_state.as_ref());
     fs::create_dir_all(&target.service_dir)?;
     let executable = env::current_exe()?;
     let mut command = Command::new(&executable);
-    for arg in daemon_args(target) {
+    for arg in daemon_args(target, port) {
         command.arg(arg);
     }
     command.current_dir(&target.cwd);
@@ -204,8 +206,8 @@ fn start_service(target: &ServiceTarget, verb: &str) -> Result<(), Box<dyn Error
         started_at_unix: Some(now_unix()),
         stopped_at_unix: None,
         log_path: target.log_path.clone(),
-        port: target.port,
-        command: display_command(&executable, target),
+        port,
+        command: display_command(&executable, target, port),
     };
     write_state(&target.state_path, &state)?;
     println!(
@@ -215,6 +217,13 @@ fn start_service(target: &ServiceTarget, verb: &str) -> Result<(), Box<dyn Error
         target.log_path.display()
     );
     Ok(())
+}
+
+fn effective_service_port(
+    requested_port: Option<u16>,
+    previous_state: Option<&ServiceState>,
+) -> Option<u16> {
+    requested_port.or_else(|| previous_state.and_then(|state| state.port))
 }
 
 fn stop_service(target: &ServiceTarget, remove_state: bool) -> Result<bool, Box<dyn Error>> {
@@ -337,18 +346,18 @@ fn classify_state(state: &ServiceState) -> RuntimeStatus {
     }
 }
 
-fn daemon_args(target: &ServiceTarget) -> Vec<String> {
+fn daemon_args(target: &ServiceTarget, port: Option<u16>) -> Vec<String> {
     let mut args = vec![target.workflow_path.display().to_string()];
-    if let Some(port) = target.port {
+    if let Some(port) = port {
         args.push("--port".to_string());
         args.push(port.to_string());
     }
     args
 }
 
-fn display_command(executable: &Path, target: &ServiceTarget) -> Vec<String> {
+fn display_command(executable: &Path, target: &ServiceTarget, port: Option<u16>) -> Vec<String> {
     let mut command = vec![executable.display().to_string()];
-    command.extend(daemon_args(target));
+    command.extend(daemon_args(target, port));
     command
 }
 
@@ -596,9 +605,23 @@ mod tests {
         };
 
         assert_eq!(
-            daemon_args(&target),
+            daemon_args(&target, target.port),
             vec!["/tmp/vik/WORKFLOW.md", "--port", "3000"]
         );
+    }
+
+    #[test]
+    fn effective_service_port_reuses_stored_port_without_override() {
+        let state = service_state_with_port(Some(3000));
+
+        assert_eq!(effective_service_port(None, Some(&state)), Some(3000));
+    }
+
+    #[test]
+    fn effective_service_port_prefers_requested_override() {
+        let state = service_state_with_port(Some(3000));
+
+        assert_eq!(effective_service_port(Some(4000), Some(&state)), Some(4000));
     }
 
     #[test]
@@ -617,6 +640,21 @@ mod tests {
         };
 
         assert_eq!(classify_state(&state), RuntimeStatus::Stopped);
+    }
+
+    fn service_state_with_port(port: Option<u16>) -> ServiceState {
+        ServiceState {
+            version: 1,
+            workflow_path: PathBuf::from("/tmp/vik/WORKFLOW.md"),
+            cwd: PathBuf::from("/tmp/vik"),
+            pid: None,
+            status: StoredStatus::Stopped,
+            started_at_unix: Some(1),
+            stopped_at_unix: Some(2),
+            log_path: PathBuf::from("/tmp/vik/service.log"),
+            port,
+            command: vec![],
+        }
     }
 
     #[test]
