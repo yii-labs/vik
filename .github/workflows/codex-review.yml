@@ -110,6 +110,8 @@ jobs:
             --field event=COMMENT \
             --field "body=@${comment_file}" \
             >/dev/null
+          # Submitted PR reviews are immutable. Keep one Codex review per run so
+          # each reviewed head SHA has an auditable result in the review timeline.
 
           remaining_issue_comment_id="$(
             gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \

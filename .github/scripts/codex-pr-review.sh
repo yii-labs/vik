@@ -59,6 +59,8 @@ if [[ "${fetch_status}" -ne 0 ]]; then
 fi
 
 set +e
+# The review subcommand owns prompt and PR context loading. Do not pass stdin:
+# current Codex CLI rejects combining `review --base` with a prompt argument.
 env -u GH_TOKEN -u GITHUB_TOKEN codex exec --sandbox read-only review \
   --base "origin/${BASE_REF}" \
   --ephemeral \
