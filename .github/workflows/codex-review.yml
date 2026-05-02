@@ -37,6 +37,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           path: trusted
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Checkout pull request
         uses: actions/checkout@v4
@@ -44,6 +45,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           path: review
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Verify runner tools and auth
         shell: bash
@@ -89,7 +91,7 @@ jobs:
           existing_comment_id="$(
             gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
               --paginate \
-              --jq '.[] | select(.body | startswith("<!-- codex-review -->")) | .id' \
+              --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- codex-review -->"))) | .id' \
               | tail -n 1
           )"
 

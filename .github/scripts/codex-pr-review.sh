@@ -89,6 +89,9 @@ Codex review failed before producing a final review message.
 - sandbox: \`read-only\`
 - exit code: ${codex_status}
 EOF
+  if [[ "${codex_status}" -eq 0 ]]; then
+    codex_status=1
+  fi
 fi
 
 exit "${codex_status}"
