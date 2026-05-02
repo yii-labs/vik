@@ -17,22 +17,43 @@ issue, and runs Codex app-server sessions inside those workspaces.
 - `vik-http`: optional observability HTTP API.
 - `vik-cli`: `vik` binary.
 
-## Run
+## Usage
 
-If `.env` exists in the current directory or a parent directory, `vik` loads it before reading
-`WORKFLOW.md`. Variables already set in the shell are preserved.
+Vik runs from a workflow file and a Linear API key. The default workflow in this
+repository polls a Linear project, creates one workspace per active issue, and starts a
+Codex app-server session in each workspace.
 
-Create or edit `WORKFLOW.md`, then:
+For first-time setup, follow [Workflow Initialization](docs/workflow-init.md). It covers
+GitHub CLI authentication, Linear API key creation, and an agent-ready bootstrap script.
 
-```sh
-cargo run -p vik-cli -- ./WORKFLOW.md
-```
+Basic local flow:
 
-Validate config only:
+1. Authenticate GitHub CLI so workflow hooks can clone and push:
 
-```sh
-cargo run -p vik-cli -- ./WORKFLOW.md --check
-```
+   ```sh
+   gh auth status --hostname github.com
+   ```
+
+2. Create `.env` from `.env.example`, then set `LINEAR_API_KEY` to a Linear personal API
+   key with access to the configured project.
+
+3. Review `WORKFLOW.md` for the Linear project slug, workspace root, hooks, and Codex
+   command.
+
+4. Validate the workflow:
+
+   ```sh
+   cargo run -p vik-cli -- ./WORKFLOW.md --check
+   ```
+
+5. Start the daemon:
+
+   ```sh
+   cargo run -p vik-cli -- ./WORKFLOW.md
+   ```
+
+If `.env` exists in the current directory or a parent directory, `vik` loads it before
+reading `WORKFLOW.md`. Variables already set in the shell are preserved.
 
 Enable the optional HTTP status server:
 
