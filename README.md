@@ -80,7 +80,8 @@ The image includes `vik`, `gh`, `codex`, `git`, and `openssh-client`. The defaul
 `vik:local --port 3000`.
 
 The runtime uses the base image `node` user, which has UID/GID 1000 for common Linux bind mounts.
-If the host workspace uses a different owner, pass a matching Docker `--user` value.
+If the host workspace uses a different owner, pass a matching Docker `--user` value. The image keeps
+`/home/vik` writable so GitHub CLI and Codex config directories still work with that override.
 
 Pass environment variables explicitly with Docker `--env NAME` or `--env NAME=value`. Add every
 GitHub CLI or Codex variable the workflow needs, including any `GH_*`, `GITHUB_*`, `CODEX_*`,

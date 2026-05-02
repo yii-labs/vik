@@ -48,6 +48,7 @@ COPY docker/entrypoint.sh /usr/local/bin/vik-entrypoint
 
 RUN mkdir -p /home/vik/code/vik-workspaces "${CODEX_HOME}" "${GH_CONFIG_DIR}" \
     && chown -R node:node /home/vik \
+    && chmod -R a+rwX /home/vik \
     && chmod +x /usr/local/bin/vik-entrypoint
 
 USER node
