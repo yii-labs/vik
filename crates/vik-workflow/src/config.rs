@@ -3,6 +3,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use serde_yaml::{Mapping, Value as YamlValue};
 use vik_core::WorkflowDefinition;
 
 use crate::WorkflowError;
@@ -44,6 +45,17 @@ pub struct WorkspaceConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoggingConfig {
     pub dir: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepoConfig {
+    pub origin: String,
+    pub clone: RepoCloneConfig,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepoCloneConfig {
+    pub depth: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -168,6 +180,7 @@ pub struct ServiceConfig {
     pub polling: PollingConfig,
     pub workspace: WorkspaceConfig,
     pub logging: LoggingConfig,
+    pub repo: Option<RepoConfig>,
     pub hooks: HooksConfig,
     pub agent: AgentConfig,
     pub codex: CodexConfig,
@@ -185,6 +198,7 @@ impl ServiceConfig {
         let polling_map = get_map(&definition.config, "polling");
         let workspace_map = get_map(&definition.config, "workspace");
         let logging_map = get_map(&definition.config, "logging");
+        let repo_map = get_map(&definition.config, "repo");
         let hooks_map = get_map(&definition.config, "hooks");
         let agent_map = get_map(&definition.config, "agent");
         let codex_map = get_map(&definition.config, "codex");
@@ -229,6 +243,8 @@ impl ServiceConfig {
             .map(|raw| expand_path_value(&raw, &workflow_dir))
             .transpose()?
             .unwrap_or_else(|| workspace_root.join(".vik").join("logs"));
+
+        let repo = parse_repo_config(&definition.config, repo_map)?;
 
         let hooks = HooksConfig {
             after_create: string_value(hooks_map, "after_create"),
@@ -290,6 +306,7 @@ impl ServiceConfig {
                 root: workspace_root,
             },
             logging: LoggingConfig { dir: logging_dir },
+            repo,
             hooks,
             agent: AgentConfig {
                 max_concurrent_agents,
@@ -347,6 +364,95 @@ impl ServiceConfig {
                 "codex.command must include app-server when codex.model or codex.model_reasoning_effort is set".to_string(),
             ));
         }
+        if let Some(repo) = &self.repo
+            && !is_supported_repo_origin(&repo.origin)
+        {
+            return Err(WorkflowError::InvalidConfig(
+                "repo.origin must be an SSH or HTTP(S) Git remote".to_string(),
+            ));
+        }
         Ok(())
     }
+}
+
+fn parse_repo_config(
+    root: &Mapping,
+    repo_map: Option<&Mapping>,
+) -> Result<Option<RepoConfig>, WorkflowError> {
+    let repo_key = YamlValue::String("repo".to_string());
+    if root.contains_key(&repo_key) && repo_map.is_none() {
+        return Err(WorkflowError::InvalidConfig(
+            "repo must be a map".to_string(),
+        ));
+    }
+    let Some(repo_map) = repo_map else {
+        return Ok(None);
+    };
+
+    let origin = string_value(Some(repo_map), "origin")
+        .map(resolve_exact_env)
+        .transpose()?
+        .map(|origin| origin.trim().to_string())
+        .filter(|origin| !origin.is_empty())
+        .ok_or_else(|| {
+            WorkflowError::InvalidConfig(
+                "repo.origin is required when repo is configured".to_string(),
+            )
+        })?;
+
+    let clone_map = nested_map(Some(repo_map), "clone");
+    if has_key(Some(repo_map), "clone") && clone_map.is_none() {
+        return Err(WorkflowError::InvalidConfig(
+            "repo.clone must be a map".to_string(),
+        ));
+    }
+    let depth = optional_positive_u32(clone_map, "depth", "repo.clone.depth")?;
+
+    Ok(Some(RepoConfig {
+        origin,
+        clone: RepoCloneConfig { depth },
+    }))
+}
+
+fn has_key(map: Option<&Mapping>, key: &str) -> bool {
+    map.is_some_and(|map| map.contains_key(YamlValue::String(key.to_string())))
+}
+
+fn optional_positive_u32(
+    map: Option<&Mapping>,
+    key: &str,
+    display: &str,
+) -> Result<Option<u32>, WorkflowError> {
+    let Some(value) = map.and_then(|map| map.get(YamlValue::String(key.to_string()))) else {
+        return Ok(None);
+    };
+    let Some(value) = value.as_u64() else {
+        return Err(WorkflowError::InvalidConfig(format!(
+            "{display} must be a positive integer"
+        )));
+    };
+    if value == 0 || value > u32::MAX as u64 {
+        return Err(WorkflowError::InvalidConfig(format!(
+            "{display} must be a positive integer"
+        )));
+    }
+    Ok(Some(value as u32))
+}
+
+fn is_supported_repo_origin(origin: &str) -> bool {
+    let origin = origin.trim();
+    if origin.is_empty() {
+        return false;
+    }
+    origin.starts_with("https://")
+        || origin.starts_with("http://")
+        || origin.starts_with("ssh://")
+        || is_scp_like_ssh_origin(origin)
+}
+
+fn is_scp_like_ssh_origin(origin: &str) -> bool {
+    let Some((user_host, path)) = origin.split_once(':') else {
+        return false;
+    };
+    !user_host.is_empty() && !path.is_empty() && user_host.contains('@') && !user_host.contains('/')
 }
