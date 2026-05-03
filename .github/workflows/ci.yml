@@ -55,15 +55,3 @@ jobs:
 
       - name: Run tests
         run: cargo test --locked --workspace --all-features
-
-  rust-required:
-    name: Rust
-    runs-on: ubuntu-latest
-    needs: rust
-    if: always()
-    steps:
-      - name: Check Rust matrix result
-        run: |
-          if [ "${{ needs.rust.result }}" != "success" ]; then
-            exit 1
-          fi
