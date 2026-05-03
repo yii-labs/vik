@@ -23,6 +23,7 @@ fn config() -> ServiceConfig {
             project_slug: "proj".into(),
             active_states: vec!["Todo".into(), "In Progress".into()],
             terminal_states: vec!["Done".into(), "Closed".into()],
+            filter: Default::default(),
         },
         polling: PollingConfig {
             interval_ms: 30_000,

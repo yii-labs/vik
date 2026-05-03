@@ -244,6 +244,7 @@ mod tests {
             project_slug: "VIK".to_string(),
             active_states: vec!["Todo".to_string()],
             terminal_states: vec!["Done".to_string()],
+            filter: Default::default(),
         }
     }
 

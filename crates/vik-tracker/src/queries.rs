@@ -1,11 +1,20 @@
 pub const CANDIDATE_QUERY: &str = r#"
-query VikCandidateIssues($projectSlug: String!, $activeStates: [String!], $first: Int!, $after: String) {
+query VikCandidateIssues(
+  $projectSlug: String!
+  $activeStates: [String!]
+  $assigneeFilter: NullableUserFilter! = {}
+  $labelFilter: IssueLabelCollectionFilter! = {}
+  $first: Int!
+  $after: String
+) {
   issues(
     first: $first
     after: $after
     filter: {
       project: { slugId: { eq: $projectSlug } }
       state: { name: { in: $activeStates } }
+      assignee: $assigneeFilter
+      labels: $labelFilter
     }
   ) {
     nodes {

@@ -17,6 +17,7 @@ pub struct LinearClientConfig {
     pub api_key: String,
     pub project_slug: String,
     pub active_states: Vec<String>,
+    pub filter: LinearIssueFilterConfig,
     pub page_size: i64,
 }
 
@@ -32,8 +33,75 @@ impl LinearClientConfig {
             api_key: api_key.into(),
             project_slug: project_slug.into(),
             active_states,
+            filter: LinearIssueFilterConfig::default(),
             page_size: DEFAULT_PAGE_SIZE,
         }
+    }
+
+    pub fn with_filter(mut self, filter: LinearIssueFilterConfig) -> Self {
+        self.filter = filter;
+        self
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LinearIssueFilterConfig {
+    pub assignees: Vec<String>,
+    pub tags: Vec<String>,
+}
+
+impl LinearIssueFilterConfig {
+    pub fn new(assignees: Vec<String>, tags: Vec<String>) -> Self {
+        Self {
+            assignees: clean_filter_values(assignees),
+            tags: clean_filter_values(tags),
+        }
+    }
+
+    pub(crate) fn assignee_filter_value(&self) -> Value {
+        let clauses = self
+            .assignees
+            .iter()
+            .flat_map(|assignee| {
+                [
+                    json!({ "id": { "eq": assignee } }),
+                    json!({ "name": { "eqIgnoreCase": assignee } }),
+                    json!({ "displayName": { "eqIgnoreCase": assignee } }),
+                    json!({ "email": { "eqIgnoreCase": assignee } }),
+                ]
+            })
+            .collect();
+        any_filter(clauses)
+    }
+
+    pub(crate) fn label_filter_value(&self) -> Value {
+        let clauses = self
+            .tags
+            .iter()
+            .map(|tag| json!({ "name": { "eqIgnoreCase": tag } }))
+            .collect();
+        let filter = any_filter(clauses);
+        if filter.as_object().is_some_and(|map| map.is_empty()) {
+            filter
+        } else {
+            json!({ "some": filter })
+        }
+    }
+}
+
+fn clean_filter_values(values: Vec<String>) -> Vec<String> {
+    values
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+fn any_filter(clauses: Vec<Value>) -> Value {
+    match clauses.as_slice() {
+        [] => json!({}),
+        [clause] => clause.clone(),
+        _ => json!({ "or": clauses }),
     }
 }
 
@@ -92,18 +160,26 @@ impl LinearClient {
         let mut all = Vec::new();
         let mut after: Option<String> = None;
         loop {
-            let payload = self
-                .graphql(
-                    query,
-                    json!({
-                        "projectSlug": self.config.project_slug,
-                        "activeStates": state_names,
-                        "stateNames": state_names,
-                        "first": self.config.page_size,
-                        "after": after,
-                    }),
-                )
-                .await?;
+            let mut variables = json!({
+                "projectSlug": self.config.project_slug,
+                "activeStates": state_names,
+                "stateNames": state_names,
+                "first": self.config.page_size,
+                "after": after,
+            });
+            if query == CANDIDATE_QUERY
+                && let Some(map) = variables.as_object_mut()
+            {
+                map.insert(
+                    "assigneeFilter".to_string(),
+                    self.config.filter.assignee_filter_value(),
+                );
+                map.insert(
+                    "labelFilter".to_string(),
+                    self.config.filter.label_filter_value(),
+                );
+            }
+            let payload = self.graphql(query, variables).await?;
             let issues = payload.pointer("/data/issues").ok_or_else(|| {
                 TrackerError::LinearUnknownPayload("missing data.issues".to_string())
             })?;
