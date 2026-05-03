@@ -41,7 +41,12 @@ pub(crate) fn append_session_log(
     }
     let mut entry = entry.clone();
     entry.sequence = next_sequence(&path)?;
-    let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .append(true)
+        .open(&path)?;
+    ensure_trailing_newline(&mut file)?;
     serde_json::to_writer(&mut file, &entry).map_err(io::Error::other)?;
     file.write_all(b"\n")?;
     file.flush()?;
@@ -139,6 +144,19 @@ fn recent_events_from_logs(logs: &[CodexSessionLogEntry]) -> Vec<RecentEvent> {
 
 fn next_sequence(path: &Path) -> io::Result<u64> {
     Ok(last_sequence(path)?.unwrap_or_default() + 1)
+}
+
+fn ensure_trailing_newline(file: &mut File) -> io::Result<()> {
+    if file.metadata()?.len() == 0 {
+        return Ok(());
+    }
+    file.seek(SeekFrom::End(-1))?;
+    let mut last_byte = [0_u8; 1];
+    file.read_exact(&mut last_byte)?;
+    if last_byte[0] != b'\n' {
+        file.write_all(b"\n")?;
+    }
+    Ok(())
 }
 
 fn session_log_path(logging_dir: &Path, entry: &CodexSessionLogEntry) -> PathBuf {

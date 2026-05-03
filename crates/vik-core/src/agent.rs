@@ -106,6 +106,8 @@ pub struct RetryEntry {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentEvent {
     pub issue_id: String,
+    #[serde(default)]
+    pub session_file_id: String,
     pub event: String,
     pub timestamp: DateTime<Utc>,
     pub codex_app_server_pid: Option<String>,
@@ -233,6 +235,7 @@ impl WorkerOutcome {
 #[derive(Debug, Clone)]
 pub struct AgentRunRequest<C> {
     pub issue: Issue,
+    pub session_file_id: String,
     pub attempt: Option<u32>,
     pub workflow: WorkflowDefinition,
     pub config: C,

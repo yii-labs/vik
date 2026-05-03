@@ -4,6 +4,7 @@ use vik_core::{AgentEvent, LiveSession, TokenUsage};
 
 pub(crate) fn agent_event(
     issue_id: String,
+    session_file_id: String,
     event: impl Into<String>,
     session: Option<LiveSession>,
     usage: Option<TokenUsage>,
@@ -13,6 +14,7 @@ pub(crate) fn agent_event(
     let message = summarize_message(&raw);
     AgentEvent {
         issue_id,
+        session_file_id,
         event: event.into(),
         timestamp: Utc::now(),
         codex_app_server_pid: session

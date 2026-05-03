@@ -22,6 +22,7 @@ pub struct CodexAppServerClient {
 #[derive(Debug, Clone)]
 pub struct CodexIssueContext {
     pub issue_id: String,
+    pub session_file_id: String,
     pub title: String,
 }
 
@@ -58,6 +59,7 @@ impl CodexAppServerClient {
         emit_lifecycle_event(
             &mut on_event,
             &issue.issue_id,
+            &issue.session_file_id,
             "codex_process_starting",
             json!({}),
         );
@@ -67,12 +69,14 @@ impl CodexAppServerClient {
         emit_lifecycle_event(
             &mut on_event,
             &issue.issue_id,
+            &issue.session_file_id,
             "codex_process_started",
             json!({ "pid": process.child.id() }),
         );
         emit_lifecycle_event(
             &mut on_event,
             &issue.issue_id,
+            &issue.session_file_id,
             "codex_initialize_starting",
             json!({}),
         );
@@ -80,12 +84,14 @@ impl CodexAppServerClient {
         emit_lifecycle_event(
             &mut on_event,
             &issue.issue_id,
+            &issue.session_file_id,
             "codex_initialize_completed",
             json!({}),
         );
         emit_lifecycle_event(
             &mut on_event,
             &issue.issue_id,
+            &issue.session_file_id,
             "codex_thread_starting",
             json!({ "cwd": workspace_path.display().to_string() }),
         );
@@ -95,6 +101,7 @@ impl CodexAppServerClient {
         emit_lifecycle_event(
             &mut on_event,
             &issue.issue_id,
+            &issue.session_file_id,
             "codex_thread_started",
             json!({ "thread_id": &thread_id }),
         );
@@ -109,6 +116,7 @@ impl CodexAppServerClient {
             emit_lifecycle_event(
                 &mut on_event,
                 &issue.issue_id,
+                &issue.session_file_id,
                 "codex_turn_starting",
                 json!({ "thread_id": &thread_id, "turn_count": turn_count }),
             );
@@ -120,6 +128,7 @@ impl CodexAppServerClient {
             live.codex_app_server_pid = process.child.id().map(|pid| pid.to_string());
             on_event(agent_event(
                 issue.issue_id.clone(),
+                issue.session_file_id.clone(),
                 "session_started",
                 Some(live.clone()),
                 None,
@@ -132,6 +141,7 @@ impl CodexAppServerClient {
                     &turn_id,
                     &mut live,
                     &issue.issue_id,
+                    &issue.session_file_id,
                     &mut on_event,
                 )
                 .await?;
@@ -213,11 +223,13 @@ fn shell_single_quote(value: &str) -> String {
 fn emit_lifecycle_event(
     on_event: &mut impl FnMut(AgentEvent),
     issue_id: &str,
+    session_file_id: &str,
     event: &'static str,
     raw: serde_json::Value,
 ) {
     on_event(agent_event(
         issue_id.to_string(),
+        session_file_id.to_string(),
         event,
         None,
         None,
