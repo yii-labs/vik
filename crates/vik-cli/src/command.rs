@@ -44,11 +44,19 @@ enum Command {
 pub(crate) async fn run(args: Args) -> Result<(), Box<dyn Error>> {
     match args.command {
         Command::Start(args) => {
+            load_dotenv()?;
             crate::start::run(args.workflow, args.port, args.bind_address).await
         }
-        Command::Check(args) => crate::check::run(args.workflow),
+        Command::Check(args) => {
+            load_dotenv()?;
+            crate::check::run(args.workflow)
+        }
         Command::Service(args) => crate::service::run(args).await,
     }
+}
+
+fn load_dotenv() -> Result<(), Box<dyn Error>> {
+    crate::env::load_dotenv()
 }
 
 #[cfg(test)]

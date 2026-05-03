@@ -16,6 +16,5 @@ async fn main() {
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = command::Args::parse();
-    env::load_dotenv()?;
     command::run(args).await
 }
