@@ -178,6 +178,10 @@ function parsePriorityLabel(value) {
   return match ? `P${match[1]}` : '';
 }
 
+function hasPriorityPrefix(title) {
+  return /^\[?P[0-3]\]?(?:\s|:)/i.test(title);
+}
+
 function findingToPayload(finding) {
   if (!finding || typeof finding !== 'object') {
     return null;
@@ -190,7 +194,7 @@ function findingToPayload(finding) {
   const priority = parsePriorityLabel(finding.priority ?? finding.severity);
   const title = String(finding.title || finding.summary || 'Codex finding').trim();
   const detail = String(finding.body || finding.description || finding.explanation || '').trim();
-  const heading = priority ? `[${priority}] ${title}` : title;
+  const heading = priority && !hasPriorityPrefix(title) ? `[${priority}] ${title}` : title;
 
   return {
     path: codeLocation.absolute_file_path || codeLocation.path || finding.path || finding.file || finding.filename || '',

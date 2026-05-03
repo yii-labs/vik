@@ -61,7 +61,7 @@ test('extracts standard Codex findings JSON', () => {
     JSON.stringify({
       findings: [
         {
-          title: 'Route delayed turn messages before logging',
+          title: '[P2] Route delayed turn messages before logging',
           body: 'Apply turn-id routing before appending to the current session log.',
           priority: 2,
           code_location: {
