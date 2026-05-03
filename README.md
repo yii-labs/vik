@@ -152,7 +152,8 @@ This implementation targets trusted local automation environments.
 
 - Codex app-server launches in the per-issue workspace using a command derived from
   `codex.command`, with `codex.model` and `codex.model_reasoning_effort` converted into CLI
-  `--config` args before `app-server`.
+  `--config` args before `app-server`. Windows launches the app-server directly with executable
+  arguments; macOS and Linux keep the configured command behind `bash -lc`.
 - The default workflow routes approval review to Codex `auto_review`, so connector write prompts do
   not wait for an interactive user.
 - Command and file-change approvals are answered with session acceptance.
@@ -165,7 +166,8 @@ This implementation targets trusted local automation environments.
   are configured.
 - User-input and elicitation requests return protocol errors, so runs do not wait forever.
 - Unsupported dynamic tool calls return structured failure output and do not stall the session.
-- Hooks are trusted `WORKFLOW.md` shell scripts and run inside the workspace.
+- Hooks are trusted `WORKFLOW.md` shell scripts and run inside the workspace through the host
+  platform shell (`sh -lc` on macOS/Linux, PowerShell on Windows).
 
 ## Safety
 

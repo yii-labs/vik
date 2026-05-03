@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use tempfile::tempdir;
 use vik_workflow::HooksConfig;
 
@@ -7,6 +9,17 @@ fn hooks() -> HooksConfig {
     HooksConfig {
         timeout_ms: 2_000,
         ..HooksConfig::default()
+    }
+}
+
+fn append_marker_command(marker: &Path) -> String {
+    let marker = marker.display().to_string();
+    if cfg!(windows) {
+        let marker = marker.replace('\'', "''");
+        format!("'run' | Out-File -FilePath '{marker}' -Append -Encoding utf8")
+    } else {
+        let marker = marker.replace('\'', "'\\''");
+        format!("printf 'run\\n' >> '{marker}'")
     }
 }
 
@@ -27,7 +40,7 @@ async fn after_create_runs_only_for_new_workspace() {
     let dir = tempdir().unwrap();
     let marker = dir.path().join("marker");
     let mut config = hooks();
-    config.after_create = Some(format!("echo run >> {}", marker.display()));
+    config.after_create = Some(append_marker_command(&marker));
     let manager = WorkspaceManager::new(dir.path().join("root"), config);
     manager.create_for_issue("ABC-1").await.unwrap();
     manager.create_for_issue("ABC-1").await.unwrap();

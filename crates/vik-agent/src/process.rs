@@ -15,6 +15,32 @@ use crate::event::{agent_event, extract_rate_limits, extract_usage, summarize_me
 use crate::session_log::SessionLog;
 use crate::tools::DynamicTools;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProcessCommand {
+    program: String,
+    args: Vec<String>,
+}
+
+impl ProcessCommand {
+    pub(crate) fn new(
+        program: impl Into<String>,
+        args: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        Self {
+            program: program.into(),
+            args: args.into_iter().map(Into::into).collect(),
+        }
+    }
+
+    pub(crate) fn program(&self) -> &str {
+        &self.program
+    }
+
+    pub(crate) fn args(&self) -> &[String] {
+        &self.args
+    }
+}
+
 pub(crate) struct JsonlRpcProcess {
     pub(crate) child: Child,
     stdin: ChildStdin,
@@ -34,19 +60,21 @@ pub(crate) struct TurnStartResponse {
 
 impl JsonlRpcProcess {
     pub(crate) async fn spawn(
-        command: &str,
+        command: &ProcessCommand,
         cwd: &Path,
         tools: DynamicTools,
     ) -> Result<Self, AgentError> {
-        let mut child = Command::new("bash")
-            .arg("-lc")
-            .arg(command)
+        let mut process = Command::new(command.program());
+        process
+            .args(command.args())
             .current_dir(cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|err| AgentError::CodexNotFound(err.to_string()))?;
+            .stderr(Stdio::piped());
+        let mut child = process.spawn().map_err(|err| AgentError::ProcessSpawn {
+            program: command.program().to_string(),
+            reason: err.to_string(),
+        })?;
         let stdin = child.stdin.take().ok_or(AgentError::PortExit)?;
         let stdout = child.stdout.take().ok_or(AgentError::PortExit)?;
         if let Some(stderr) = child.stderr.take() {
