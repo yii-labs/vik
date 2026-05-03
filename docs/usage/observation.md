@@ -34,13 +34,13 @@ the checked-in `WORKFLOW.md`.
 Start the daemon with HTTP observation:
 
 ```sh
-vik ./WORKFLOW.md --port 3000
+vik start ./WORKFLOW.md --port 3000
 ```
 
 Bind to another interface when needed:
 
 ```sh
-vik ./WORKFLOW.md \
+vik start ./WORKFLOW.md \
   --bind-address 0.0.0.0 \
   --port 3000
 ```

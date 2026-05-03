@@ -46,7 +46,7 @@ end-to-end daemon run against an isolated project.
 Run when orchestration behavior changes:
 
 ```sh
-cargo run --locked -p vik-cli -- ./WORKFLOW.md --port 3000
+cargo run --locked -p vik-cli -- start ./WORKFLOW.md --port 3000
 curl -fsS http://127.0.0.1:3000/api/v1/state | jq .
 ```
 

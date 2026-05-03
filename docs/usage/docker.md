@@ -58,7 +58,7 @@ docker run --rm \
 The default command is:
 
 ```sh
-vik /vik-workspace/WORKFLOW.md
+vik start /vik-workspace/WORKFLOW.md
 ```
 
 Set `VIK_WORKFLOW_PATH` when the workflow file is mounted somewhere else.

@@ -271,7 +271,10 @@ impl ServiceTarget {
     }
 
     fn daemon_args(&self, port: Option<u16>) -> Vec<String> {
-        let mut args = vec![self.workflow_path.display().to_string()];
+        let mut args = vec![
+            "start".to_string(),
+            self.workflow_path.display().to_string(),
+        ];
         if let Some(port) = port {
             args.push("--port".to_string());
             args.push(port.to_string());
@@ -727,7 +730,7 @@ mod tests {
 
         assert_eq!(
             target.daemon_args(target.port),
-            vec!["/tmp/vik/WORKFLOW.md", "--port", "3000"]
+            vec!["start", "/tmp/vik/WORKFLOW.md", "--port", "3000"]
         );
     }
 
