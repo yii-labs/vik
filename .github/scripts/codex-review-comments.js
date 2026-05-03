@@ -1,6 +1,7 @@
 'use strict';
 
 const CODEX_REVIEW_MARKER = '<!-- codex-review -->';
+const sortedChangedPathsCache = new WeakMap();
 
 function normalizeReviewBody(rawBody) {
   const body = String(rawBody || '').trim();
@@ -73,6 +74,17 @@ function buildChangedLineMap(files) {
   return map;
 }
 
+function sortedChangedPaths(changedLineMap) {
+  const cached = sortedChangedPathsCache.get(changedLineMap);
+  if (cached) {
+    return cached;
+  }
+
+  const paths = Array.from(changedLineMap.keys()).sort((left, right) => right.length - left.length);
+  sortedChangedPathsCache.set(changedLineMap, paths);
+  return paths;
+}
+
 function findChangedPath(path, changedLineMap) {
   const normalizedPath = String(path || '').trim();
 
@@ -84,8 +96,7 @@ function findChangedPath(path, changedLineMap) {
     return normalizedPath;
   }
 
-  const paths = Array.from(changedLineMap.keys()).sort((left, right) => right.length - left.length);
-  return paths.find((candidate) => normalizedPath.endsWith(`/${candidate}`) || normalizedPath === candidate) || '';
+  return sortedChangedPaths(changedLineMap).find((candidate) => normalizedPath.endsWith(`/${candidate}`) || normalizedPath === candidate) || '';
 }
 
 function parsePositiveInteger(value) {
@@ -225,7 +236,7 @@ function splitFindingBlocks(markdown) {
   for (const line of markdown.split(/\r?\n/)) {
     const startsBlock =
       /^#{3,6}\s+\S/.test(line) ||
-      /^\s*(?:[-*]|\d+[.)])\s+(?:\*\*)?(?:P[0-3]|critical|high|medium|low|blocking|finding|issue|bug)\b/i.test(line);
+      /^\s*(?:[-*]|\d+[.)])\s+(?:\*\*)?(?:\[?P[0-3]\]?|critical|high|medium|low|blocking|finding|issue|bug)(?:\b|\s|:)/i.test(line);
 
     if (startsBlock && current.some((entry) => entry.trim())) {
       blocks.push(current.join('\n').trim());
@@ -245,7 +256,7 @@ function splitFindingBlocks(markdown) {
 function parseReviewCommentBlocks(markdown, changedLineMap) {
   const comments = [];
   const lines = markdown.split(/\r?\n/);
-  const paths = Array.from(changedLineMap.keys()).sort((left, right) => right.length - left.length);
+  const paths = sortedChangedPaths(changedLineMap);
 
   for (let index = 0; index < lines.length; index += 1) {
     const heading = /^\s*[-*]\s+\[(P[0-3])\]\s+(.+?)\s+(?:\u2014|-)\s+(\S+):(\d+)(?:-(\d+))?\s*$/.exec(lines[index]);
@@ -336,21 +347,17 @@ function stripParserHints(block) {
     .trim();
 }
 
-function inferMarkdownPayloads(markdown, changedLineMap) {
+function inferMarkdownPayloads(markdown, changedLineMap, ignoredLineKeys = new Set()) {
   if (/No blocking findings found\./i.test(markdown)) {
     return [];
   }
 
   const comments = [];
-  const paths = Array.from(changedLineMap.keys()).sort((left, right) => right.length - left.length);
+  const paths = sortedChangedPaths(changedLineMap);
   const blocks = splitFindingBlocks(markdown);
 
   for (const block of blocks) {
-    if (
-      /codex-review-comments?/.test(block) ||
-      /codex-review-comment/.test(block) ||
-      /^\s*[-*]\s+\[P[0-3]\]\s+/m.test(block)
-    ) {
+    if (/codex-review-comments?/.test(block) || /codex-review-comment/.test(block)) {
       continue;
     }
 
@@ -364,6 +371,9 @@ function inferMarkdownPayloads(markdown, changedLineMap) {
       const comment = normalizeCommentPayload({ path, line, body }, changedLineMap);
 
       if (comment) {
+        if (ignoredLineKeys.has(commentLineKey(comment))) {
+          break;
+        }
         comments.push(comment);
         break;
       }
@@ -373,12 +383,37 @@ function inferMarkdownPayloads(markdown, changedLineMap) {
   return comments;
 }
 
+function commentLineKey(comment, line = comment.line) {
+  return `${comment.path}:${line}:${comment.side || 'RIGHT'}`;
+}
+
+function commentLineKeys(comment) {
+  const keys = [commentLineKey(comment)];
+
+  if (comment.start_line) {
+    keys.push(commentLineKey(comment, comment.start_line));
+  }
+
+  return keys;
+}
+
+function commentDedupeKey(comment) {
+  return [
+    comment.path,
+    comment.start_line || '',
+    comment.start_side || '',
+    comment.line,
+    comment.side || '',
+    comment.body,
+  ].join('\0');
+}
+
 function dedupeComments(comments) {
   const seen = new Set();
   const unique = [];
 
   for (const comment of comments) {
-    const key = `${comment.path}:${comment.line}:${comment.body}`;
+    const key = commentDedupeKey(comment);
     if (seen.has(key)) {
       continue;
     }
@@ -391,12 +426,16 @@ function dedupeComments(comments) {
 
 function extractReviewComments(markdown, files) {
   const changedLineMap = buildChangedLineMap(files);
-  const comments = [
+  const structuredComments = [
     ...parseJsonPayloads(markdown, changedLineMap),
     ...parseFencedPayloads(markdown, changedLineMap),
     ...parseHiddenPayloads(markdown, changedLineMap),
     ...parseReviewCommentBlocks(markdown, changedLineMap),
-    ...inferMarkdownPayloads(markdown, changedLineMap),
+  ];
+  const structuredLineKeys = new Set(structuredComments.flatMap(commentLineKeys));
+  const comments = [
+    ...structuredComments,
+    ...inferMarkdownPayloads(markdown, changedLineMap, structuredLineKeys),
   ];
 
   return dedupeComments(comments);

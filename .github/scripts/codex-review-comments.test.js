@@ -75,6 +75,44 @@ test('extracts fenced JSON review comments with ranges', () => {
   ]);
 });
 
+test('keeps distinct range and single-line comments during dedupe', () => {
+  const comments = extractReviewComments(
+    JSON.stringify({
+      comments: [
+        {
+          path: 'crates/vik-agent/src/process.rs',
+          start_line: 219,
+          line: 220,
+          body: 'Same body.',
+        },
+        {
+          path: 'crates/vik-agent/src/process.rs',
+          line: 220,
+          body: 'Same body.',
+        },
+      ],
+    }),
+    files,
+  );
+
+  assert.deepEqual(comments, [
+    {
+      path: 'crates/vik-agent/src/process.rs',
+      line: 220,
+      side: 'RIGHT',
+      body: 'Same body.',
+      start_line: 219,
+      start_side: 'RIGHT',
+    },
+    {
+      path: 'crates/vik-agent/src/process.rs',
+      line: 220,
+      side: 'RIGHT',
+      body: 'Same body.',
+    },
+  ]);
+});
+
 test('keeps hidden block compatibility', () => {
   const comments = extractReviewComments(
     [
@@ -131,6 +169,24 @@ test('parses duplicated plain-text Codex review findings cleanly', () => {
     ].join('\n'),
   });
   assert.equal(payload.body, '<!-- codex-review -->\n## Codex Review\n\nPosted 1 inline review comment.');
+});
+
+test('keeps fallback parsing for P-list findings with path in body', () => {
+  const comments = extractReviewComments(
+    [
+      '## Codex Review',
+      '',
+      '- [P2] Preserve fallback parsing for P-list findings',
+      '  Impact: this affects crates/vik-agent/src/process.rs:220.',
+      '  Fix: let generic inference handle unmatched P-list blocks.',
+    ].join('\n'),
+    files,
+  );
+
+  assert.equal(comments.length, 1);
+  assert.equal(comments[0].path, 'crates/vik-agent/src/process.rs');
+  assert.equal(comments[0].line, 220);
+  assert.match(comments[0].body, /Preserve fallback parsing/);
 });
 
 test('keeps no-finding output as one non-inline review body', () => {
