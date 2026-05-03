@@ -26,6 +26,15 @@ description:
   - The daemon writes logs to stdout and to daily files in `logging.dir`.
   - If `logging.dir` is omitted, search `<workspace.root>/.vik/logs`.
   - Daily file names use `vik.log.<date>`.
+- Codex app-server session logs:
+  - Builds with VIK-11 append raw Codex app-server JSONL messages under
+    `<workspace.root>/.vik/sessions`.
+  - Session file names use
+    `<issue-identifier>-<session-id>.jsonl`.
+  - Filename components are sanitized to ASCII letters, numbers, `.`, `_`, and
+    `-`; other characters become `_`.
+  - Use these logs for raw app-server protocol messages for one session. They
+    do not replace daemon logs, HTTP snapshots, or Linear workpad notes.
 - HTTP observation API when the daemon runs with `--port`:
   - `GET /api/v1/state` returns running and retrying rows plus token totals.
   - `GET /api/v1/{issue_identifier}` returns one issue debug snapshot.
@@ -41,6 +50,8 @@ description:
 - `issue_identifier`: human ticket key, for example `VIK-9`.
 - `issue_id`: Linear UUID.
 - `session_id`: Codex thread-turn pair from `LiveSession`.
+- `session_log_path`: session JSONL path derived from `workspace.root`,
+  `issue_identifier`, and `session_id`.
 - `codex_event`: app-server event name from the JSONL stream.
 - `codex_app_server_pid`: local child process id when available.
 - `workspace_path`: per-issue workspace path.
@@ -54,19 +65,22 @@ runs can emit similar Codex events.
 1. Confirm issue state in Linear.
 2. Query the HTTP issue debug endpoint if available.
 3. Search runtime logs by `issue_identifier`, then by `issue_id`.
-4. Extract `session_id`, `workspace_path`, and last `codex_event`.
-5. Trace that `session_id` from process start to terminal outcome.
-6. Classify the failure.
-7. Archive observations in the issue workpad.
+4. Extract `workspace.root`, `workspace_path`, `session_id`, and last
+   `codex_event`.
+5. Find the matching session log in `<workspace.root>/.vik/sessions`.
+6. Trace that `session_id` from process start to terminal outcome across
+   daemon logs and the session JSONL file.
+7. Classify the failure.
+8. Archive observations in the issue workpad.
 
 ## Commands
 
 ```bash
 # Confirm workflow config is valid.
-cargo run -p vik-cli -- ./WORKFLOW.md --check
+LINEAR_API_KEY=ci-placeholder cargo run --locked -p vik-cli -- check ./WORKFLOW.md
 
 # Start daemon with HTTP observation enabled.
-RUST_LOG=info cargo run -p vik-cli -- ./WORKFLOW.md --port 3000
+RUST_LOG=info cargo run --locked -p vik-cli -- start ./WORKFLOW.md --port 3000
 
 # Inspect global runtime state.
 curl -s http://127.0.0.1:3000/api/v1/state | jq .
@@ -86,8 +100,15 @@ rg -n '"issue_id":"<linear-uuid>"|issue_id=<linear-uuid>' <log-dir>
 # Pull unique session IDs from persisted logs.
 rg -o '"session_id":"[^"]+"|session_id=[^ ,}]+' <log-dir> | sort -u
 
+# Find session logs for one issue.
+find "<workspace.root>/.vik/sessions" -type f -name 'VIK-9-*.jsonl' -print
+
+# Inspect one session log as JSONL.
+jq . "<workspace.root>/.vik/sessions/<issue-identifier>-<session-id>.jsonl" | less
+
 # Trace one session end to end.
 rg -n '<session-id>' <log-dir>
+rg -n '<session-id>|turn/|response|error|rateLimits' "<session-log-path>"
 
 # Focus on retry, stall, and terminal signals.
 rg -n 'stalled_run|retry_dispatch|worker_exit|turn_timeout|turn_failed|turn_cancelled|response_timeout|port_exit|codex_not_found|workflow_reload outcome=failed' <log-dir>
@@ -119,11 +140,23 @@ Use the configured `logging.dir` from `WORKFLOW.md`. If it is omitted, use
    - `session_started`
    - streamed `codex_update outcome=received` events
    - `worker_exit outcome=received`
-4. Inspect workspace:
+4. Inspect session JSONL:
+   - Derive session log directory from `workspace.root`:
+     `<workspace.root>/.vik/sessions`.
+   - Prefer the exact `session_id` from HTTP state or daemon logs.
+   - If the exact ID is unavailable, list files matching
+     `<issue_identifier>-*.jsonl` and sort by modified time.
+   - Confirm the selected file belongs to the current attempt by matching the
+     session id, nearby daemon timestamps, or lifecycle sequence.
+   - Search the selected file for app-server method names, terminal statuses,
+     errors, approvals, rate-limit messages, and the last streamed response.
+   - Do not paste full prompts, tool payloads, credentials, or full session
+     logs into Linear.
+5. Inspect workspace:
    - Check the issue workspace path from HTTP or logs.
    - Read git branch, git status, workpad context, and recent file changes.
    - Do not modify the workspace until the failure target is explicit.
-5. Classify and fix:
+6. Classify and fix:
    - Pick one primary class from the list below.
    - Capture the exact evidence line or endpoint field that proves it.
    - Implement the smallest fix that addresses that class.
@@ -180,11 +213,13 @@ large enough to need handoff:
   - Linear:
   - HTTP:
   - Logs:
+  - Session logs:
   - Workspace:
 - Correlation:
   - issue_id:
   - issue_identifier:
   - session_id:
+  - session_log_path:
   - codex_app_server_pid:
   - workspace_path:
 - Classification:
