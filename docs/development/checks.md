@@ -30,9 +30,11 @@ Run when `Dockerfile`, `docker/`, or Docker docs change:
 
 ```sh
 docker build -t vik:local .
+mkdir -p "$PWD/.vik/docker-workspace"
+cp WORKFLOW.md "$PWD/.vik/docker-workspace/WORKFLOW.md"
 docker run --rm \
   --env LINEAR_API_KEY=ci-placeholder \
-  -v "$PWD:/vik-workspace" \
+  -v "$PWD/.vik/docker-workspace:/vik-workspace" \
   vik:local --check
 ```
 

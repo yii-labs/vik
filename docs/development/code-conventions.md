@@ -9,6 +9,8 @@
 - Keep validation close to config parsing when invalid input should fail at
   startup.
 - Use small helpers when they remove repeated invariants.
+- Prefer receiver methods in `impl` blocks over free functions whose first
+  argument is the receiver.
 
 ## Orchestration
 
@@ -31,7 +33,7 @@
 ## Docs
 
 - Use kebab-case file names.
-- Keep top-level usage topics as standalone files under `docs/`.
+- Keep top-level usage topics as standalone files under `docs/usage/`.
 - Keep development docs under `docs/development/`.
 - Include why, where, and exact command steps for connection docs.
 - Do not commit non-English text.

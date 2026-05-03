@@ -150,8 +150,9 @@ Steps:
    gh auth status --active --hostname github.com
    ```
 
-3. If using a token, create it at the personal access token link above. Prefer
-   fine-grained access to only `yii-labs/vik`. Grant at least:
+3. If using token auth instead of browser auth, create a token at the personal
+   access token link above. Prefer fine-grained access to only `yii-labs/vik`.
+   Grant at least:
 
    - `metadata: read`
    - `contents: write`
@@ -159,16 +160,16 @@ Steps:
    - `issues: write`
    - `actions: read`
 
-4. Store the token in the environment as `GH_TOKEN` or `GITHUB_TOKEN`. Do not
-   commit it:
+4. Set Vik to use the token as `GH_TOKEN` or `GITHUB_TOKEN` in the shell,
+   service environment, or Docker environment. Do not commit the token.
+
+5. If using GitHub CLI credentials for Git operations, run:
 
    ```sh
-   test -n "${GH_TOKEN:-}${GITHUB_TOKEN:-}"
-   gh auth status --active --hostname github.com
    gh auth setup-git --hostname github.com
    ```
 
-5. The default `WORKFLOW.md` clone hook uses SSH:
+6. The default `WORKFLOW.md` clone hook uses SSH:
 
    ```sh
    git clone --depth 1 git@github.com:yii-labs/vik .
@@ -181,7 +182,7 @@ Steps:
    git ls-remote git@github.com:yii-labs/vik HEAD
    ```
 
-6. If token auth works but SSH auth is unavailable, change
+7. If token auth works but SSH auth is unavailable, change
    `hooks.after_create` in `WORKFLOW.md` to HTTPS before starting Vik:
 
    ```yaml
@@ -190,7 +191,7 @@ Steps:
        git clone --depth 1 https://github.com/yii-labs/vik .
    ```
 
-7. Stop with a GitHub auth blocker only after both CLI/browser and token paths
+8. Stop with a GitHub auth blocker only after both CLI/browser and token paths
    fail.
 
 ### Linear
@@ -205,64 +206,19 @@ Official links:
 
 Steps:
 
-1. Check whether a real key is already available:
-
-   ```sh
-   linear_key="${LINEAR_API_KEY:-}"
-   if [ -z "$linear_key" ] && [ -f .env ]; then
-     linear_key="$(sed -n 's/^LINEAR_API_KEY=//p' .env | tail -n 1)"
-   fi
-   case "$linear_key" in
-     lin_api_* ) : ;;
-     ""|lin_api_xxx ) echo "missing real Linear API key" >&2; exit 2 ;;
-     * ) echo "unexpected Linear API key format" >&2; exit 2 ;;
-   esac
-   unset linear_key
-   ```
-
-2. If no key exists and a browser is available, open the Linear API key settings
-   link above. Create a personal API key for this workspace.
-
-3. Paste the key into the current shell without echoing it:
-
-   ```sh
-   stty -echo
-   printf "Linear API key: " >&2
-   IFS= read -r LINEAR_API_KEY
-   stty echo
-   printf "\n" >&2
-   export LINEAR_API_KEY
-   ```
-
-4. Store the key in `.env` while preserving any future variables:
-
-   ```sh
-   test -f .env || cp .env.example .env
-   tmp="$(mktemp)"
-   grep -v '^LINEAR_API_KEY=' .env > "$tmp" || true
-   printf 'LINEAR_API_KEY=%s\n' "$LINEAR_API_KEY" >> "$tmp"
-   mv "$tmp" .env
-   chmod 600 .env
-   ```
-
-5. Verify the key against Linear without printing it:
-
-   ```sh
-   curl -fsS https://api.linear.app/graphql \
-     -H "Content-Type: application/json" \
-     -H "Authorization: ${LINEAR_API_KEY}" \
-     --data '{"query":"query { viewer { id name } }"}' \
-     | jq -e '.data.viewer.id'
-   ```
-
-6. Confirm the project slug in `WORKFLOW.md`. Use the slug from the Linear
+1. Open the Linear API key settings link above.
+2. Create a personal API key for the Linear workspace that contains the Vik
+   project.
+3. Set Vik to use the key as `LINEAR_API_KEY` in `.env`, the service
+   environment, or the Docker environment. Do not commit the key.
+4. Confirm the project slug in `WORKFLOW.md`. Use the slug from the Linear
    project URL or keep the repo default when running this Vik project:
 
    ```sh
    rg -n 'project_slug' WORKFLOW.md
    ```
 
-7. Stop with a Linear auth blocker if no personal API key can be created or
+5. Stop with a Linear auth blocker if no personal API key can be created or
    provided.
 
 ## 4. Run
