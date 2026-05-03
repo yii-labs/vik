@@ -13,28 +13,23 @@ Focus on:
 
 Do not flag style, naming, formatting, broad refactors, or optional improvements.
 
-Write a GitHub comment-ready Markdown response with one parser metadata block:
+Write a GitHub comment-ready Markdown response:
 
 - Start with `## Codex Review`.
 - If there are no blocking findings, write `No blocking findings found.`
 - For each finding, include severity, file path, line or function, impact, and a concrete fix.
-- When one or more findings map to changed lines, include exactly one
-  `codex-review-comments` JSON fence after all findings. Put every inline
-  comment in its `comments` array so the workflow can submit one pull request
-  review with all comments:
+- When a finding maps to a changed line, include this hidden block immediately
+  after the finding so the workflow can publish it as an inline review comment:
 
-  ```codex-review-comments
-  {
-    "comments": [
-      {
-        "path": "relative/path/from/repo/root.rs",
-        "line": 123,
-        "body": "Severity: high\nImpact: Short impact.\nFix: Concrete fix."
-      }
-    ]
-  }
+  ```text
+  <!-- codex-review-comment
+  path: relative/path/from/repo/root.rs
+  line: 123
+  body:
+  Severity: high
+  Impact: Short impact.
+  Fix: Concrete fix.
+  -->
   ```
 
-- For multi-line ranges, add `start_line` to the JSON comment. Do not include
-  JSON comments for unchanged lines.
 - Keep the response concise and actionable.
