@@ -82,6 +82,7 @@ impl ServiceTarget {
         port: Option<u16>,
         require_dispatch_config: bool,
     ) -> Result<Self, Box<dyn Error>> {
+        let explicit_workflow = workflow.is_some();
         let workflow_path = if require_dispatch_config {
             let loaded = load_effective_workflow(workflow)?;
             loaded.config.validate_for_dispatch()?;
@@ -89,7 +90,7 @@ impl ServiceTarget {
         } else {
             resolve_workflow_path(workflow)?
         };
-        let cwd = env::current_dir()?;
+        let cwd = service_cwd_for_workflow(&workflow_path, explicit_workflow)?;
         let service_dir = service_dir_for_workflow(&workflow_path);
         let name = service_name(&workflow_path);
         Ok(Self {
@@ -190,7 +191,7 @@ impl ServiceTarget {
             }
             RuntimeStatus::Stale => {
                 let pid = state.pid.unwrap_or_default();
-                if pid != 0 {
+                if pid != 0 && stale_service_group_cleanup_allowed(pid) {
                     terminate_stale_service_processes(pid)?;
                 }
                 state.status = StoredStatus::Stopped;
@@ -362,6 +363,16 @@ fn resolve_workflow_path(workflow: Option<PathBuf>) -> io::Result<PathBuf> {
     }
 }
 
+fn service_cwd_for_workflow(workflow_path: &Path, explicit_workflow: bool) -> io::Result<PathBuf> {
+    if explicit_workflow {
+        return Ok(workflow_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf());
+    }
+    env::current_dir()
+}
+
 fn load_dotenv_from_dir(dir: &Path) -> Result<(), Box<dyn Error>> {
     for ancestor in dir.ancestors() {
         let path = ancestor.join(".env");
@@ -406,6 +417,10 @@ fn classify_state(state: &ServiceState) -> RuntimeStatus {
         (StoredStatus::Running, Some(_)) => RuntimeStatus::Stale,
         _ => RuntimeStatus::Stopped,
     }
+}
+
+fn stale_service_group_cleanup_allowed(pid: u32) -> bool {
+    !process_alive(pid)
 }
 
 fn service_dir_for_workflow(workflow_path: &Path) -> PathBuf {
@@ -805,6 +820,17 @@ mod tests {
     }
 
     #[test]
+    fn explicit_workflow_target_uses_workflow_dir_as_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflow_path = dir.path().join("WORKFLOW.md");
+        write_workflow(&workflow_path, "work");
+
+        let target = ServiceTarget::load(Some(workflow_path), None, false).unwrap();
+
+        assert_eq!(target.cwd, fs::canonicalize(dir.path()).unwrap());
+    }
+
+    #[test]
     fn command_match_requires_workflow_path() {
         let workflow_path = PathBuf::from("/tmp/vik/WORKFLOW.md");
 
@@ -847,6 +873,11 @@ mod tests {
         };
 
         assert_eq!(classify_state(&state), RuntimeStatus::Stopped);
+    }
+
+    #[test]
+    fn stale_group_cleanup_skips_live_pid() {
+        assert!(!stale_service_group_cleanup_allowed(std::process::id()));
     }
 
     fn service_state_with_port(port: Option<u16>) -> ServiceState {
