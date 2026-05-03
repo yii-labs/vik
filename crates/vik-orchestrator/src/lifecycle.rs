@@ -56,9 +56,11 @@ where
             .workspace
             .root
             .join(sanitize_workspace_key(&issue.identifier));
+        let session_file_id = new_session_file_id(Utc::now());
         let request = AgentRunRequest {
             issue: issue.clone(),
             attempt,
+            session_file_id: session_file_id.clone(),
             workflow: loaded.definition,
             config: loaded.config,
         };
@@ -67,7 +69,6 @@ where
         let outcome_tx = self.outcome_tx.clone();
         let issue_id = issue.id.clone();
         let issue_identifier = issue.identifier.clone();
-        let session_file_id = new_session_file_id(Utc::now());
         let handle = tokio::spawn(async move {
             let outcome = worker.run(request, events).await;
             let _ = outcome_tx.send(outcome.clone());

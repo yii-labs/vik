@@ -13,6 +13,7 @@ pub(crate) fn agent_event(
     let message = summarize_message(&raw);
     AgentEvent {
         issue_id,
+        session_file_id: None,
         event: event.into(),
         timestamp: Utc::now(),
         codex_app_server_pid: session
