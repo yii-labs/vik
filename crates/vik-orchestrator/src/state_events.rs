@@ -78,21 +78,23 @@ impl OrchestratorState {
                 entry.turn_count = session.turn_count;
             }
         }
-        if let Some(rate_limits) = event.rate_limits {
-            self.codex_rate_limits = Some(rate_limits);
-        }
-        self.recent_events
-            .entry(event.issue_id.clone())
-            .or_default()
-            .push(RecentEvent {
-                at: event.timestamp,
-                event: event.event,
-                message: event.message,
-            });
-        if let Some(events) = self.recent_events.get_mut(&event.issue_id)
-            && events.len() > 50
-        {
-            events.drain(0..events.len() - 50);
+        if should_update_session_file_id {
+            if let Some(rate_limits) = event.rate_limits {
+                self.codex_rate_limits = Some(rate_limits);
+            }
+            self.recent_events
+                .entry(event.issue_id.clone())
+                .or_default()
+                .push(RecentEvent {
+                    at: event.timestamp,
+                    event: event.event,
+                    message: event.message,
+                });
+            if let Some(events) = self.recent_events.get_mut(&event.issue_id)
+                && events.len() > 50
+            {
+                events.drain(0..events.len() - 50);
+            }
         }
         log_entry
     }

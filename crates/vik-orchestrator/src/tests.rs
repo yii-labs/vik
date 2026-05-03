@@ -343,7 +343,7 @@ async fn queued_late_agent_event_keeps_origin_session_file_after_redispatch() {
         codex_app_server_pid: None,
         session: Some(vik_core::LiveSession::new("thread-old", "turn-1")),
         usage: None,
-        rate_limits: None,
+        rate_limits: Some(json!({ "reset_at": "later" })),
         message: Some("old tail event".into()),
         raw: json!({ "method": "item/completed" }),
     });
@@ -354,6 +354,8 @@ async fn queued_late_agent_event_keeps_origin_session_file_after_redispatch() {
         Some("20260503T000000Z-new")
     );
     assert!(state.running["A"].last_event.is_none());
+    assert!(!state.recent_events.contains_key("A"));
+    assert!(state.codex_rate_limits.is_none());
 }
 
 #[test]
