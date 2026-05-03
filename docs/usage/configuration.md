@@ -42,9 +42,23 @@ Fields:
 - `project_slug`: Linear project slug Vik polls.
 - `active_states`: states Vik may claim.
 - `terminal_states`: states that stop tracking and may trigger cleanup.
+- `filter`: optional delegable issue filter. Omitted filter values and empty
+  lists match all issues.
+  - `assignee`: Linear user IDs, names, display names, or email addresses.
+  - `tag`: Linear label names.
 
 `LINEAR_API_KEY` is loaded from `.env` before dispatch validation. Do not commit
 real keys.
+
+Limit delegation to issues assigned to specific users and tagged with specific
+Linear labels:
+
+```yaml
+tracker:
+  filter:
+    assignee: [user-a, user-b]
+    tag: [agent, codex]
+```
 
 ## Polling
 

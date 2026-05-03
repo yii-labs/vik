@@ -154,6 +154,7 @@ fn thread_start_payload_includes_configured_dynamic_tools() {
         project_slug: "VIK".to_string(),
         active_states: vec!["Todo".to_string()],
         terminal_states: vec!["Done".to_string()],
+        filter: Default::default(),
     });
     let payload = thread_start_params(
         Path::new("/tmp/workspace"),

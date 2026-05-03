@@ -7,8 +7,8 @@ use vik_core::WorkflowDefinition;
 
 use crate::WorkflowError;
 use crate::yaml::{
-    concurrency_map, expand_path_value, get_map, i64_value, json_value, resolve_exact_env,
-    string_value, string_vec, u32_value, u64_value, usize_value,
+    concurrency_map, expand_path_value, get_map, i64_value, json_value, nested_map,
+    resolve_exact_env, string_value, string_vec, u32_value, u64_value, usize_value,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -19,6 +19,16 @@ pub struct TrackerConfig {
     pub project_slug: String,
     pub active_states: Vec<String>,
     pub terminal_states: Vec<String>,
+    #[serde(default)]
+    pub filter: TrackerFilterConfig,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrackerFilterConfig {
+    #[serde(default)]
+    pub assignee: Vec<String>,
+    #[serde(default)]
+    pub tag: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -205,6 +215,11 @@ impl ServiceConfig {
                 "Done".to_string(),
             ]
         });
+        let tracker_filter_map = nested_map(tracker_map, "filter");
+        let filter = TrackerFilterConfig {
+            assignee: string_vec(tracker_filter_map, "assignee").unwrap_or_default(),
+            tag: string_vec(tracker_filter_map, "tag").unwrap_or_default(),
+        };
 
         let workspace_root = string_value(workspace_map, "root")
             .map(|raw| expand_path_value(&raw, &workflow_dir))
@@ -266,6 +281,7 @@ impl ServiceConfig {
                 project_slug,
                 active_states,
                 terminal_states,
+                filter,
             },
             polling: PollingConfig {
                 interval_ms: u64_value(polling_map, "interval_ms").unwrap_or(30_000),

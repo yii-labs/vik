@@ -11,6 +11,11 @@ pub(crate) fn get_map<'a>(root: &'a Mapping, key: &str) -> Option<&'a Mapping> {
         .and_then(YamlValue::as_mapping)
 }
 
+pub(crate) fn nested_map<'a>(map: Option<&'a Mapping>, key: &str) -> Option<&'a Mapping> {
+    map.and_then(|m| m.get(YamlValue::String(key.to_string())))
+        .and_then(YamlValue::as_mapping)
+}
+
 pub(crate) fn string_value(map: Option<&Mapping>, key: &str) -> Option<String> {
     map.and_then(|m| m.get(YamlValue::String(key.to_string())))
         .and_then(|v| match v {

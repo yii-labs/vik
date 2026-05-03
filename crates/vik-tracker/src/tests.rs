@@ -2,12 +2,61 @@ use serde_json::json;
 
 use crate::{
     ATTACHMENT_CREATE_MUTATION, CANDIDATE_QUERY, ISSUE_BY_IDENTIFIER_QUERY,
-    ISSUE_STATES_BY_IDS_QUERY, client::issue_has_attachment_url, normalize_issue,
+    ISSUE_STATES_BY_IDS_QUERY,
+    client::{LinearIssueFilterConfig, issue_has_attachment_url},
+    normalize_issue,
 };
 
 #[test]
 fn candidate_query_uses_project_slug_filter() {
     assert!(CANDIDATE_QUERY.contains("project: { slugId: { eq: $projectSlug } }"));
+}
+
+#[test]
+fn candidate_query_uses_delegable_filter_variables() {
+    assert!(CANDIDATE_QUERY.contains("$assigneeFilter: NullableUserFilter!"));
+    assert!(CANDIDATE_QUERY.contains("$labelFilter: IssueLabelCollectionFilter!"));
+    assert!(CANDIDATE_QUERY.contains("assignee: $assigneeFilter"));
+    assert!(CANDIDATE_QUERY.contains("labels: $labelFilter"));
+}
+
+#[test]
+fn empty_delegable_filters_are_noop_objects() {
+    let filter = LinearIssueFilterConfig::new(vec![], vec![]);
+
+    assert_eq!(filter.assignee_filter_value(), json!({}));
+    assert_eq!(filter.label_filter_value(), json!({}));
+}
+
+#[test]
+fn delegable_filters_match_assignees_and_tags_case_insensitively() {
+    let filter = LinearIssueFilterConfig::new(
+        vec![" user-a ".to_string()],
+        vec!["agent".to_string(), "codex".to_string()],
+    );
+
+    assert_eq!(
+        filter.assignee_filter_value(),
+        json!({
+            "or": [
+                { "id": { "eq": "user-a" } },
+                { "name": { "eqIgnoreCase": "user-a" } },
+                { "displayName": { "eqIgnoreCase": "user-a" } },
+                { "email": { "eqIgnoreCase": "user-a" } }
+            ]
+        })
+    );
+    assert_eq!(
+        filter.label_filter_value(),
+        json!({
+            "some": {
+                "or": [
+                    { "name": { "eqIgnoreCase": "agent" } },
+                    { "name": { "eqIgnoreCase": "codex" } }
+                ]
+            }
+        })
+    );
 }
 
 #[test]
