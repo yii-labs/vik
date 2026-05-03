@@ -204,7 +204,7 @@ Primary content:
   state is blocked by configuration or credentials.
 - Artifacts panel: workspace path, log file path, session JSONL path when known,
   Linear issue link, PR link when known.
-- Raw debug drawer: formatted JSON from `/api/v1/:issue_identifier`.
+- Raw debug drawer: formatted JSON from `/api/v1/{issue_identifier}`.
 
 Layout:
 
