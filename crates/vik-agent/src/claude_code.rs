@@ -17,6 +17,7 @@ use crate::event::{agent_event, truncate};
 use crate::process::ProcessCommand;
 
 const CONTINUATION_PROMPT: &str = "Continue working on this Linear issue. Check current issue state and proceed only if it is still active.";
+const HEARTBEAT_INTERVAL_SECS: u64 = 30;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ClaudeCodeClient {
@@ -112,6 +113,7 @@ async fn run_claude_code_turn(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    process.kill_on_drop(true);
     let mut child = process.spawn().map_err(|err| AgentError::ProcessSpawn {
         program: command.program().to_string(),
         reason: err.to_string(),
@@ -172,7 +174,8 @@ async fn run_claude_code_turn(
             let _ = child.kill().await;
             return Err(AgentError::TurnTimeout);
         };
-        match time::timeout(remaining, lines.next_line()).await {
+        let wait = remaining.min(heartbeat_interval());
+        match time::timeout(wait, lines.next_line()).await {
             Ok(Ok(Some(line))) => {
                 if line.trim().is_empty() {
                     continue;
@@ -197,22 +200,45 @@ async fn run_claude_code_turn(
             Ok(Ok(None)) => break,
             Ok(Err(err)) => return Err(AgentError::ResponseError(err.to_string())),
             Err(_) => {
-                let _ = child.kill().await;
-                return Err(AgentError::TurnTimeout);
+                if remaining <= heartbeat_interval() {
+                    let _ = child.kill().await;
+                    return Err(AgentError::TurnTimeout);
+                }
+                emit_lifecycle_event(
+                    on_event,
+                    turn.issue_id,
+                    Some(live.clone()),
+                    "claude_code_heartbeat",
+                    json!({ "turn_count": turn.turn_count }),
+                );
             }
         }
     }
 
-    let Some(remaining) = remaining_time(deadline) else {
-        let _ = child.kill().await;
-        return Err(AgentError::TurnTimeout);
-    };
-    let status = match time::timeout(remaining, child.wait()).await {
-        Ok(result) => result.map_err(|err| AgentError::ResponseError(err.to_string()))?,
-        Err(_) => {
+    let status = loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|err| AgentError::ResponseError(err.to_string()))?
+        {
+            break status;
+        }
+        let Some(remaining) = remaining_time(deadline) else {
+            let _ = child.kill().await;
+            return Err(AgentError::TurnTimeout);
+        };
+        let wait = remaining.min(heartbeat_interval());
+        time::sleep(wait).await;
+        if remaining <= heartbeat_interval() {
             let _ = child.kill().await;
             return Err(AgentError::TurnTimeout);
         }
+        emit_lifecycle_event(
+            on_event,
+            turn.issue_id,
+            Some(live.clone()),
+            "claude_code_heartbeat",
+            json!({ "turn_count": turn.turn_count }),
+        );
     };
     if !status.success() {
         return Err(AgentError::ProcessExit {
@@ -377,6 +403,10 @@ fn split_windows_command_line(input: &str) -> Vec<String> {
 fn remaining_time(deadline: time::Instant) -> Option<Duration> {
     let now = time::Instant::now();
     (now < deadline).then_some(deadline - now)
+}
+
+fn heartbeat_interval() -> Duration {
+    Duration::from_secs(HEARTBEAT_INTERVAL_SECS)
 }
 
 fn emit_lifecycle_event(
