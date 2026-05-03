@@ -30,8 +30,9 @@ description:
 3. If the working tree has uncommitted changes, commit with the `commit` skill
    and push with the `push` skill before proceeding.
 4. Check mergeability and conflicts against main.
-5. If conflicts exist, use the `pull` skill to fetch/merge `origin/main` and
-   resolve conflicts, then use the `push` skill to publish the updated branch.
+5. If conflicts exist, use the `pull` skill to rebase onto latest `origin/main`
+   and resolve conflicts, then use the `push` skill to publish the updated
+   branch.
 6. Ensure Codex review comments (if present) are acknowledged and any required
    fixes are handled before merging.
 7. Watch checks until complete.
@@ -40,7 +41,7 @@ description:
 9. When all checks are green and review feedback is addressed, squash-merge and
    delete the branch using the PR title/body for the merge subject/body.
 10. **Context guard:** Before implementing review feedback, confirm it does not
-    conflict with the user’s stated intent or task context. If it conflicts,
+    conflict with the user's stated intent or task context. If it conflicts,
     respond inline with a justification and ask the user before changing code.
 11. **Pushback template:** When disagreeing, reply inline with: acknowledge +
     rationale + offer alternative.
@@ -68,14 +69,14 @@ pr_body=$(gh pr view --json body -q .body)
 mergeable=$(gh pr view --json mergeable -q .mergeable)
 
 if [ "$mergeable" = "CONFLICTING" ]; then
-  # Run the `pull` skill to handle fetch + merge + conflict resolution.
+  # Run the `pull` skill to handle fetch + rebase + conflict resolution.
   # Then run the `push` skill to publish the updated branch.
 fi
 
 # Preferred: use the Async Watch Helper below. The manual loop is a fallback
 # when Python cannot run or the helper script is unavailable.
 # Wait for review feedback: Codex reviews arrive as issue comments that start
-# with "## Codex Review — <persona>". Treat them like reviewer feedback: reply
+# with "## Codex Review - <persona>". Treat them like reviewer feedback: reply
 # with a `[codex]` issue comment acknowledging the findings and whether you're
 # addressing or deferring them.
 while true; do
@@ -121,26 +122,27 @@ Exit codes:
 - Use judgment to identify flaky failures. If a failure is a flake (e.g., a
   timeout on only one platform), you may proceed without fixing it.
 - If CI pushes an auto-fix commit (authored by GitHub Actions), it does not
-  trigger a fresh CI run. Detect the updated PR head, pull locally, merge
+  trigger a fresh CI run. Detect the updated PR head, pull locally, rebase onto
   `origin/main` if needed, add a real author commit, and force-push to retrigger
   CI, then restart the checks loop.
-- If all jobs fail with corrupted pnpm lockfile errors on the merge commit, the
-  remediation is to fetch latest `origin/main`, merge, force-push, and rerun CI.
+- If all jobs fail with corrupted pnpm lockfile errors on the GitHub test merge
+  ref, the remediation is to fetch latest `origin/main`, rebase, force-push,
+  and rerun CI.
 - If mergeability is `UNKNOWN`, wait and re-check.
 - Do not merge while review comments (human or Codex review) are outstanding.
 - Codex review jobs retry on failure and are non-blocking; use the presence of
-  `## Codex Review — <persona>` issue comments (not job status) as the signal
+  `## Codex Review - <persona>` issue comments (not job status) as the signal
   that review feedback is available.
 - Do not enable auto-merge; this repo has no required checks so auto-merge can
   skip tests.
-- If the remote PR branch advanced due to your own prior force-push or merge,
-  avoid redundant merges; re-run the formatter locally if needed and
+- If the remote PR branch advanced due to your own prior force-push, avoid
+  redundant sync work; re-run the formatter locally if needed and
   `git push --force-with-lease`.
 
 ## Review Handling
 
 - Codex reviews now arrive as issue comments posted by GitHub Actions. They
-  start with `## Codex Review — <persona>` and include the reviewer’s
+  start with `## Codex Review - <persona>` and include the reviewer's
   methodology + guardrails used. Treat these as feedback that must be
   acknowledged before merge.
 - Human review comments are blocking and must be addressed (responded to and
