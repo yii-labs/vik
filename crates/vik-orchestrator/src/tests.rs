@@ -166,7 +166,7 @@ async fn lifecycle_event_without_session_updates_running_status() {
 
     state.apply_agent_event(AgentEvent {
         issue_id: "A".into(),
-        session_file_id: None,
+        session_file_id: "20260503T000000Z-bbb".into(),
         event: "codex_thread_starting".into(),
         timestamp: Utc::now(),
         codex_app_server_pid: None,
@@ -214,7 +214,7 @@ async fn codex_session_log_persists_for_reopen() {
 
     let entry = state.apply_agent_event(AgentEvent {
         issue_id: "A".into(),
-        session_file_id: None,
+        session_file_id: "20260503T000000Z-ccc".into(),
         event: "item/completed".into(),
         timestamp: Utc::now(),
         codex_app_server_pid: Some("123".into()),
@@ -288,7 +288,7 @@ async fn late_agent_event_uses_known_issue_identifier_after_worker_exit() {
 
     let entry = state.apply_agent_event(AgentEvent {
         issue_id: "A".into(),
-        session_file_id: None,
+        session_file_id: "20260503T000000Z-ddd".into(),
         event: "item/completed".into(),
         timestamp: Utc::now(),
         codex_app_server_pid: None,
@@ -304,12 +304,15 @@ async fn late_agent_event_uses_known_issue_identifier_after_worker_exit() {
 }
 
 #[tokio::test]
-async fn queued_agent_event_keeps_originating_session_file_id_after_redispatch() {
+async fn queued_late_agent_event_keeps_origin_session_file_after_redispatch() {
     let config = config();
     let mut state = OrchestratorState::new(&config);
     let mut current_issue = issue("A", Some(1), 1, "Todo");
     current_issue.identifier = "VIK-11".into();
     let handle = tokio::spawn(async { WorkerOutcome::normal(&issue("A", Some(1), 1, "Todo")) });
+    state
+        .session_file_ids
+        .insert("A".into(), "20260503T000000Z-new".into());
     state.running.insert(
         "A".into(),
         RunningEntry {
@@ -318,7 +321,7 @@ async fn queued_agent_event_keeps_originating_session_file_id_after_redispatch()
             retry_attempt: Some(1),
             started_at: Utc::now(),
             workspace_path: None,
-            session_file_id: "20260503T000100Z-new".into(),
+            session_file_id: "20260503T000000Z-new".into(),
             session_id: None,
             turn_count: 0,
             last_event: None,
@@ -331,28 +334,24 @@ async fn queued_agent_event_keeps_originating_session_file_id_after_redispatch()
             abort: handle,
         },
     );
-    state
-        .session_file_ids
-        .insert("A".into(), "20260503T000100Z-new".into());
 
     let entry = state.apply_agent_event(AgentEvent {
         issue_id: "A".into(),
-        session_file_id: Some("20260503T000000Z-old".into()),
+        session_file_id: "20260503T000000Z-old".into(),
         event: "item/completed".into(),
         timestamp: Utc::now(),
         codex_app_server_pid: None,
-        session: Some(vik_core::LiveSession::new("thread-1", "turn-1")),
+        session: Some(vik_core::LiveSession::new("thread-old", "turn-1")),
         usage: None,
         rate_limits: None,
-        message: Some("old queued event".into()),
+        message: Some("old tail event".into()),
         raw: json!({ "method": "item/completed" }),
     });
 
     assert_eq!(entry.session_file_id, "20260503T000000Z-old");
     assert_eq!(
-        state.session_file_ids["A"],
-        "20260503T000100Z-new",
-        "stale events must not replace the active run file id"
+        state.session_file_ids.get("A").map(String::as_str),
+        Some("20260503T000000Z-new")
     );
     assert!(state.running["A"].last_event.is_none());
 }
@@ -362,7 +361,7 @@ fn session_log_read_skips_malformed_lines_and_continues_sequence() {
     let dir = tempfile::tempdir().unwrap();
     let event = AgentEvent {
         issue_id: "A".into(),
-        session_file_id: None,
+        session_file_id: "20260503T000000Z-eee".into(),
         event: "turn/completed".into(),
         timestamp: Utc::now(),
         codex_app_server_pid: None,
@@ -374,6 +373,44 @@ fn session_log_read_skips_malformed_lines_and_continues_sequence() {
     };
     let mut first = vik_core::CodexSessionLogEntry::from_agent_event("VIK-11", &event)
         .with_session_file_id("20260503T000000Z-eee");
+    first.message = Some("first".into());
+    let path = append_session_log(dir.path(), &first).unwrap();
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    writeln!(file, "{{not json").unwrap();
+    drop(file);
+
+    let mut second = first.clone();
+    second.message = Some("second".into());
+    append_session_log(dir.path(), &second).unwrap();
+
+    let reloaded = read_session_logs(dir.path(), "VIK-11", 50).unwrap();
+    assert_eq!(reloaded.len(), 2);
+    assert_eq!(reloaded[0].sequence, 1);
+    assert_eq!(reloaded[0].message.as_deref(), Some("first"));
+    assert_eq!(reloaded[1].sequence, 2);
+    assert_eq!(reloaded[1].message.as_deref(), Some("second"));
+}
+
+#[test]
+fn session_log_append_starts_new_line_after_torn_jsonl_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let event = AgentEvent {
+        issue_id: "A".into(),
+        session_file_id: "20260503T000000Z-ggg".into(),
+        event: "turn/completed".into(),
+        timestamp: Utc::now(),
+        codex_app_server_pid: None,
+        session: Some(vik_core::LiveSession::new("thread-1", "turn-1")),
+        usage: None,
+        rate_limits: None,
+        message: Some("first".into()),
+        raw: json!({ "method": "turn/completed" }),
+    };
+    let mut first = vik_core::CodexSessionLogEntry::from_agent_event("VIK-11", &event)
+        .with_session_file_id("20260503T000000Z-ggg");
     first.message = Some("first".into());
     let path = append_session_log(dir.path(), &first).unwrap();
     let mut file = std::fs::OpenOptions::new()
@@ -400,7 +437,7 @@ fn session_log_read_combines_separate_issue_context_files_in_order() {
     let dir = tempfile::tempdir().unwrap();
     let first_event = AgentEvent {
         issue_id: "A".into(),
-        session_file_id: None,
+        session_file_id: "20260503T010000Z-aaa".into(),
         event: "turn/started".into(),
         timestamp: Utc.with_ymd_and_hms(2026, 5, 3, 1, 0, 0).unwrap(),
         codex_app_server_pid: None,
@@ -412,7 +449,7 @@ fn session_log_read_combines_separate_issue_context_files_in_order() {
     };
     let second_event = AgentEvent {
         issue_id: "A".into(),
-        session_file_id: None,
+        session_file_id: "20260503T020000Z-bbb".into(),
         event: "turn/started".into(),
         timestamp: Utc.with_ymd_and_hms(2026, 5, 3, 2, 0, 0).unwrap(),
         codex_app_server_pid: None,
@@ -446,7 +483,7 @@ fn session_log_read_combines_separate_issue_context_files_in_order() {
 fn issue_debug_can_be_rebuilt_from_persisted_session_logs() {
     let event = AgentEvent {
         issue_id: "A".into(),
-        session_file_id: None,
+        session_file_id: "20260503T000000Z-fff".into(),
         event: "turn/completed".into(),
         timestamp: Utc::now(),
         codex_app_server_pid: None,

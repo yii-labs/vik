@@ -146,6 +146,7 @@ impl JsonlRpcProcess {
         turn_id: &str,
         live: &mut LiveSession,
         issue_id: &str,
+        session_file_id: &str,
         on_event: &mut impl FnMut(AgentEvent),
     ) -> Result<(), AgentError> {
         let deadline = time::Instant::now() + self.turn_timeout;
@@ -174,6 +175,7 @@ impl JsonlRpcProcess {
             }
             on_event(agent_event(
                 issue_id.to_string(),
+                session_file_id.to_string(),
                 method,
                 Some(live.clone()),
                 extract_usage(method, &message),

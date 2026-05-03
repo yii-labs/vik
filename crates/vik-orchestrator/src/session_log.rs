@@ -46,7 +46,7 @@ pub(crate) fn append_session_log(
         .read(true)
         .append(true)
         .open(&path)?;
-    finish_torn_jsonl_line(&mut file)?;
+    ensure_trailing_newline(&mut file)?;
     serde_json::to_writer(&mut file, &entry).map_err(io::Error::other)?;
     file.write_all(b"\n")?;
     file.flush()?;
@@ -146,14 +146,14 @@ fn next_sequence(path: &Path) -> io::Result<u64> {
     Ok(last_sequence(path)?.unwrap_or_default() + 1)
 }
 
-fn finish_torn_jsonl_line(file: &mut File) -> io::Result<()> {
+fn ensure_trailing_newline(file: &mut File) -> io::Result<()> {
     if file.metadata()?.len() == 0 {
         return Ok(());
     }
     file.seek(SeekFrom::End(-1))?;
-    let mut last = [0_u8; 1];
-    file.read_exact(&mut last)?;
-    if last[0] != b'\n' {
+    let mut last_byte = [0_u8; 1];
+    file.read_exact(&mut last_byte)?;
+    if last_byte[0] != b'\n' {
         file.write_all(b"\n")?;
     }
     Ok(())

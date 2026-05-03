@@ -17,17 +17,23 @@ impl OrchestratorState {
             self.issue_identifiers
                 .insert(event.issue_id.clone(), issue_identifier.clone());
         }
-        let event_session_file_id = event.session_file_id.clone();
-        let running_session_file_id = self
-            .running
-            .get(&event.issue_id)
-            .map(|entry| entry.session_file_id.clone());
-        let session_file_id = event_session_file_id
-            .clone()
-            .or_else(|| running_session_file_id.clone())
+        let session_file_id = (!event.session_file_id.trim().is_empty())
+            .then(|| event.session_file_id.clone())
+            .or_else(|| {
+                self.running
+                    .get(&event.issue_id)
+                    .map(|entry| entry.session_file_id.clone())
+            })
             .or_else(|| self.session_file_ids.get(&event.issue_id).cloned())
             .unwrap_or_else(|| new_session_file_id(event.timestamp));
-        if event_session_file_id.is_none() || running_session_file_id.is_none() {
+        let event_matches_running = self
+            .running
+            .get(&event.issue_id)
+            .map(|entry| entry.session_file_id == session_file_id)
+            .unwrap_or(false);
+        let should_update_session_file_id =
+            event_matches_running || !self.running.contains_key(&event.issue_id);
+        if should_update_session_file_id {
             self.session_file_ids
                 .insert(event.issue_id.clone(), session_file_id.clone());
         }
@@ -45,13 +51,7 @@ impl OrchestratorState {
         );
         let log_entry = CodexSessionLogEntry::from_agent_event(issue_identifier, &event)
             .with_session_file_id(session_file_id.clone());
-        let event_belongs_to_running = event_session_file_id
-            .as_deref()
-            .zip(running_session_file_id.as_deref())
-            .is_none_or(|(event_id, running_id)| event_id == running_id);
-        if event_belongs_to_running
-            && let Some(entry) = self.running.get_mut(&event.issue_id)
-        {
+        if event_matches_running && let Some(entry) = self.running.get_mut(&event.issue_id) {
             entry.last_event = Some(event.event.clone());
             entry.last_message = event.message.clone();
             entry.last_event_at = Some(event.timestamp);

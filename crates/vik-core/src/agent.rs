@@ -107,7 +107,7 @@ pub struct RetryEntry {
 pub struct AgentEvent {
     pub issue_id: String,
     #[serde(default)]
-    pub session_file_id: Option<String>,
+    pub session_file_id: String,
     pub event: String,
     pub timestamp: DateTime<Utc>,
     pub codex_app_server_pid: Option<String>,
@@ -152,7 +152,7 @@ impl CodexSessionLogEntry {
         };
         Self {
             sequence: 0,
-            session_file_id: event.session_file_id.clone().unwrap_or_default(),
+            session_file_id: String::new(),
             issue_id: event.issue_id.clone(),
             issue_identifier,
             source: "codex_app_server".to_string(),
@@ -235,8 +235,8 @@ impl WorkerOutcome {
 #[derive(Debug, Clone)]
 pub struct AgentRunRequest<C> {
     pub issue: Issue,
-    pub attempt: Option<u32>,
     pub session_file_id: String,
+    pub attempt: Option<u32>,
     pub workflow: WorkflowDefinition,
     pub config: C,
 }

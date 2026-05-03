@@ -59,6 +59,7 @@ where
         let session_file_id = new_session_file_id(Utc::now());
         let request = AgentRunRequest {
             issue: issue.clone(),
+            session_file_id: session_file_id.clone(),
             attempt,
             session_file_id: session_file_id.clone(),
             workflow: loaded.definition,
