@@ -40,6 +40,21 @@ Enable the optional HTTP status server:
 cargo run -p vik-cli -- ./WORKFLOW.md --port 3000
 ```
 
+Run Vik as a detached local service:
+
+```sh
+cargo run -p vik-cli -- service install --port 3000
+cargo run -p vik-cli -- service status
+cargo run -p vik-cli -- service logs --lines 100
+cargo run -p vik-cli -- service restart
+cargo run -p vik-cli -- service uninstall
+```
+
+The service commands default to `./WORKFLOW.md` in the current working directory when no workflow
+path is provided. Pass a workflow path when managing a workflow from another directory or when the
+workflow file is not named `WORKFLOW.md`. Service state and detached stdout/stderr logs live under
+`<workflow-directory>/.vik/service`.
+
 Daemon logs are JSON lines on stdout and in a daily file under `logging.dir`. If
 `logging.dir` is omitted, Vik writes to `<workspace.root>/.vik/logs/vik.log.<date>`.
 
