@@ -27,10 +27,10 @@ cp .env.example .env
 Replace `LINEAR_API_KEY=lin_api_xxx` with a real key. Do not commit `.env`.
 
 For config-only validation, a placeholder environment value is enough because
-`--check` validates config shape and does not call Linear:
+`vik check` validates config shape and does not call Linear:
 
 ```sh
-LINEAR_API_KEY=ci-placeholder cargo run --locked -p vik-cli -- ./WORKFLOW.md --check
+LINEAR_API_KEY=ci-placeholder cargo run --locked -p vik-cli -- check ./WORKFLOW.md
 ```
 
 ## Local Smoke Run
@@ -47,7 +47,7 @@ perl -0pi -e "s/project_slug: \"[^\"]+\"/project_slug: \"$VIK_LINEAR_PROJECT_SLU
 perl -0pi -e "s|root: .*|root: ~/code/vik-workspaces-local|" \
   .tests/WORKFLOW.local.md
 LINEAR_API_KEY=ci-placeholder cargo run --locked -p vik-cli -- \
-  .tests/WORKFLOW.local.md --check
+  check .tests/WORKFLOW.local.md
 cargo run --locked -p vik-cli -- .tests/WORKFLOW.local.md --port 3000
 ```
 

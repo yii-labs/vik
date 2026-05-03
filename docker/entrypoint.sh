@@ -21,11 +21,21 @@ elif [[ "$1" =~ ^(--help|-h|--version|-V)$ ]]; then
 elif [[ "$1" == -* ]]; then
     set -- vik "$VIK_WORKFLOW_PATH" "$@"
     uses_default_workflow=1
+elif [[ "$1" == "check" ]]; then
+    if [[ $# -eq 1 ]]; then
+        set -- vik check "$VIK_WORKFLOW_PATH"
+        uses_default_workflow=1
+    else
+        set -- vik "$@"
+    fi
 elif [[ "$1" == "vik" && $# -eq 1 ]]; then
     set -- vik "$VIK_WORKFLOW_PATH"
     uses_default_workflow=1
 elif [[ "$1" == "vik" && "${2:-}" =~ ^(--help|-h|--version|-V)$ ]]; then
     :
+elif [[ "$1" == "vik" && "${2:-}" == "check" && $# -eq 2 ]]; then
+    set -- vik check "$VIK_WORKFLOW_PATH"
+    uses_default_workflow=1
 elif [[ "$1" == "vik" && "${2:-}" == -* ]]; then
     shift
     set -- vik "$VIK_WORKFLOW_PATH" "$@"

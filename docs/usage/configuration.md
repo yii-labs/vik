@@ -28,7 +28,7 @@ You are working on {{ issue.identifier }}.
 Validate:
 
 ```sh
-vik ./WORKFLOW.md --check
+vik check ./WORKFLOW.md
 ```
 
 ## Tracker

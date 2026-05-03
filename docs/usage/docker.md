@@ -41,7 +41,7 @@ docker run --rm \
   --env GH_TOKEN \
   --env OPENAI_API_KEY \
   -v "$PWD:/vik-workspace" \
-  vik:local --check
+  vik:local vik check
 ```
 
 ## Run Daemon
@@ -88,7 +88,7 @@ docker run --rm \
   --env LINEAR_API_KEY \
   --env OPENAI_API_KEY \
   -v "$PWD:/vik-workspace" \
-  vik:local --check
+  vik:local vik check
 ```
 
 If `WORKFLOW.md` uses an SSH clone hook, also mount SSH credentials or change
@@ -111,7 +111,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   --env GH_TOKEN \
   --env OPENAI_API_KEY \
   -v "$PWD:/vik-workspace" \
-  vik:local --check
+  vik:local vik check
 ```
 
 `/home/vik`, `CODEX_HOME`, `GH_CONFIG_DIR`, and `/vik-workspace` are writable in
