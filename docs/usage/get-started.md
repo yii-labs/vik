@@ -57,7 +57,7 @@ workspaces, how to clone the repo, and how to launch Codex.
 Validate config parsing after connections are configured:
 
 ```sh
-vik ./WORKFLOW.md --check
+vik check ./WORKFLOW.md
 ```
 
 Start the daemon:
@@ -226,7 +226,7 @@ Steps:
 1. Validate workflow config:
 
    ```sh
-   vik ./WORKFLOW.md --check
+   vik check ./WORKFLOW.md
    ```
 
 2. Start Vik:

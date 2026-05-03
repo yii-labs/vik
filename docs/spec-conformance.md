@@ -33,7 +33,7 @@ Not implemented:
 Run with real Linear and Codex credentials before production use:
 
 ```sh
-cargo run -p vik-cli -- ./WORKFLOW.md --check
+cargo run -p vik-cli -- check ./WORKFLOW.md
 cargo test --workspace
 ```
 

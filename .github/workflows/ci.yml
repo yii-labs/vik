@@ -26,7 +26,7 @@ jobs:
       - name: Validate Vik workflow config
         env:
           LINEAR_API_KEY: ci-placeholder
-        run: cargo run --locked -p vik-cli -- ./WORKFLOW.md --check
+        run: cargo run --locked -p vik-cli -- check ./WORKFLOW.md
 
   rust:
     name: Rust (${{ matrix.os }})

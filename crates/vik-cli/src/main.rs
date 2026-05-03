@@ -3,8 +3,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{fs, io};
 
+mod check;
 mod service;
 
+#[cfg(test)]
+use clap::CommandFactory;
 use clap::{Parser, Subcommand};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
@@ -35,14 +38,12 @@ struct Args {
     /// HTTP status server bind address. Defaults to 127.0.0.1.
     #[arg(long, alias = "host", value_name = "ADDR")]
     bind_address: Option<IpAddr>,
-
-    /// Validate workflow and exit.
-    #[arg(long)]
-    check: bool,
 }
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Validate workflow and exit.
+    Check(check::CheckArgs),
     /// Manage Vik as a detached local service.
     Service(service::ServiceArgs),
 }
@@ -59,27 +60,26 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     if let Some(command) = args.command {
         match command {
+            Command::Check(args) => {
+                load_dotenv()?;
+                return check::run(args.workflow);
+            }
             Command::Service(args) => return service::run(args).await,
         }
     }
 
     load_dotenv()?;
-    run_daemon(args.workflow, args.port, args.bind_address, args.check).await
+    run_daemon(args.workflow, args.port, args.bind_address).await
 }
 
 async fn run_daemon(
     workflow: Option<PathBuf>,
     port: Option<u16>,
     bind_address: Option<IpAddr>,
-    check: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let reloader = WorkflowReloader::start(workflow)?;
     let loaded = reloader.current().clone();
     loaded.config.validate_for_dispatch()?;
-    if check {
-        println!("workflow valid: {}", loaded.definition.path.display());
-        return Ok(());
-    }
 
     let log_dir = loaded.config.logging.dir.clone();
     let _log_guard = init_logging(&log_dir)?;
@@ -223,6 +223,46 @@ mod tests {
         let err = load_dotenv_path(&env_path).unwrap_err().to_string();
 
         assert!(err.contains("failed to load"));
+    }
+
+    #[test]
+    fn check_subcommand_accepts_workflow_path() {
+        let args = Args::try_parse_from(["vik", "check", "./custom.md"]).unwrap();
+
+        match args.command {
+            Some(Command::Check(check_args)) => {
+                assert_eq!(check_args.workflow, Some(PathBuf::from("./custom.md")));
+            }
+            other => panic!("expected check subcommand, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn check_subcommand_allows_default_workflow_path() {
+        let args = Args::try_parse_from(["vik", "check"]).unwrap();
+
+        match args.command {
+            Some(Command::Check(check_args)) => assert_eq!(check_args.workflow, None),
+            other => panic!("expected check subcommand, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn legacy_check_flag_is_rejected() {
+        let err = Args::try_parse_from(["vik", "./WORKFLOW.md", "--check"])
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("unexpected argument '--check'"));
+    }
+
+    #[test]
+    fn root_help_shows_check_command_not_legacy_flag() {
+        let help = Args::command().render_help().to_string();
+
+        assert!(help.contains("check"));
+        assert!(help.contains("Validate workflow and exit"));
+        assert!(!help.contains("--check"));
     }
 
     #[test]
