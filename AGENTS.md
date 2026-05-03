@@ -14,11 +14,11 @@ Read the relevant docs before changing this repo:
 
 Usage and operator docs:
 
-- [Get Started](docs/get-started.md)
-- [Docker](docs/docker.md)
-- [Service Daemon](docs/service-daemon.md)
-- [Configuration](docs/configuration.md)
-- [Observation](docs/observation.md)
+- [Get Started](docs/usage/get-started.md)
+- [Docker](docs/usage/docker.md)
+- [Service Daemon](docs/usage/service-daemon.md)
+- [Configuration](docs/usage/configuration.md)
+- [Observation](docs/usage/observation.md)
 - [Specification Conformance](docs/spec-conformance.md)
 
 ## Agent Workflow

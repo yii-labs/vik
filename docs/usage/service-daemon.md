@@ -9,19 +9,19 @@ unit.
 Run from the directory that contains `WORKFLOW.md`:
 
 ```sh
-cargo run --locked -p vik-cli -- service install --port 3000
+vik service install --port 3000
 ```
 
 Use an explicit workflow path when managing another workflow:
 
 ```sh
-cargo run --locked -p vik-cli -- service install /path/to/WORKFLOW.md --port 3000
+vik service install /path/to/WORKFLOW.md --port 3000
 ```
 
 ## Status
 
 ```sh
-cargo run --locked -p vik-cli -- service status
+vik service status
 ```
 
 Status values:
@@ -47,13 +47,13 @@ commands resolve the exact file path for the workflow.
 Read recent logs:
 
 ```sh
-cargo run --locked -p vik-cli -- service logs --lines 100
+vik service logs --lines 100
 ```
 
 Follow logs:
 
 ```sh
-cargo run --locked -p vik-cli -- service logs --follow
+vik service logs --follow
 ```
 
 Daemon JSON logs still use `logging.dir` from `WORKFLOW.md`.
@@ -61,14 +61,14 @@ Daemon JSON logs still use `logging.dir` from `WORKFLOW.md`.
 ## Restart And Stop
 
 ```sh
-cargo run --locked -p vik-cli -- service restart --port 3000
-cargo run --locked -p vik-cli -- service stop
+vik service restart --port 3000
+vik service stop
 ```
 
 Uninstall stops the process and removes service state:
 
 ```sh
-cargo run --locked -p vik-cli -- service uninstall
+vik service uninstall
 ```
 
 ## Environment

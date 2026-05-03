@@ -28,7 +28,7 @@ You are working on {{ issue.identifier }}.
 Validate:
 
 ```sh
-cargo run --locked -p vik-cli -- ./WORKFLOW.md --check
+vik ./WORKFLOW.md --check
 ```
 
 ## Tracker

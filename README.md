@@ -9,12 +9,12 @@ Vik is adapted from OpenAI's
 
 ## Usage
 
-- Start with [Get Started](docs/get-started.md).
-- Run with Docker through [Docker](docs/docker.md).
+- Start with [Get Started](docs/usage/get-started.md).
+- Run with Docker through [Docker](docs/usage/docker.md).
 - Run as a detached local process through
-  [Service Daemon](docs/service-daemon.md).
-- Tune workflow settings through [Configuration](docs/configuration.md).
-- Inspect runtime state through [Observation](docs/observation.md).
+  [Service Daemon](docs/usage/service-daemon.md).
+- Tune workflow settings through [Configuration](docs/usage/configuration.md).
+- Inspect runtime state through [Observation](docs/usage/observation.md).
 
 ## Development
 

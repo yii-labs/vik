@@ -7,13 +7,13 @@ Use these docs when changing Vik:
 - [Pull Requests](pull-requests.md)
 - [Code Conventions](code-conventions.md)
 
-Operator docs live one level up:
+Operator docs live under `docs/usage/`:
 
-- [Get Started](../get-started.md)
-- [Docker](../docker.md)
-- [Service Daemon](../service-daemon.md)
-- [Configuration](../configuration.md)
-- [Observation](../observation.md)
+- [Get Started](../usage/get-started.md)
+- [Docker](../usage/docker.md)
+- [Service Daemon](../usage/service-daemon.md)
+- [Configuration](../usage/configuration.md)
+- [Observation](../usage/observation.md)
 
 Development work should stay scoped to the active issue. Reproduce first,
 change second, validate before push.

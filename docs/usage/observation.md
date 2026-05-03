@@ -22,8 +22,8 @@ Useful commands:
 
 ```sh
 tail -f "$HOME/code/vik-workspaces/.vik/logs"/vik.log.*
-cargo run --locked -p vik-cli -- service logs --lines 100
-cargo run --locked -p vik-cli -- service logs --follow
+vik service logs --lines 100
+vik service logs --follow
 ```
 
 Adjust the first command when `workspace.root` or `logging.dir` differs from
@@ -34,13 +34,13 @@ the checked-in `WORKFLOW.md`.
 Start the daemon with HTTP observation:
 
 ```sh
-cargo run --locked -p vik-cli -- ./WORKFLOW.md --port 3000
+vik ./WORKFLOW.md --port 3000
 ```
 
 Bind to another interface when needed:
 
 ```sh
-cargo run --locked -p vik-cli -- ./WORKFLOW.md \
+vik ./WORKFLOW.md \
   --bind-address 0.0.0.0 \
   --port 3000
 ```

@@ -9,21 +9,21 @@ print, log, or commit secret values.
 Why: Vik creates one working copy per active Linear issue. The workspace root
 must be a directory where Vik may create, mutate, and remove issue directories.
 
-1. Clone the Vik repo and enter it:
+1. Start in the operator directory that contains `WORKFLOW.md`:
 
    ```sh
-   git clone git@github.com:yii-labs/vik.git
-   cd vik
+   test -f WORKFLOW.md
+   pwd
    ```
 
-2. Install required local tools:
+2. Confirm required runtime commands are available:
 
    ```sh
-   rustc --version
-   cargo --version
+   vik --help
    git --version
    gh --version
    codex --version
+   jq --version
    ```
 
 3. Create the issue workspace root used by `WORKFLOW.md`:
@@ -32,11 +32,10 @@ must be a directory where Vik may create, mutate, and remove issue directories.
    mkdir -p "$HOME/code/vik-workspaces"
    ```
 
-4. Confirm repo root:
+4. Confirm the current directory is a Git worktree before Vik starts creating
+   issue workspaces:
 
    ```sh
-   test -f Cargo.toml
-   test -f WORKFLOW.md
    git rev-parse --show-toplevel
    ```
 
@@ -58,19 +57,19 @@ workspaces, how to clone the repo, and how to launch Codex.
 Validate config parsing after connections are configured:
 
 ```sh
-cargo run --locked -p vik-cli -- ./WORKFLOW.md --check
+vik ./WORKFLOW.md --check
 ```
 
 Start the daemon:
 
 ```sh
-cargo run --locked -p vik-cli -- ./WORKFLOW.md
+vik ./WORKFLOW.md
 ```
 
 Start with the optional observation server:
 
 ```sh
-cargo run --locked -p vik-cli -- ./WORKFLOW.md --port 3000
+vik ./WORKFLOW.md --port 3000
 ```
 
 ## 3. Connections
@@ -271,13 +270,13 @@ Steps:
 1. Validate workflow config:
 
    ```sh
-   cargo run --locked -p vik-cli -- ./WORKFLOW.md --check
+   vik ./WORKFLOW.md --check
    ```
 
 2. Start Vik:
 
    ```sh
-   cargo run --locked -p vik-cli -- ./WORKFLOW.md --port 3000
+   vik ./WORKFLOW.md --port 3000
    ```
 
 3. Inspect state:
