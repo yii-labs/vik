@@ -63,13 +63,13 @@ vik check ./WORKFLOW.md
 Start the daemon:
 
 ```sh
-vik ./WORKFLOW.md
+vik start ./WORKFLOW.md
 ```
 
 Start with the optional observation server:
 
 ```sh
-vik ./WORKFLOW.md --port 3000
+vik start ./WORKFLOW.md --port 3000
 ```
 
 ## 3. Connections
@@ -232,7 +232,7 @@ Steps:
 2. Start Vik:
 
    ```sh
-   vik ./WORKFLOW.md --port 3000
+   vik start ./WORKFLOW.md --port 3000
    ```
 
 3. Inspect state:
