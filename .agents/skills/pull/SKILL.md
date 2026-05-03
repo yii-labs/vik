@@ -23,6 +23,12 @@ description:
 5. Sync the remote feature branch first:
    - If the branch already has a remote counterpart, run:
      - `git pull --ff-only origin $(git branch --show-current)`
+   - If fast-forward pull fails because the local branch and remote branch both
+     advanced, do not merge. Fetch and rebase onto the remote branch first:
+     - `git fetch origin $(git branch --show-current)`
+     - `git -c merge.conflictstyle=zdiff3 rebase origin/$(git branch --show-current)`
+   - If that remote-branch rebase rewrites local history, push later with
+     `--force-with-lease` after validation.
    - If the branch has no remote counterpart yet, skip this step.
    - This pulls remote branch updates made outside this workspace before the
      rebase.

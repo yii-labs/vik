@@ -24,7 +24,7 @@ description:
 ## Related Skills
 
 - `pull`: use this when push is rejected or sync is not clean (non-fast-forward,
-  merge conflict risk, or stale branch).
+  rebase conflict risk, or stale branch).
 
 ## Steps
 
@@ -46,7 +46,8 @@ description:
 5. Push branch to `origin` with upstream tracking if needed.
 6. If push is not clean/rejected:
    - If the failure is a non-fast-forward or sync problem, run the `pull`
-     skill to merge `origin/main`, resolve conflicts, and rerun validation.
+     skill to rebase onto latest `origin/main`, resolve conflicts, and rerun
+     validation.
    - Push again; use `--force-with-lease` only when history was rewritten.
    - If the failure is due to auth, permissions, or workflow restrictions on
      the configured remote, try safe GitHub fallback auth first. Prefer a
