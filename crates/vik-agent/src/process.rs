@@ -12,6 +12,7 @@ use vik_workflow::CodexConfig;
 
 use crate::error::AgentError;
 use crate::event::{agent_event, extract_rate_limits, extract_usage, summarize_message, truncate};
+use crate::session_log::SessionLog;
 use crate::tools::DynamicTools;
 
 pub(crate) struct JsonlRpcProcess {
@@ -22,6 +23,13 @@ pub(crate) struct JsonlRpcProcess {
     read_timeout: Duration,
     turn_timeout: Duration,
     tools: DynamicTools,
+    session_log: Option<SessionLog>,
+}
+
+pub(crate) struct TurnStartResponse {
+    pub(crate) turn_id: String,
+    pub(crate) response: Value,
+    pub(crate) pre_response_messages: Vec<Value>,
 }
 
 impl JsonlRpcProcess {
@@ -57,6 +65,7 @@ impl JsonlRpcProcess {
             read_timeout: Duration::from_millis(5_000),
             turn_timeout: Duration::from_millis(3_600_000),
             tools,
+            session_log: None,
         })
     }
 
@@ -107,14 +116,37 @@ impl JsonlRpcProcess {
         cwd: &Path,
         prompt: String,
         config: &CodexConfig,
-    ) -> Result<String, AgentError> {
+    ) -> Result<TurnStartResponse, AgentError> {
         let params = turn_start_params(thread_id, cwd, prompt, config);
-        let response = self.request("turn/start", params).await?;
-        response
-            .pointer("/turn/id")
+        let (response, pre_response_messages) = self
+            .request_message_collecting_unmatched("turn/start", params)
+            .await?;
+        let turn_id = response
+            .pointer("/result/turn/id")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
-            .ok_or_else(|| AgentError::ResponseError("missing turn.id".to_string()))
+            .ok_or_else(|| AgentError::ResponseError("missing turn.id".to_string()))?;
+        Ok(TurnStartResponse {
+            turn_id,
+            response,
+            pre_response_messages,
+        })
+    }
+
+    pub(crate) fn set_session_log(&mut self, session_log: Option<SessionLog>) {
+        self.session_log = session_log;
+    }
+
+    pub(crate) async fn append_current_session_message(&mut self, message: &Value) {
+        if let Some(log) = &mut self.session_log
+            && let Err(err) = log.append_message(message).await
+        {
+            tracing::warn!(
+                path=%log.path().display(),
+                error=%err,
+                "codex_session_log_append outcome=failed"
+            );
+        }
     }
 
     pub(crate) async fn request(
@@ -122,17 +154,46 @@ impl JsonlRpcProcess {
         method: &str,
         params: Value,
     ) -> Result<Value, AgentError> {
+        let response = self.request_message(method, params).await?;
+        Ok(response.get("result").cloned().unwrap_or(Value::Null))
+    }
+
+    async fn request_message(&mut self, method: &str, params: Value) -> Result<Value, AgentError> {
+        let (response, _) = self.request_message_inner(method, params, false).await?;
+        Ok(response)
+    }
+
+    async fn request_message_collecting_unmatched(
+        &mut self,
+        method: &str,
+        params: Value,
+    ) -> Result<(Value, Vec<Value>), AgentError> {
+        self.request_message_inner(method, params, true).await
+    }
+
+    async fn request_message_inner(
+        &mut self,
+        method: &str,
+        params: Value,
+        collect_unmatched: bool,
+    ) -> Result<(Value, Vec<Value>), AgentError> {
         let id = self.next_id;
         self.next_id += 1;
         let request = json!({ "id": id, "method": method, "params": params });
         self.write_message(&request).await?;
+        let mut unmatched_messages = Vec::new();
         loop {
             let message = self.read_message(self.read_timeout).await?;
             if message.get("id").and_then(Value::as_u64) == Some(id) {
                 if let Some(error) = message.get("error") {
                     return Err(AgentError::ResponseError(error.to_string()));
                 }
-                return Ok(message.get("result").cloned().unwrap_or(Value::Null));
+                return Ok((message, unmatched_messages));
+            }
+            if collect_unmatched {
+                unmatched_messages.push(message.clone());
+            } else {
+                self.append_current_session_message(&message).await;
             }
             if message.get("id").is_some() && message.get("method").is_some() {
                 self.respond_to_server_request(&message).await?;
@@ -156,6 +217,7 @@ impl JsonlRpcProcess {
             }
             let timeout = deadline - now;
             let message = self.read_message(timeout).await?;
+            self.append_current_session_message(&message).await;
             if message.get("id").is_some() && message.get("method").is_some() {
                 self.respond_to_server_request(&message).await?;
                 continue;

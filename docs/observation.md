@@ -73,15 +73,35 @@ turn count, last event, last message, workspace path, and token usage.
 
 ## Sessions
 
-Session observation is live only until VIK-11 lands. VIK-11 is required for
-persisted Codex app-server session logs.
+Persisted Codex app-server session logs require VIK-11. Builds that include
+VIK-11 append raw Codex app-server JSONL messages under:
 
-Before VIK-11 lands:
+```text
+<workspace.root>/.vik/sessions/<issue-identifier>-<codex-session-id>.jsonl
+```
 
-- Use `/api/v1/state` for live `session_id`, turn count, and last event.
-- Use `/api/v1/{issue_identifier}` for current issue debug state.
-- Use JSON logs for lifecycle events.
-- Do not rely on durable per-session history across process restarts.
+The issue identifier is the human-facing key such as `VIK-16`. Filename
+components are sanitized to ASCII letters, numbers, `.`, `_`, and `-`; other
+characters become `_`.
 
-After VIK-11 lands, update this section with the persisted session-log location,
-retention behavior, and lookup commands.
+Find logs for one issue:
+
+```sh
+find "$HOME/code/vik-workspaces/.vik/sessions" \
+  -type f \
+  -name 'VIK-16-*.jsonl' \
+  -print
+```
+
+Inspect one session:
+
+```sh
+jq . "$HOME/code/vik-workspaces/.vik/sessions/<file>.jsonl" | less
+```
+
+Session files contain raw Codex app-server messages for the session. They do
+not replace Vik daemon logs, HTTP snapshots, or Linear workpad notes.
+
+For builds before VIK-11, use `/api/v1/state`, `/api/v1/{issue_identifier}`,
+and JSON daemon logs only. Durable per-session JSONL files are unavailable in
+those builds.
