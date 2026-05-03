@@ -22,6 +22,10 @@ struct Args {
     #[arg(long)]
     port: Option<u16>,
 
+    /// HTTP status server bind address. Defaults to 127.0.0.1.
+    #[arg(long, alias = "host", value_name = "ADDR")]
+    bind_address: Option<IpAddr>,
+
     /// Validate workflow and exit.
     #[arg(long)]
     check: bool,
@@ -70,7 +74,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(port) = port {
         let orch_for_state = Arc::clone(&orchestrator);
         let orch_for_issue = Arc::clone(&orchestrator);
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+        let addr = http_addr(args.bind_address, port);
         let bound = serve(
             addr,
             HttpState {
@@ -133,6 +137,10 @@ fn init_logging(log_dir: &Path) -> Result<WorkerGuard, Box<dyn std::error::Error
     Ok(guard)
 }
 
+fn http_addr(host: Option<IpAddr>, port: u16) -> SocketAddr {
+    SocketAddr::new(host.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)), port)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -186,5 +194,21 @@ mod tests {
         let err = load_dotenv_path(&env_path).unwrap_err().to_string();
 
         assert!(err.contains("failed to load"));
+    }
+
+    #[test]
+    fn http_addr_defaults_to_localhost() {
+        assert_eq!(
+            http_addr(None, 3000),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3000)
+        );
+    }
+
+    #[test]
+    fn http_addr_uses_explicit_host() {
+        assert_eq!(
+            http_addr(Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED)), 3000),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 3000)
+        );
     }
 }
