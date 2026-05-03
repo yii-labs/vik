@@ -56,6 +56,83 @@ and detached stdout/stderr logs live under `<workflow-directory>/.vik/service`.
 Daemon logs are JSON lines on stdout and in a daily file under `logging.dir`. If
 `logging.dir` is omitted, Vik writes to `<workspace.root>/.vik/logs/vik.log.<date>`.
 
+## Docker
+
+Build the worker image:
+
+```sh
+docker build -t vik:local .
+```
+
+Run a config check with the workspace directory mounted:
+
+```sh
+docker run --rm \
+  --env LINEAR_API_KEY \
+  --env GH_TOKEN \
+  --env OPENAI_API_KEY \
+  -v "$PWD:/vik-workspace" \
+  vik:local --check
+```
+
+Run the daemon:
+
+```sh
+docker run --rm \
+  --env LINEAR_API_KEY \
+  --env GH_TOKEN \
+  --env OPENAI_API_KEY \
+  -v "$PWD:/vik-workspace" \
+  vik:local
+```
+
+The image includes `vik`, `gh`, `codex`, `git`, and `openssh-client`. The default command is
+`vik /vik-workspace/WORKFLOW.md`. The mounted directory must contain `WORKFLOW.md`. For the
+standard container layout, keep workflow state in that same mounted directory:
+
+```text
+/vik-workspace
+  .vik/
+  WORKFLOW.md
+  <issue-clone-1>/
+  <issue-clone-2>/
+```
+
+Set `workspace.root` to `.` or `/vik-workspace` in `WORKFLOW.md` so `.vik` state and issue clones
+stay under the mount. Set `VIK_WORKFLOW_PATH` when mounting the workflow file elsewhere. Pass Vik
+flags after the image name.
+
+To expose the optional HTTP status server from Docker, publish the port and bind the server to the
+container interface:
+
+```sh
+docker run --rm \
+  --env LINEAR_API_KEY \
+  --env GH_TOKEN \
+  --env OPENAI_API_KEY \
+  -p 3000:3000 \
+  -v "$PWD:/vik-workspace" \
+  vik:local --bind-address 0.0.0.0 --port 3000
+```
+
+The default bind address remains `127.0.0.1`; set `--bind-address 0.0.0.0` when publishing a Docker
+port from bridge networking.
+
+The runtime uses the base image `node` user, which has UID/GID 1000 for common Linux bind mounts.
+If the host workspace uses a different owner, pass a matching Docker `--user` value. The image keeps
+`/home/vik` writable so GitHub CLI and Codex config directories still work with that override.
+
+Pass environment variables explicitly with Docker `--env NAME` or `--env NAME=value`. Add every
+GitHub CLI or Codex variable the workflow needs, including any `GH_*`, `GITHUB_*`, `CODEX_*`,
+`OPENAI_*`, provider, proxy, or certificate variables. Docker then passes only those variables into
+the container without copying local config files. `gh` and `codex` inherit the container
+environment when Vik starts them. `LINEAR_API_KEY` must be passed this way unless the workflow file
+provides `tracker.api_key`.
+
+If workflow hooks use SSH remotes, pass SSH credentials separately or switch hooks to HTTPS with a
+GitHub token. The minimal Docker path above only mounts one workspace directory containing
+`WORKFLOW.md`; it does not copy local config files.
+
 ## Workflow Templates
 
 - `WORKFLOW.md` is the single default workflow. It keeps the upstream OpenAI Elixir workflow text
