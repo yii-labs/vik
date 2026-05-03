@@ -4,8 +4,8 @@ use chrono::{TimeZone, Utc};
 use serde_json::json;
 use vik_core::{AgentEvent, BlockerRef, Issue, TokenUsage, WorkerOutcome};
 use vik_workflow::{
-    AgentConfig, CodexConfig, HooksConfig, LoggingConfig, PollingConfig, ServiceConfig,
-    TrackerConfig, WorkspaceConfig,
+    AgentConfig, ClaudeCodeConfig, CodexConfig, CodingAgentKind, HooksConfig, LoggingConfig,
+    PollingConfig, ServiceConfig, TrackerConfig, WorkspaceConfig,
 };
 
 use crate::state_events::should_log_agent_event_to_service;
@@ -39,6 +39,7 @@ fn config() -> ServiceConfig {
             ..HooksConfig::default()
         },
         agent: AgentConfig {
+            default: CodingAgentKind::Codex,
             max_concurrent_agents: 2,
             max_turns: 20,
             max_retry_backoff_ms: 300_000,
@@ -50,6 +51,11 @@ fn config() -> ServiceConfig {
             read_timeout_ms: 5_000,
             stall_timeout_ms: 300_000,
             ..CodexConfig::default()
+        },
+        claude_code: ClaudeCodeConfig {
+            command: "claude -p --output-format stream-json --input-format text --verbose".into(),
+            turn_timeout_ms: 3_600_000,
+            ..ClaudeCodeConfig::default()
         },
         server: None,
     }

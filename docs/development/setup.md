@@ -5,7 +5,7 @@
 - Rust stable toolchain with `cargo`, `rustfmt`, and `clippy`.
 - Git.
 - GitHub CLI for PR work.
-- Codex CLI for local orchestration runs.
+- Codex CLI or Claude Code CLI for local orchestration runs.
 - Linear API key for real tracker runs.
 - Docker for image validation when touching Docker files.
 

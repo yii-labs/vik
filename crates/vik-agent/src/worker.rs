@@ -6,7 +6,7 @@ use vik_core::{AgentEvent, AgentRunRequest, AgentWorker, IssueTracker, WorkerOut
 use vik_workflow::{ServiceConfig, render_prompt};
 use vik_workspace::WorkspaceManager;
 
-use crate::client::{CodexAppServerClient, CodexIssueContext};
+use crate::adapter::{CodingAgentRun, adapter_for};
 use crate::error::AgentError;
 use crate::tools::DynamicTools;
 
@@ -62,27 +62,31 @@ where
         manager.before_run(&workspace.path).await?;
         let prompt = render_prompt(&request.workflow, &request.issue, request.attempt)?;
         let tools = DynamicTools::from_tracker_config(&request.config.tracker);
-        let client =
-            CodexAppServerClient::new(request.config.codex.clone()).with_dynamic_tools(tools);
+        let agent = request.config.agent_for_issue_labels(&request.issue.labels);
+        let adapter = adapter_for(agent, &request.config, tools);
+        tracing::info!(
+            issue_id=%request.issue.id,
+            issue_identifier=%request.issue.identifier,
+            agent=%adapter.kind().as_str(),
+            "agent_selected"
+        );
         let active_states = request.config.tracker.active_states.clone();
         let terminal_states = request.config.tracker.terminal_states.clone();
         let issue_id = request.issue.id.clone();
         let tracker = Arc::clone(&self.tracker);
-        let result = client
-            .run_turns(
-                &workspace.path,
-                CodexIssueContext {
-                    issue_id: request.issue.id.clone(),
-                    title: format!("{}: {}", request.issue.identifier, request.issue.title),
-                },
+        let result = adapter
+            .run(CodingAgentRun {
+                workspace_path: workspace.path.clone(),
+                issue_id: request.issue.id.clone(),
+                issue_title: format!("{}: {}", request.issue.identifier, request.issue.title),
                 prompt,
-                request.config.agent.max_turns,
-                move || {
+                max_turns: request.config.agent.max_turns,
+                should_continue: Box::new(move || {
                     let tracker = Arc::clone(&tracker);
                     let issue_id = issue_id.clone();
                     let active_states = active_states.clone();
                     let terminal_states = terminal_states.clone();
-                    async move {
+                    Box::pin(async move {
                         let states = tracker
                             .fetch_issue_states_by_ids(std::slice::from_ref(&issue_id))
                             .await?;
@@ -94,12 +98,12 @@ where
                             && !terminal_states
                                 .iter()
                                 .any(|s| s.to_lowercase() == normalized))
-                    }
-                },
-                |event| {
+                    })
+                }),
+                on_event: Box::new(move |event| {
                     let _ = events.send(event);
-                },
-            )
+                }),
+            })
             .await;
         manager.after_run_best_effort(&workspace.path).await;
         result

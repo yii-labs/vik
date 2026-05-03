@@ -79,8 +79,11 @@ dispatch validation. Existing shell environment values win over `.env` values.
 Required credentials:
 
 - `LINEAR_API_KEY`
-- Codex auth in `CODEX_HOME` or `OPENAI_API_KEY`
+- auth for every configured coding agent that may receive issues
 - GitHub CLI auth, `GH_TOKEN`, `GITHUB_TOKEN`, or working SSH credentials
+
+See [Codex Agent](agents/codex.md) and
+[Claude Code Agent](agents/claude-code.md) for agent-specific setup.
 
 ## State Files
 

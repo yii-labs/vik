@@ -11,6 +11,48 @@ use crate::yaml::{
     resolve_exact_env, string_value, string_vec, u32_value, u64_value, usize_value,
 };
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodingAgentKind {
+    #[default]
+    Codex,
+    ClaudeCode,
+}
+
+impl CodingAgentKind {
+    pub fn parse(raw: &str) -> Result<Self, WorkflowError> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "" | "codex" => Ok(Self::Codex),
+            "claude-code" | "claude_code" | "claude" => Ok(Self::ClaudeCode),
+            other => Err(WorkflowError::InvalidConfig(format!(
+                "unsupported agent.default: {other}"
+            ))),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Codex => "codex",
+            Self::ClaudeCode => "claude-code",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentFilterConfig {
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+impl AgentFilterConfig {
+    pub fn matches_labels(&self, labels: &[String]) -> bool {
+        !self.tags.is_empty()
+            && labels
+                .iter()
+                .any(|label| self.tags.iter().any(|tag| label.eq_ignore_ascii_case(tag)))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrackerConfig {
     pub kind: String,
@@ -57,6 +99,7 @@ pub struct HooksConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentConfig {
+    pub default: CodingAgentKind,
     pub max_concurrent_agents: usize,
     pub max_turns: u32,
     pub max_retry_backoff_ms: u64,
@@ -66,6 +109,8 @@ pub struct AgentConfig {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CodexConfig {
     pub command: String,
+    #[serde(default)]
+    pub filter: AgentFilterConfig,
     pub model: Option<String>,
     pub model_reasoning_effort: Option<String>,
     pub approval_policy: Option<serde_json::Value>,
@@ -156,6 +201,16 @@ fn find_shell_token_start(command: &str, needle: &str) -> Option<usize> {
     if token == needle { token_start } else { None }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ClaudeCodeConfig {
+    pub command: String,
+    #[serde(default)]
+    pub filter: AgentFilterConfig,
+    pub model: Option<String>,
+    pub permission_mode: Option<String>,
+    pub turn_timeout_ms: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServerConfig {
     pub port: u16,
@@ -171,6 +226,7 @@ pub struct ServiceConfig {
     pub hooks: HooksConfig,
     pub agent: AgentConfig,
     pub codex: CodexConfig,
+    pub claude_code: ClaudeCodeConfig,
     pub server: Option<ServerConfig>,
 }
 
@@ -188,6 +244,7 @@ impl ServiceConfig {
         let hooks_map = get_map(&definition.config, "hooks");
         let agent_map = get_map(&definition.config, "agent");
         let codex_map = get_map(&definition.config, "codex");
+        let claude_code_map = get_map(&definition.config, "claude-code");
         let server_map = get_map(&definition.config, "server");
 
         let tracker_kind = string_value(tracker_map, "kind").unwrap_or_default();
@@ -244,6 +301,10 @@ impl ServiceConfig {
         }
 
         let max_concurrent_agents = usize_value(agent_map, "max_concurrent_agents").unwrap_or(10);
+        let default_agent = string_value(agent_map, "default")
+            .map(|raw| CodingAgentKind::parse(&raw))
+            .transpose()?
+            .unwrap_or_default();
         let max_turns = u32_value(agent_map, "max_turns").unwrap_or(20);
         if max_turns == 0 {
             return Err(WorkflowError::InvalidConfig(
@@ -257,6 +318,7 @@ impl ServiceConfig {
         let codex = CodexConfig {
             command: string_value(codex_map, "command")
                 .unwrap_or_else(|| "codex app-server".to_string()),
+            filter: agent_filter(codex_map),
             model: string_value(codex_map, "model"),
             model_reasoning_effort: string_value(codex_map, "model_reasoning_effort"),
             approval_policy: json_value(codex_map, "approval_policy"),
@@ -266,6 +328,15 @@ impl ServiceConfig {
             turn_timeout_ms: u64_value(codex_map, "turn_timeout_ms").unwrap_or(3_600_000),
             read_timeout_ms: u64_value(codex_map, "read_timeout_ms").unwrap_or(30_000),
             stall_timeout_ms: i64_value(codex_map, "stall_timeout_ms").unwrap_or(300_000),
+        };
+        let claude_code = ClaudeCodeConfig {
+            command: string_value(claude_code_map, "command").unwrap_or_else(|| {
+                "claude -p --output-format stream-json --input-format text --verbose".to_string()
+            }),
+            filter: agent_filter(claude_code_map),
+            model: string_value(claude_code_map, "model"),
+            permission_mode: string_value(claude_code_map, "permission_mode"),
+            turn_timeout_ms: u64_value(claude_code_map, "turn_timeout_ms").unwrap_or(3_600_000),
         };
 
         let server = server_map
@@ -292,14 +363,35 @@ impl ServiceConfig {
             logging: LoggingConfig { dir: logging_dir },
             hooks,
             agent: AgentConfig {
+                default: default_agent,
                 max_concurrent_agents,
                 max_turns,
                 max_retry_backoff_ms,
                 max_concurrent_agents_by_state,
             },
             codex,
+            claude_code,
             server,
         })
+    }
+
+    pub fn agent_for_issue_labels(&self, labels: &[String]) -> CodingAgentKind {
+        let default = self.agent.default;
+        let matches: Vec<_> = [CodingAgentKind::Codex, CodingAgentKind::ClaudeCode]
+            .into_iter()
+            .filter(|kind| self.agent_filter(*kind).matches_labels(labels))
+            .collect();
+        if matches.contains(&default) {
+            return default;
+        }
+        matches.into_iter().next().unwrap_or(default)
+    }
+
+    fn agent_filter(&self, agent: CodingAgentKind) -> &AgentFilterConfig {
+        match agent {
+            CodingAgentKind::Codex => &self.codex.filter,
+            CodingAgentKind::ClaudeCode => &self.claude_code.filter,
+        }
     }
 
     pub fn validate_for_dispatch(&self) -> Result<(), WorkflowError> {
@@ -322,6 +414,11 @@ impl ServiceConfig {
                 "codex.command is empty".to_string(),
             ));
         }
+        if self.claude_code.command.trim().is_empty() {
+            return Err(WorkflowError::InvalidConfig(
+                "claude-code.command is empty".to_string(),
+            ));
+        }
         if self
             .codex
             .model
@@ -342,11 +439,42 @@ impl ServiceConfig {
                 "codex.model_reasoning_effort is empty".to_string(),
             ));
         }
+        if self
+            .claude_code
+            .model
+            .as_ref()
+            .is_some_and(|model| model.trim().is_empty())
+        {
+            return Err(WorkflowError::InvalidConfig(
+                "claude-code.model is empty".to_string(),
+            ));
+        }
+        if self
+            .claude_code
+            .permission_mode
+            .as_ref()
+            .is_some_and(|mode| mode.trim().is_empty())
+        {
+            return Err(WorkflowError::InvalidConfig(
+                "claude-code.permission_mode is empty".to_string(),
+            ));
+        }
+        if self.claude_code.turn_timeout_ms == 0 {
+            return Err(WorkflowError::InvalidConfig(
+                "claude-code.turn_timeout_ms must be positive".to_string(),
+            ));
+        }
         if self.codex.has_model_cli_config() && self.codex.split_command_at_app_server().is_none() {
             return Err(WorkflowError::InvalidConfig(
                 "codex.command must include app-server when codex.model or codex.model_reasoning_effort is set".to_string(),
             ));
         }
         Ok(())
+    }
+}
+fn agent_filter(map: Option<&serde_yaml::Mapping>) -> AgentFilterConfig {
+    let filter_map = nested_map(map, "filter");
+    AgentFilterConfig {
+        tags: string_vec(filter_map, "tags").unwrap_or_default(),
     }
 }

@@ -31,6 +31,11 @@ pub(crate) fn summarize_message(message: &Value) -> Option<String> {
         .pointer("/params/message")
         .or_else(|| message.pointer("/params/text"))
         .or_else(|| message.pointer("/params/turn/error/message"))
+        .or_else(|| message.pointer("/message"))
+        .or_else(|| message.pointer("/text"))
+        .or_else(|| message.pointer("/result"))
+        .or_else(|| message.pointer("/error"))
+        .or_else(|| message.pointer("/summary"))
         .and_then(Value::as_str)
         .map(truncate)
 }

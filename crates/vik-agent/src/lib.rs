@@ -1,3 +1,5 @@
+mod adapter;
+mod claude_code;
 mod client;
 mod error;
 mod event;

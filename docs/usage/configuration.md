@@ -18,6 +18,9 @@ workspace:
 hooks:
   after_create: |
     git clone --depth 1 git@github.com:yii-labs/vik .
+agent:
+  default: codex
+  max_concurrent_agents: 10
 codex:
   command: codex --config shell_environment_policy.inherit=all app-server
 ---
@@ -92,9 +95,10 @@ Hooks are trusted shell snippets from `WORKFLOW.md`.
 
 Fields:
 
-- `after_create`: run once after a new issue workspace is created.
-- `before_run`: run before Codex starts.
-- `after_run`: run after Codex exits.
+- `after_create`: run once after a new issue workspace is created and after any
+  workspace setup has completed.
+- `before_run`: run before the selected coding agent starts.
+- `after_run`: run after the selected coding agent exits.
 - `before_remove`: run before terminal cleanup.
 - `timeout_ms`: hook timeout. Default: `60000`.
 
@@ -118,10 +122,29 @@ hooks:
 
 Fields:
 
+- `default`: fallback coding agent for issues that do not match an agent label
+  filter. Supported values: `codex`, `claude-code`. Default: `codex`.
 - `max_concurrent_agents`: global concurrency. Default: `10`.
-- `max_turns`: max Codex turns per issue attempt. Default: `20`.
+- `max_turns`: max coding-agent turns per issue attempt. Default: `20`.
 - `max_retry_backoff_ms`: retry backoff cap. Default: `300000`.
 - `max_concurrent_agents_by_state`: optional per-state concurrency limits.
+
+Agent label filters route matching issues to a specific adapter:
+
+```yaml
+agent:
+  default: codex
+codex:
+  filter:
+    tags: [codex]
+claude-code:
+  filter:
+    tags: [claude]
+```
+
+If multiple agent filters match, the default agent wins when it is one of the
+matches. Otherwise Vik uses a deterministic supported-agent order. If no filter
+matches, Vik uses `agent.default`.
 
 ## Codex
 
@@ -131,6 +154,7 @@ Common fields:
 
 - `model`
 - `model_reasoning_effort`
+- `filter.tags`
 - `approval_policy`
 - `approvals_reviewer`
 - `thread_sandbox`
@@ -147,6 +171,26 @@ Official Codex config reference:
 - <https://developers.openai.com/codex/cli/reference>
 - <https://developers.openai.com/codex/config-basic>
 - <https://developers.openai.com/codex/config-advanced>
+
+See [Codex Agent](agents/codex.md) for setup and validation.
+
+## Claude Code
+
+`claude-code.command` launches Claude Code headless mode. Default:
+`claude -p --output-format stream-json --input-format text --verbose`.
+
+Common fields:
+
+- `command`
+- `filter.tags`
+- `model`
+- `permission_mode`
+- `turn_timeout_ms`
+
+Vik writes the rendered issue prompt to stdin and appends `--max-turns` from
+`agent.max_turns`.
+
+See [Claude Code Agent](agents/claude-code.md) for setup and validation.
 
 ## Server
 
@@ -166,6 +210,8 @@ bind host.
 - [Docker](docker.md)
 - [Service Daemon](service-daemon.md)
 - [Observation](observation.md)
+- [Codex Agent](agents/codex.md)
+- [Claude Code Agent](agents/claude-code.md)
 - Linear GraphQL API: <https://linear.app/developers/graphql>
 - GitHub CLI auth: <https://cli.github.com/manual/gh_auth>
 - Codex CLI reference: <https://developers.openai.com/codex/cli/reference>

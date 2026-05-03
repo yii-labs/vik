@@ -59,6 +59,7 @@ fn applies_defaults_and_path_resolution() {
     let config = ServiceConfig::from_definition(&def).unwrap();
     assert_eq!(config.polling.interval_ms, 30_000);
     assert_eq!(config.codex.read_timeout_ms, 30_000);
+    assert_eq!(config.agent.default, CodingAgentKind::Codex);
     assert_eq!(config.workspace.root, dir.path().join("work"));
     assert_eq!(
         config.logging.dir,
@@ -80,6 +81,64 @@ fn applies_defaults_and_path_resolution() {
             .max_concurrent_agents_by_state
             .contains_key("bad")
     );
+}
+
+#[test]
+fn parses_agent_default_and_agent_filters() {
+    let def = parse_workflow_content(
+        PathBuf::from("WORKFLOW.md"),
+        "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\nagent:\n  default: claude-code\ncodex:\n  filter:\n    tags: [codex]\nclaude-code:\n  command: claude -p --output-format stream-json --input-format text\n  model: sonnet\n  permission_mode: acceptEdits\n  filter:\n    tags: [claude]\n---\nBody",
+    )
+    .unwrap();
+    let config = ServiceConfig::from_definition(&def).unwrap();
+
+    assert_eq!(config.agent.default, CodingAgentKind::ClaudeCode);
+    assert_eq!(config.codex.filter.tags, vec!["codex"]);
+    assert_eq!(config.claude_code.filter.tags, vec!["claude"]);
+    assert_eq!(config.claude_code.model.as_deref(), Some("sonnet"));
+    assert_eq!(
+        config.claude_code.permission_mode.as_deref(),
+        Some("acceptEdits")
+    );
+}
+
+#[test]
+fn selects_agent_by_filter_tags_then_default() {
+    let def = parse_workflow_content(
+        PathBuf::from("WORKFLOW.md"),
+        "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\nagent:\n  default: codex\ncodex:\n  filter:\n    tags: [codex]\nclaude-code:\n  filter:\n    tags: [claude]\n---\nBody",
+    )
+    .unwrap();
+    let config = ServiceConfig::from_definition(&def).unwrap();
+
+    assert_eq!(
+        config.agent_for_issue_labels(&["claude".to_string()]),
+        CodingAgentKind::ClaudeCode
+    );
+    assert_eq!(
+        config.agent_for_issue_labels(&["codex".to_string(), "claude".to_string()]),
+        CodingAgentKind::Codex
+    );
+    assert_eq!(
+        config.agent_for_issue_labels(&["docs".to_string()]),
+        CodingAgentKind::Codex
+    );
+}
+
+#[test]
+fn rejects_unknown_default_agent() {
+    let err = parse_workflow_content(
+        PathBuf::from("WORKFLOW.md"),
+        "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\nagent:\n  default: other-agent\n---\nBody",
+    )
+    .and_then(|def| ServiceConfig::from_definition(&def))
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        WorkflowError::InvalidConfig(message)
+            if message == "unsupported agent.default: other-agent"
+    ));
 }
 
 #[test]

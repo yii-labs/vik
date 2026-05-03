@@ -23,6 +23,7 @@ must be a directory where Vik may create, mutate, and remove issue directories.
    git --version
    gh --version
    codex --version
+   claude --version # when using claude-code
    jq --version
    ```
 
@@ -42,7 +43,8 @@ must be a directory where Vik may create, mutate, and remove issue directories.
 ## 2. Workflow
 
 Why: `WORKFLOW.md` tells Vik which Linear issues to claim, where to create
-workspaces, how to clone the repo, and how to launch Codex.
+workspaces, how to clone the repo, and how to launch the selected coding
+agent.
 
 1. Open `WORKFLOW.md`.
 2. Confirm `tracker.project_slug` matches the Linear project slug.
@@ -52,7 +54,9 @@ workspaces, how to clone the repo, and how to launch Codex.
 5. Confirm `workspace.root` points to the directory created above.
 6. Confirm `hooks.after_create` clones this repo into the empty issue
    workspace.
-7. Confirm `codex.command` launches `codex app-server`.
+7. Confirm `agent.default` names a supported agent.
+8. Confirm each configured agent section has the right command and label
+   filter.
 
 Validate config parsing after connections are configured:
 
@@ -74,50 +78,15 @@ vik start ./WORKFLOW.md --port 3000
 
 ## 3. Connections
 
-### Codex
+### Coding Agents
 
-Why: Vik launches `codex app-server` inside each issue workspace. Codex must be
-installed and authenticated before the daemon can run agent sessions.
+Why: Vik starts one configured coding-agent adapter per claimed issue. Install
+and authenticate every agent that may receive issues in this workflow.
 
-Official links:
+Agent setup:
 
-- Codex CLI reference:
-  <https://developers.openai.com/codex/cli/reference>
-- OpenAI API keys:
-  <https://platform.openai.com/settings/organization/api-keys>
-
-Steps:
-
-1. Check CLI availability:
-
-   ```sh
-   codex --version
-   codex app-server --help
-   ```
-
-2. Check auth:
-
-   ```sh
-   codex login status
-   ```
-
-3. If auth is missing and a browser is available, run:
-
-   ```sh
-   codex login
-   codex login status
-   ```
-
-4. If browser auth is unavailable and `OPENAI_API_KEY` is already exported,
-   authenticate without printing the key:
-
-   ```sh
-   printenv OPENAI_API_KEY | codex login --with-api-key
-   codex login status
-   ```
-
-5. Stop with a Codex auth blocker if neither browser auth nor an API key is
-   available.
+- [Codex](agents/codex.md)
+- [Claude Code](agents/claude-code.md)
 
 ### GitHub
 
@@ -248,4 +217,6 @@ Steps:
 - [Docker](docker.md)
 - [Service Daemon](service-daemon.md)
 - [Configuration](configuration.md)
+- [Codex Agent](agents/codex.md)
+- [Claude Code Agent](agents/claude-code.md)
 - [Observation](observation.md)

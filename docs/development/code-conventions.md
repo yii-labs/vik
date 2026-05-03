@@ -21,9 +21,10 @@
 - Keep retry and terminal-state logic deterministic.
 - Keep issue state transitions observable in logs or snapshots.
 
-## Codex Integration
+## Agent Integration
 
 - Preserve `codex app-server` protocol compatibility.
+- Keep coding-agent protocol details behind adapter boundaries.
 - Do not log prompts, tool payloads, or credentials unless the surrounding code
   already treats the data as safe.
 - Keep timeouts configurable.

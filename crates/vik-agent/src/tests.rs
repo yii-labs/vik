@@ -2,8 +2,11 @@ use serde_json::json;
 use std::path::Path;
 use tempfile::TempDir;
 use vik_core::HostPlatform;
-use vik_workflow::{CodexConfig, TrackerConfig};
+use vik_workflow::{ClaudeCodeConfig, CodexConfig, TrackerConfig};
 
+use crate::claude_code::{
+    claude_code_spawn_command, claude_code_spawn_process_command_for_platform,
+};
 use crate::client::{
     codex_spawn_command, codex_spawn_process_command_for_platform, message_belongs_to_turn,
 };
@@ -126,6 +129,39 @@ fn codex_spawn_process_command_preserves_quoted_windows_path() {
     assert_eq!(
         command.args(),
         &["app-server".to_string(), "--stdio".to_string()]
+    );
+}
+
+#[test]
+fn claude_code_spawn_command_adds_runtime_options() {
+    let config = ClaudeCodeConfig {
+        command: "claude -p --output-format stream-json --input-format text".to_string(),
+        model: Some("sonnet".to_string()),
+        permission_mode: Some("acceptEdits".to_string()),
+        ..ClaudeCodeConfig::default()
+    };
+
+    assert_eq!(
+        claude_code_spawn_command(&config, 7),
+        "claude -p --output-format stream-json --input-format text --model 'sonnet' --permission-mode 'acceptEdits' --max-turns '7'"
+    );
+}
+
+#[test]
+fn claude_code_spawn_process_command_uses_shell() {
+    let config = ClaudeCodeConfig {
+        command: "claude -p --output-format stream-json --input-format text".to_string(),
+        ..ClaudeCodeConfig::default()
+    };
+    let command = claude_code_spawn_process_command_for_platform(&config, 3, HostPlatform::Posix);
+
+    assert_eq!(command.program(), "bash");
+    assert_eq!(
+        command.args(),
+        &[
+            "-lc".to_string(),
+            "claude -p --output-format stream-json --input-format text --max-turns '3'".to_string()
+        ]
     );
 }
 

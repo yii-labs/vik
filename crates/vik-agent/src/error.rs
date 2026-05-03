@@ -11,6 +11,8 @@ pub enum AgentError {
     CodexNotFound(String),
     #[error("process_spawn: {program}: {reason}")]
     ProcessSpawn { program: String, reason: String },
+    #[error("process_exit: {program}: {status}")]
+    ProcessExit { program: String, status: String },
     #[error("response_timeout")]
     ResponseTimeout,
     #[error("turn_timeout")]

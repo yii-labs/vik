@@ -13,6 +13,8 @@ Operator docs live under `docs/usage/`:
 - [Docker](../usage/docker.md)
 - [Service Daemon](../usage/service-daemon.md)
 - [Configuration](../usage/configuration.md)
+- [Codex Agent](../usage/agents/codex.md)
+- [Claude Code Agent](../usage/agents/claude-code.md)
 - [Observation](../usage/observation.md)
 
 Development work should stay scoped to the active issue. Reproduce first,
