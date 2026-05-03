@@ -4,7 +4,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::time;
 use vik_core::{AgentEvent, HostPlatform, LiveSession, PosixShell, ShellInvocation, TokenUsage};
@@ -157,19 +157,25 @@ async fn run_claude_code_turn(
         }),
     );
 
-    let mut stdin = child.stdin.take().ok_or(AgentError::PortExit)?;
-    stdin
-        .write_all(turn.prompt.as_bytes())
-        .await
-        .map_err(|err| AgentError::ResponseError(err.to_string()))?;
-    stdin
-        .shutdown()
-        .await
-        .map_err(|err| AgentError::ResponseError(err.to_string()))?;
+    let deadline = time::Instant::now() + Duration::from_millis(config.turn_timeout_ms);
+    let stdin = child.stdin.take().ok_or(AgentError::PortExit)?;
+    if let Err(err) = write_prompt_with_deadline(
+        stdin,
+        &turn.prompt,
+        deadline,
+        turn.issue_id,
+        turn.turn_count,
+        &live,
+        on_event,
+    )
+    .await
+    {
+        let _ = child.kill().await;
+        return Err(err);
+    }
 
     let stdout = child.stdout.take().ok_or(AgentError::PortExit)?;
     let mut lines = BufReader::new(stdout).lines();
-    let deadline = time::Instant::now() + Duration::from_millis(config.turn_timeout_ms);
     loop {
         let Some(remaining) = remaining_time(deadline) else {
             let _ = child.kill().await;
@@ -256,6 +262,52 @@ async fn run_claude_code_turn(
         json!({ "status": "completed", "turn_count": turn.turn_count }),
     );
     Ok(())
+}
+
+pub(crate) async fn write_prompt_with_deadline<W>(
+    mut stdin: W,
+    prompt: &str,
+    deadline: time::Instant,
+    issue_id: &str,
+    turn_count: u32,
+    live: &LiveSession,
+    on_event: &mut EventSink,
+) -> Result<(), AgentError>
+where
+    W: AsyncWrite + Unpin,
+{
+    let write_prompt = async {
+        stdin
+            .write_all(prompt.as_bytes())
+            .await
+            .map_err(|err| AgentError::ResponseError(err.to_string()))?;
+        stdin
+            .shutdown()
+            .await
+            .map_err(|err| AgentError::ResponseError(err.to_string()))
+    };
+    tokio::pin!(write_prompt);
+    loop {
+        let Some(remaining) = remaining_time(deadline) else {
+            return Err(AgentError::TurnTimeout);
+        };
+        let wait = remaining.min(heartbeat_interval());
+        match time::timeout(wait, &mut write_prompt).await {
+            Ok(result) => return result,
+            Err(_) => {
+                if remaining <= heartbeat_interval() {
+                    return Err(AgentError::TurnTimeout);
+                }
+                emit_lifecycle_event(
+                    on_event,
+                    issue_id,
+                    Some(live.clone()),
+                    "claude_code_heartbeat",
+                    json!({ "turn_count": turn_count, "phase": "stdin" }),
+                );
+            }
+        }
+    }
 }
 
 pub(crate) fn claude_code_spawn_command(config: &ClaudeCodeConfig, max_turns: u32) -> String {
