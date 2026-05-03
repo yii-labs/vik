@@ -43,7 +43,9 @@ cargo run -p vik-cli -- ./WORKFLOW.md --port 3000
 Daemon logs are JSON lines on stdout and in a daily file under `logging.dir`. If
 `logging.dir` is omitted, Vik writes to `<workspace.root>/.vik/logs/vik.log.<date>`.
 Codex app-server session events are also appended as JSONL files under
-`<logging.dir>/codex-session-logs/` so issue debug output can survive daemon restarts.
+`<logging.dir>/sessions/<issue-identifier>-<session-log-id>.jsonl` so issue
+debug output can survive daemon restarts while keeping reworked issue contexts
+in separate files.
 
 ## Workflow Templates
 

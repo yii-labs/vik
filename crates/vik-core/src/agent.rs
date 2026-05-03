@@ -120,6 +120,8 @@ pub struct AgentEvent {
 pub struct CodexSessionLogEntry {
     #[serde(default)]
     pub sequence: u64,
+    #[serde(default)]
+    pub session_log_id: String,
     pub issue_id: String,
     pub issue_identifier: String,
     pub source: String,
@@ -148,6 +150,7 @@ impl CodexSessionLogEntry {
         };
         Self {
             sequence: 0,
+            session_log_id: String::new(),
             issue_id: event.issue_id.clone(),
             issue_identifier,
             source: "codex_app_server".to_string(),

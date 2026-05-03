@@ -3,6 +3,7 @@ use vik_workflow::ServiceConfig;
 
 use crate::CONTINUATION_RETRY_MS;
 use crate::dispatch::failure_backoff_ms;
+use crate::session_log::new_session_log_id;
 use crate::state::OrchestratorState;
 
 impl OrchestratorState {
@@ -29,7 +30,12 @@ impl OrchestratorState {
             codex_event=%event.event,
             "codex_update outcome=received"
         );
-        let log_entry = CodexSessionLogEntry::from_agent_event(issue_identifier, &event);
+        let mut log_entry = CodexSessionLogEntry::from_agent_event(issue_identifier, &event);
+        log_entry.session_log_id = self
+            .session_log_ids
+            .entry(event.issue_id.clone())
+            .or_insert_with(new_session_log_id)
+            .clone();
         if let Some(entry) = self.running.get_mut(&event.issue_id) {
             entry.last_event = Some(event.event.clone());
             entry.last_message = event.message.clone();

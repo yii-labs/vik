@@ -8,6 +8,7 @@ use vik_workflow::{LoadedWorkflow, ServiceConfig};
 use vik_workspace::WorkspaceManager;
 
 use crate::engine::Orchestrator;
+use crate::session_log::new_session_log_id;
 use crate::state::RunningEntry;
 
 impl<T, W> Orchestrator<T, W>
@@ -76,6 +77,9 @@ where
         state
             .issue_identifiers
             .insert(issue_id.clone(), issue_identifier.clone());
+        state
+            .session_log_ids
+            .insert(issue_id.clone(), new_session_log_id());
         state.claimed.insert(issue_id.clone());
         state.retry_attempts.remove(&issue_id);
         state.running.insert(

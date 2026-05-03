@@ -232,11 +232,19 @@ async fn codex_session_log_persists_for_reopen() {
         }),
     });
     let dir = tempfile::tempdir().unwrap();
-    append_session_log(dir.path(), &entry).unwrap();
+    let path = append_session_log(dir.path(), &entry).unwrap();
+    assert_eq!(
+        path.parent().unwrap().file_name().unwrap().to_str().unwrap(),
+        "sessions"
+    );
+    let file_name = path.file_name().unwrap().to_str().unwrap();
+    assert!(file_name.starts_with("VIK-11-"));
+    assert!(file_name.ends_with(".jsonl"));
 
     let reloaded = read_session_logs(dir.path(), "VIK-11", 50).unwrap();
     assert_eq!(reloaded.len(), 1);
     assert_eq!(reloaded[0].sequence, 1);
+    assert_eq!(reloaded[0].session_log_id, entry.session_log_id);
     assert_eq!(reloaded[0].issue_identifier, "VIK-11");
     assert_eq!(reloaded[0].source, "codex_app_server");
     assert_eq!(reloaded[0].role.as_deref(), Some("assistant"));
@@ -291,6 +299,7 @@ async fn late_agent_event_uses_known_issue_identifier_after_worker_exit() {
     });
 
     assert_eq!(entry.issue_identifier, "VIK-11");
+    assert!(!entry.session_log_id.is_empty());
 }
 
 #[test]
@@ -323,10 +332,61 @@ fn session_log_read_skips_malformed_lines_and_continues_sequence() {
 
     let reloaded = read_session_logs(dir.path(), "VIK-11", 50).unwrap();
     assert_eq!(reloaded.len(), 2);
+    assert_eq!(reloaded[0].session_log_id, reloaded[1].session_log_id);
     assert_eq!(reloaded[0].sequence, 1);
     assert_eq!(reloaded[0].message.as_deref(), Some("first"));
     assert_eq!(reloaded[1].sequence, 2);
     assert_eq!(reloaded[1].message.as_deref(), Some("second"));
+}
+
+#[test]
+fn session_log_read_combines_issue_named_session_files_in_stable_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let event = AgentEvent {
+        issue_id: "A".into(),
+        event: "turn/completed".into(),
+        timestamp: Utc::now(),
+        codex_app_server_pid: None,
+        session: Some(vik_core::LiveSession::new("thread-1", "turn-1")),
+        usage: None,
+        rate_limits: None,
+        message: Some("first".into()),
+        raw: json!({ "method": "turn/completed" }),
+    };
+    let mut first = vik_core::CodexSessionLogEntry::from_agent_event("VIK-11", &event);
+    first.session_log_id = "0001-first".into();
+    first.message = Some("first".into());
+    let first_path = append_session_log(dir.path(), &first).unwrap();
+
+    let mut second = first.clone();
+    second.session_log_id = "0002-second".into();
+    second.message = Some("second".into());
+    let second_path = append_session_log(dir.path(), &second).unwrap();
+
+    let mut other_issue = first.clone();
+    other_issue.issue_identifier = "VIK-12".into();
+    other_issue.message = Some("other".into());
+    append_session_log(dir.path(), &other_issue).unwrap();
+
+    assert_eq!(
+        first_path.file_name().unwrap().to_str().unwrap(),
+        "VIK-11-0001-first.jsonl"
+    );
+    assert_eq!(
+        second_path.file_name().unwrap().to_str().unwrap(),
+        "VIK-11-0002-second.jsonl"
+    );
+
+    let reloaded = read_session_logs(dir.path(), "VIK-11", 50).unwrap();
+    assert_eq!(reloaded.len(), 2);
+    assert_eq!(reloaded[0].session_log_id, "0001-first");
+    assert_eq!(reloaded[0].message.as_deref(), Some("first"));
+    assert_eq!(reloaded[1].session_log_id, "0002-second");
+    assert_eq!(reloaded[1].message.as_deref(), Some("second"));
+
+    let tail = read_session_logs(dir.path(), "VIK-11", 1).unwrap();
+    assert_eq!(tail.len(), 1);
+    assert_eq!(tail[0].message.as_deref(), Some("second"));
 }
 
 #[test]
