@@ -76,6 +76,214 @@ struct ServiceTarget {
     port: Option<u16>,
 }
 
+impl ServiceTarget {
+    fn load(
+        workflow: Option<PathBuf>,
+        port: Option<u16>,
+        require_dispatch_config: bool,
+    ) -> Result<Self, Box<dyn Error>> {
+        let workflow_path = if require_dispatch_config {
+            let loaded = load_effective_workflow(workflow)?;
+            loaded.config.validate_for_dispatch()?;
+            fs::canonicalize(&loaded.definition.path)?
+        } else {
+            resolve_workflow_path(workflow)?
+        };
+        let cwd = env::current_dir()?;
+        let service_dir = service_dir_for_workflow(&workflow_path);
+        let name = service_name(&workflow_path);
+        Ok(Self {
+            workflow_path,
+            service_dir: service_dir.clone(),
+            state_path: service_dir.join(format!("{name}.json")),
+            log_path: service_dir.join(format!("{name}.log")),
+            cwd,
+            port,
+        })
+    }
+
+    fn load_for_dispatch(
+        workflow: Option<PathBuf>,
+        port: Option<u16>,
+    ) -> Result<Self, Box<dyn Error>> {
+        let management_target = Self::load(workflow, port, false)?;
+        let previous_state = read_state(&management_target.state_path)?;
+        let dotenv_dir = management_target.effective_cwd(previous_state.as_ref());
+        load_dotenv_from_dir(&dotenv_dir)?;
+        Self::load(Some(management_target.workflow_path), port, true)
+    }
+
+    fn start(&self, verb: &str) -> Result<(), Box<dyn Error>> {
+        let previous_state = read_state(&self.state_path)?;
+        if let Some(state) = &previous_state
+            && classify_state(state) == RuntimeStatus::Running
+        {
+            println!(
+                "service already running: pid={} log={}",
+                state.pid.unwrap_or_default(),
+                state.log_path.display()
+            );
+            return Ok(());
+        }
+
+        let port = self.effective_port(previous_state.as_ref());
+        let cwd = self.effective_cwd(previous_state.as_ref());
+        fs::create_dir_all(&self.service_dir)?;
+        let executable = env::current_exe()?;
+        let mut command = Command::new(&executable);
+        for arg in self.daemon_args(port) {
+            command.arg(arg);
+        }
+        command.current_dir(&cwd);
+        detach_command(&mut command);
+
+        let log = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.log_path)?;
+        let err_log = log.try_clone()?;
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(log))
+            .stderr(Stdio::from(err_log));
+
+        let child = command.spawn()?;
+        let pid = child.id();
+        let state = ServiceState {
+            version: 1,
+            workflow_path: self.workflow_path.clone(),
+            cwd,
+            pid: Some(pid),
+            status: StoredStatus::Running,
+            started_at_unix: Some(now_unix()),
+            stopped_at_unix: None,
+            log_path: self.log_path.clone(),
+            port,
+            command: self.display_command(&executable, port),
+        };
+        write_state(&self.state_path, &state)?;
+        println!(
+            "service {verb}: pid={} state={} log={}",
+            pid,
+            self.state_path.display(),
+            self.log_path.display()
+        );
+        Ok(())
+    }
+
+    fn stop(&self, remove_state: bool) -> Result<bool, Box<dyn Error>> {
+        let Some(mut state) = read_state(&self.state_path)? else {
+            println!("service not installed: {}", self.state_path.display());
+            return Ok(false);
+        };
+
+        match classify_state(&state) {
+            RuntimeStatus::Running => {
+                let pid = state.pid.unwrap_or_default();
+                terminate_pid(pid)?;
+                state.status = StoredStatus::Stopped;
+                state.stopped_at_unix = Some(now_unix());
+                println!("service stopped: pid={pid}");
+            }
+            RuntimeStatus::Stopped => {
+                println!("service already stopped: {}", self.state_path.display());
+            }
+            RuntimeStatus::Stale => {
+                state.status = StoredStatus::Stopped;
+                state.stopped_at_unix = Some(now_unix());
+                println!(
+                    "service stale: pid={} is not running",
+                    state.pid.unwrap_or_default()
+                );
+            }
+        }
+
+        if remove_state {
+            remove_state_file(&self.state_path)?;
+        } else {
+            write_state(&self.state_path, &state)?;
+        }
+        Ok(true)
+    }
+
+    fn uninstall(&self) -> Result<(), Box<dyn Error>> {
+        if self.stop(true)? {
+            println!("service uninstalled: {}", self.state_path.display());
+        }
+        Ok(())
+    }
+
+    fn print_status(&self) -> Result<(), Box<dyn Error>> {
+        let Some(state) = read_state(&self.state_path)? else {
+            println!("not installed: {}", self.state_path.display());
+            return Ok(());
+        };
+
+        match classify_state(&state) {
+            RuntimeStatus::Running => println!(
+                "running: pid={} workflow={} log={}",
+                state.pid.unwrap_or_default(),
+                state.workflow_path.display(),
+                state.log_path.display()
+            ),
+            RuntimeStatus::Stopped => println!(
+                "stopped: workflow={} log={}",
+                state.workflow_path.display(),
+                state.log_path.display()
+            ),
+            RuntimeStatus::Stale => println!(
+                "stale: pid={} workflow={} log={}",
+                state.pid.unwrap_or_default(),
+                state.workflow_path.display(),
+                state.log_path.display()
+            ),
+        }
+        Ok(())
+    }
+
+    fn print_logs(&self, lines: usize, follow: bool) -> Result<(), Box<dyn Error>> {
+        let path = read_state(&self.state_path)?
+            .map(|state| state.log_path)
+            .unwrap_or_else(|| self.log_path.clone());
+        if !path.exists() {
+            println!("service logs not found: {}", path.display());
+            return Ok(());
+        }
+
+        print_recent_lines(&path, lines)?;
+        if follow {
+            follow_log(&path)?;
+        }
+        Ok(())
+    }
+
+    fn effective_port(&self, previous_state: Option<&ServiceState>) -> Option<u16> {
+        self.port
+            .or_else(|| previous_state.and_then(|state| state.port))
+    }
+
+    fn effective_cwd(&self, previous_state: Option<&ServiceState>) -> PathBuf {
+        previous_state
+            .map(|state| state.cwd.clone())
+            .unwrap_or_else(|| self.cwd.clone())
+    }
+
+    fn daemon_args(&self, port: Option<u16>) -> Vec<String> {
+        let mut args = vec![self.workflow_path.display().to_string()];
+        if let Some(port) = port {
+            args.push("--port".to_string());
+            args.push(port.to_string());
+        }
+        args
+    }
+
+    fn display_command(&self, executable: &Path, port: Option<u16>) -> Vec<String> {
+        let mut command = vec![executable.display().to_string()];
+        command.extend(self.daemon_args(port));
+        command
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ServiceState {
     version: u32,
@@ -107,72 +315,36 @@ enum RuntimeStatus {
 pub(crate) async fn run(args: ServiceArgs) -> Result<(), Box<dyn Error>> {
     match args.command {
         ServiceCommand::Install(args) => {
-            let target = load_dispatch_target(args.workflow, args.port)?;
-            start_service(&target, "installed")?;
+            let target = ServiceTarget::load_for_dispatch(args.workflow, args.port)?;
+            target.start("installed")?;
         }
         ServiceCommand::Uninstall(args) => {
-            let target = load_target(args.workflow, None, false)?;
-            uninstall_service(&target)?;
+            let target = ServiceTarget::load(args.workflow, None, false)?;
+            target.uninstall()?;
         }
         ServiceCommand::Status(args) => {
-            let target = load_target(args.workflow, None, false)?;
-            print_status(&target)?;
+            let target = ServiceTarget::load(args.workflow, None, false)?;
+            target.print_status()?;
         }
         ServiceCommand::Logs(args) => {
-            let target = load_target(args.workflow, None, false)?;
-            print_logs(&target, args.lines, args.follow)?;
+            let target = ServiceTarget::load(args.workflow, None, false)?;
+            target.print_logs(args.lines, args.follow)?;
         }
         ServiceCommand::Start(args) => {
-            let target = load_dispatch_target(args.workflow, args.port)?;
-            start_service(&target, "started")?;
+            let target = ServiceTarget::load_for_dispatch(args.workflow, args.port)?;
+            target.start("started")?;
         }
         ServiceCommand::Stop(args) => {
-            let target = load_target(args.workflow, None, false)?;
-            let _ = stop_service(&target, false)?;
+            let target = ServiceTarget::load(args.workflow, None, false)?;
+            let _ = target.stop(false)?;
         }
         ServiceCommand::Restart(args) => {
-            let target = load_dispatch_target(args.workflow, args.port)?;
-            let _ = stop_service(&target, false)?;
-            start_service(&target, "restarted")?;
+            let target = ServiceTarget::load_for_dispatch(args.workflow, args.port)?;
+            let _ = target.stop(false)?;
+            target.start("restarted")?;
         }
     }
     Ok(())
-}
-
-fn load_target(
-    workflow: Option<PathBuf>,
-    port: Option<u16>,
-    require_dispatch_config: bool,
-) -> Result<ServiceTarget, Box<dyn Error>> {
-    let workflow_path = if require_dispatch_config {
-        let loaded = load_effective_workflow(workflow)?;
-        loaded.config.validate_for_dispatch()?;
-        fs::canonicalize(&loaded.definition.path)?
-    } else {
-        resolve_workflow_path(workflow)?
-    };
-    let cwd = env::current_dir()?;
-    let service_dir = service_dir_for_workflow(&workflow_path);
-    let name = service_name(&workflow_path);
-    Ok(ServiceTarget {
-        workflow_path,
-        service_dir: service_dir.clone(),
-        state_path: service_dir.join(format!("{name}.json")),
-        log_path: service_dir.join(format!("{name}.log")),
-        cwd,
-        port,
-    })
-}
-
-fn load_dispatch_target(
-    workflow: Option<PathBuf>,
-    port: Option<u16>,
-) -> Result<ServiceTarget, Box<dyn Error>> {
-    let management_target = load_target(workflow, port, false)?;
-    let previous_state = read_state(&management_target.state_path)?;
-    let dotenv_dir = effective_service_cwd(&management_target, previous_state.as_ref());
-    load_dotenv_from_dir(&dotenv_dir)?;
-    load_target(Some(management_target.workflow_path), port, true)
 }
 
 fn resolve_workflow_path(workflow: Option<PathBuf>) -> io::Result<PathBuf> {
@@ -197,163 +369,6 @@ fn load_dotenv_from_dir(dir: &Path) -> Result<(), Box<dyn Error>> {
             Err(dotenvy::Error::Io(err)) if err.kind() == io::ErrorKind::NotFound => {}
             Err(err) => return Err(format!("failed to load {}: {err}", path.display()).into()),
         }
-    }
-    Ok(())
-}
-
-fn start_service(target: &ServiceTarget, verb: &str) -> Result<(), Box<dyn Error>> {
-    let previous_state = read_state(&target.state_path)?;
-    if let Some(state) = &previous_state
-        && classify_state(state) == RuntimeStatus::Running
-    {
-        println!(
-            "service already running: pid={} log={}",
-            state.pid.unwrap_or_default(),
-            state.log_path.display()
-        );
-        return Ok(());
-    }
-
-    let port = effective_service_port(target.port, previous_state.as_ref());
-    let cwd = effective_service_cwd(target, previous_state.as_ref());
-    fs::create_dir_all(&target.service_dir)?;
-    let executable = env::current_exe()?;
-    let mut command = Command::new(&executable);
-    for arg in daemon_args(target, port) {
-        command.arg(arg);
-    }
-    command.current_dir(&cwd);
-    detach_command(&mut command);
-
-    let log = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&target.log_path)?;
-    let err_log = log.try_clone()?;
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(log))
-        .stderr(Stdio::from(err_log));
-
-    let child = command.spawn()?;
-    let pid = child.id();
-    let state = ServiceState {
-        version: 1,
-        workflow_path: target.workflow_path.clone(),
-        cwd,
-        pid: Some(pid),
-        status: StoredStatus::Running,
-        started_at_unix: Some(now_unix()),
-        stopped_at_unix: None,
-        log_path: target.log_path.clone(),
-        port,
-        command: display_command(&executable, target, port),
-    };
-    write_state(&target.state_path, &state)?;
-    println!(
-        "service {verb}: pid={} state={} log={}",
-        pid,
-        target.state_path.display(),
-        target.log_path.display()
-    );
-    Ok(())
-}
-
-fn effective_service_port(
-    requested_port: Option<u16>,
-    previous_state: Option<&ServiceState>,
-) -> Option<u16> {
-    requested_port.or_else(|| previous_state.and_then(|state| state.port))
-}
-
-fn effective_service_cwd(target: &ServiceTarget, previous_state: Option<&ServiceState>) -> PathBuf {
-    previous_state
-        .map(|state| state.cwd.clone())
-        .unwrap_or_else(|| target.cwd.clone())
-}
-
-fn stop_service(target: &ServiceTarget, remove_state: bool) -> Result<bool, Box<dyn Error>> {
-    let Some(mut state) = read_state(&target.state_path)? else {
-        println!("service not installed: {}", target.state_path.display());
-        return Ok(false);
-    };
-
-    match classify_state(&state) {
-        RuntimeStatus::Running => {
-            let pid = state.pid.unwrap_or_default();
-            terminate_pid(pid)?;
-            state.status = StoredStatus::Stopped;
-            state.stopped_at_unix = Some(now_unix());
-            println!("service stopped: pid={pid}");
-        }
-        RuntimeStatus::Stopped => {
-            println!("service already stopped: {}", target.state_path.display());
-        }
-        RuntimeStatus::Stale => {
-            state.status = StoredStatus::Stopped;
-            state.stopped_at_unix = Some(now_unix());
-            println!(
-                "service stale: pid={} is not running",
-                state.pid.unwrap_or_default()
-            );
-        }
-    }
-
-    if remove_state {
-        remove_state_file(&target.state_path)?;
-    } else {
-        write_state(&target.state_path, &state)?;
-    }
-    Ok(true)
-}
-
-fn uninstall_service(target: &ServiceTarget) -> Result<(), Box<dyn Error>> {
-    if stop_service(target, true)? {
-        println!("service uninstalled: {}", target.state_path.display());
-    }
-    Ok(())
-}
-
-fn print_status(target: &ServiceTarget) -> Result<(), Box<dyn Error>> {
-    let Some(state) = read_state(&target.state_path)? else {
-        println!("not installed: {}", target.state_path.display());
-        return Ok(());
-    };
-
-    match classify_state(&state) {
-        RuntimeStatus::Running => println!(
-            "running: pid={} workflow={} log={}",
-            state.pid.unwrap_or_default(),
-            state.workflow_path.display(),
-            state.log_path.display()
-        ),
-        RuntimeStatus::Stopped => println!(
-            "stopped: workflow={} log={}",
-            state.workflow_path.display(),
-            state.log_path.display()
-        ),
-        RuntimeStatus::Stale => println!(
-            "stale: pid={} workflow={} log={}",
-            state.pid.unwrap_or_default(),
-            state.workflow_path.display(),
-            state.log_path.display()
-        ),
-    }
-    Ok(())
-}
-
-fn print_logs(target: &ServiceTarget, lines: usize, follow: bool) -> Result<(), Box<dyn Error>> {
-    let path = read_state(&target.state_path)?
-        .map(|state| state.log_path)
-        .unwrap_or_else(|| target.log_path.clone());
-    if !path.exists() {
-        println!("service logs not found: {}", path.display());
-        return Ok(());
-    }
-
-    print_recent_lines(&path, lines)?;
-    if follow {
-        follow_log(&path)?;
     }
     Ok(())
 }
@@ -390,21 +405,6 @@ fn classify_state(state: &ServiceState) -> RuntimeStatus {
         (StoredStatus::Running, Some(_)) => RuntimeStatus::Stale,
         _ => RuntimeStatus::Stopped,
     }
-}
-
-fn daemon_args(target: &ServiceTarget, port: Option<u16>) -> Vec<String> {
-    let mut args = vec![target.workflow_path.display().to_string()];
-    if let Some(port) = port {
-        args.push("--port".to_string());
-        args.push(port.to_string());
-    }
-    args
-}
-
-fn display_command(executable: &Path, target: &ServiceTarget, port: Option<u16>) -> Vec<String> {
-    let mut command = vec![executable.display().to_string()];
-    command.extend(daemon_args(target, port));
-    command
 }
 
 fn service_dir_for_workflow(workflow_path: &Path) -> PathBuf {
@@ -683,7 +683,7 @@ mod tests {
         };
 
         assert_eq!(
-            daemon_args(&target, target.port),
+            target.daemon_args(target.port),
             vec!["/tmp/vik/WORKFLOW.md", "--port", "3000"]
         );
     }
@@ -691,15 +691,18 @@ mod tests {
     #[test]
     fn effective_service_port_reuses_stored_port_without_override() {
         let state = service_state_with_port(Some(3000));
+        let target = service_target_with_cwd(PathBuf::from("/tmp/vik"));
 
-        assert_eq!(effective_service_port(None, Some(&state)), Some(3000));
+        assert_eq!(target.effective_port(Some(&state)), Some(3000));
     }
 
     #[test]
     fn effective_service_port_prefers_requested_override() {
         let state = service_state_with_port(Some(3000));
+        let mut target = service_target_with_cwd(PathBuf::from("/tmp/vik"));
+        target.port = Some(4000);
 
-        assert_eq!(effective_service_port(Some(4000), Some(&state)), Some(4000));
+        assert_eq!(target.effective_port(Some(&state)), Some(4000));
     }
 
     #[test]
@@ -708,7 +711,7 @@ mod tests {
         let state = service_state_with_cwd(PathBuf::from("/tmp/installed-cwd"), None);
 
         assert_eq!(
-            effective_service_cwd(&target, Some(&state)),
+            target.effective_cwd(Some(&state)),
             PathBuf::from("/tmp/installed-cwd")
         );
     }
@@ -718,10 +721,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let workflow_path = dir.path().join("WORKFLOW.md");
         write_workflow(&workflow_path, "work-a");
-        let first = load_target(Some(workflow_path.clone()), None, false).unwrap();
+        let first = ServiceTarget::load(Some(workflow_path.clone()), None, false).unwrap();
 
         write_workflow(&workflow_path, "work-b");
-        let second = load_target(Some(workflow_path.clone()), None, false).unwrap();
+        let second = ServiceTarget::load(Some(workflow_path.clone()), None, false).unwrap();
 
         assert_eq!(first.state_path, second.state_path);
         let expected_root = fs::canonicalize(dir.path()).unwrap();
@@ -737,7 +740,7 @@ mod tests {
         let workflow_path = dir.path().join("WORKFLOW.md");
         fs::write(&workflow_path, "---\ntracker: [\n---\nBody").unwrap();
 
-        let target = load_target(Some(workflow_path.clone()), None, false).unwrap();
+        let target = ServiceTarget::load(Some(workflow_path.clone()), None, false).unwrap();
 
         assert_eq!(
             target.service_dir,
@@ -753,7 +756,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let workflow_path = dir.path().join("WORKFLOW.md");
 
-        let target = load_target(Some(workflow_path.clone()), None, false).unwrap();
+        let target = ServiceTarget::load(Some(workflow_path.clone()), None, false).unwrap();
 
         assert_eq!(target.workflow_path, workflow_path);
         assert_eq!(target.service_dir, dir.path().join(".vik").join("service"));
