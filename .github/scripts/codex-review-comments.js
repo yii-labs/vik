@@ -257,6 +257,7 @@ function splitFindingBlocks(markdown) {
 
 function parseReviewCommentBlocks(markdown, changedLineMap) {
   const comments = [];
+  const consumedHeadings = new Set();
   const lines = markdown.split(/\r?\n/);
   const paths = sortedChangedPaths(changedLineMap);
 
@@ -309,10 +310,11 @@ function parseReviewCommentBlocks(markdown, changedLineMap) {
 
     if (comment) {
       comments.push(comment);
+      consumedHeadings.add(lines[index].trim());
     }
   }
 
-  return comments;
+  return { comments, consumedHeadings };
 }
 
 function escapeRegex(value) {
@@ -349,7 +351,7 @@ function stripParserHints(block) {
     .trim();
 }
 
-function inferMarkdownPayloads(markdown, changedLineMap, ignoredLineKeys = new Set()) {
+function inferMarkdownPayloads(markdown, changedLineMap, consumedHeadings = new Set()) {
   if (/No blocking findings found\./i.test(markdown)) {
     return [];
   }
@@ -363,6 +365,11 @@ function inferMarkdownPayloads(markdown, changedLineMap, ignoredLineKeys = new S
       continue;
     }
 
+    const firstLine = block.split(/\r?\n/, 1)[0].trim();
+    if (consumedHeadings.has(firstLine)) {
+      continue;
+    }
+
     for (const path of paths) {
       if (!block.includes(path)) {
         continue;
@@ -373,9 +380,6 @@ function inferMarkdownPayloads(markdown, changedLineMap, ignoredLineKeys = new S
       const comment = normalizeCommentPayload({ path, line, body }, changedLineMap);
 
       if (comment) {
-        if (ignoredLineKeys.has(commentLineKey(comment))) {
-          break;
-        }
         comments.push(comment);
         break;
       }
@@ -383,20 +387,6 @@ function inferMarkdownPayloads(markdown, changedLineMap, ignoredLineKeys = new S
   }
 
   return comments;
-}
-
-function commentLineKey(comment, line = comment.line) {
-  return `${comment.path}:${line}:${comment.side || 'RIGHT'}`;
-}
-
-function commentLineKeys(comment) {
-  const keys = [commentLineKey(comment)];
-
-  if (comment.start_line) {
-    keys.push(commentLineKey(comment, comment.start_line));
-  }
-
-  return keys;
 }
 
 function commentDedupeKey(comment) {
@@ -428,16 +418,16 @@ function dedupeComments(comments) {
 
 function extractReviewComments(markdown, files) {
   const changedLineMap = buildChangedLineMap(files);
+  const reviewCommentBlocks = parseReviewCommentBlocks(markdown, changedLineMap);
   const structuredComments = [
     ...parseJsonPayloads(markdown, changedLineMap),
     ...parseFencedPayloads(markdown, changedLineMap),
     ...parseHiddenPayloads(markdown, changedLineMap),
-    ...parseReviewCommentBlocks(markdown, changedLineMap),
+    ...reviewCommentBlocks.comments,
   ];
-  const structuredLineKeys = new Set(structuredComments.flatMap(commentLineKeys));
   const comments = [
     ...structuredComments,
-    ...inferMarkdownPayloads(markdown, changedLineMap, structuredLineKeys),
+    ...inferMarkdownPayloads(markdown, changedLineMap, reviewCommentBlocks.consumedHeadings),
   ];
 
   return dedupeComments(comments);

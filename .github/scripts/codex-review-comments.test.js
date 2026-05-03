@@ -210,6 +210,29 @@ test('parses duplicated plain-text Codex review findings cleanly', () => {
   assert.equal(payload.body, '<!-- codex-review -->\n## Codex Review\n\nPosted 1 inline review comment.');
 });
 
+test('keeps distinct fallback findings on the same line', () => {
+  const dash = '\u2014';
+  const comments = extractReviewComments(
+    [
+      '## Codex Review',
+      '',
+      'Review comment:',
+      '',
+      `- [P2] Route delayed turn messages before logging ${dash} /tmp/github-runner-workdir/vik/vik/review/crates/vik-agent/src/process.rs:220-220`,
+      '  First issue detail.',
+      '',
+      '- [P2] Preserve another same-line finding',
+      '  Impact: this also affects crates/vik-agent/src/process.rs:220.',
+      '  Fix: keep distinct fallback comments.',
+    ].join('\n'),
+    files,
+  );
+
+  assert.equal(comments.length, 2);
+  assert.equal(comments[0].body, '[P2] Route delayed turn messages before logging\n\nFirst issue detail.');
+  assert.match(comments[1].body, /Preserve another same-line finding/);
+});
+
 test('keeps fallback parsing for P-list findings with path in body', () => {
   const comments = extractReviewComments(
     [
