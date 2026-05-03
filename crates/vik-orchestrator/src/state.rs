@@ -16,6 +16,7 @@ pub struct OrchestratorState {
     pub issue_identifiers: HashMap<String, String>,
     pub claimed: HashSet<String>,
     pub retry_attempts: HashMap<String, RetryEntry>,
+    pub session_file_ids: HashMap<String, String>,
     pub completed: HashSet<String>,
     pub codex_totals: TokenTotals,
     pub codex_rate_limits: Option<Value>,
@@ -32,6 +33,7 @@ impl OrchestratorState {
             issue_identifiers: HashMap::new(),
             claimed: HashSet::new(),
             retry_attempts: HashMap::new(),
+            session_file_ids: HashMap::new(),
             completed: HashSet::new(),
             codex_totals: TokenTotals::default(),
             codex_rate_limits: None,
@@ -76,6 +78,7 @@ pub struct RunningEntry {
     pub retry_attempt: Option<u32>,
     pub started_at: DateTime<Utc>,
     pub workspace_path: Option<std::path::PathBuf>,
+    pub session_file_id: String,
     pub session_id: Option<String>,
     pub turn_count: u32,
     pub last_event: Option<String>,
@@ -104,4 +107,12 @@ impl RunningEntry {
             workspace_path: self.workspace_path.clone(),
         }
     }
+}
+
+pub(crate) fn new_session_file_id(now: DateTime<Utc>) -> String {
+    format!(
+        "{}-{:016x}",
+        now.format("%Y%m%dT%H%M%SZ"),
+        fastrand::u64(..)
+    )
 }

@@ -9,7 +9,7 @@ use vik_core::{
     sanitize_workspace_key,
 };
 
-const SESSION_LOG_DIR: &str = "codex-session-logs";
+const SESSION_LOG_DIR: &str = "sessions";
 const SESSION_LOG_TAIL_CHUNK_BYTES: u64 = 16 * 1024;
 
 pub(crate) async fn append_session_log_blocking(
@@ -35,7 +35,7 @@ pub(crate) fn append_session_log(
     logging_dir: &Path,
     entry: &CodexSessionLogEntry,
 ) -> io::Result<PathBuf> {
-    let path = session_log_path(logging_dir, &entry.issue_identifier);
+    let path = session_log_path(logging_dir, entry);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -53,10 +53,29 @@ pub(crate) fn read_session_logs(
     issue_identifier: &str,
     limit: usize,
 ) -> io::Result<Vec<CodexSessionLogEntry>> {
-    let path = session_log_path(logging_dir, issue_identifier);
-    if limit > 0 {
-        return read_recent_session_logs(&path, limit);
+    let paths = session_log_paths(logging_dir, issue_identifier)?;
+    let mut entries = Vec::new();
+    for path in paths {
+        let mut file_entries = if limit > 0 {
+            read_recent_session_logs(&path, limit)?
+        } else {
+            read_all_session_logs(&path)?
+        };
+        entries.append(&mut file_entries);
     }
+    entries.sort_by(|left, right| {
+        left.timestamp
+            .cmp(&right.timestamp)
+            .then_with(|| left.session_file_id.cmp(&right.session_file_id))
+            .then_with(|| left.sequence.cmp(&right.sequence))
+    });
+    if limit > 0 && entries.len() > limit {
+        entries.drain(0..entries.len() - limit);
+    }
+    Ok(entries)
+}
+
+fn read_all_session_logs(path: &Path) -> io::Result<Vec<CodexSessionLogEntry>> {
     let file = match File::open(&path) {
         Ok(file) => file,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -122,11 +141,50 @@ fn next_sequence(path: &Path) -> io::Result<u64> {
     Ok(last_sequence(path)?.unwrap_or_default() + 1)
 }
 
-fn session_log_path(logging_dir: &Path, issue_identifier: &str) -> PathBuf {
-    logging_dir.join(SESSION_LOG_DIR).join(format!(
-        "{}.jsonl",
-        sanitize_workspace_key(issue_identifier)
-    ))
+fn session_log_path(logging_dir: &Path, entry: &CodexSessionLogEntry) -> PathBuf {
+    logging_dir
+        .join(SESSION_LOG_DIR)
+        .join(session_log_file_name(entry))
+}
+
+fn session_log_file_name(entry: &CodexSessionLogEntry) -> String {
+    let file_id = if entry.session_file_id.trim().is_empty() {
+        entry.session_id.as_deref().unwrap_or("unknown")
+    } else {
+        &entry.session_file_id
+    };
+    format!(
+        "{}-{}.jsonl",
+        sanitize_workspace_key(&entry.issue_identifier),
+        sanitize_workspace_key(file_id)
+    )
+}
+
+fn session_log_paths(logging_dir: &Path, issue_identifier: &str) -> io::Result<Vec<PathBuf>> {
+    let dir = logging_dir.join(SESSION_LOG_DIR);
+    let read_dir = match fs::read_dir(&dir) {
+        Ok(read_dir) => read_dir,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err),
+    };
+    let file_prefix = format!("{}-", sanitize_workspace_key(issue_identifier));
+    let mut paths = Vec::new();
+    for entry in read_dir {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if !file_type.is_file() {
+            continue;
+        }
+        let file_name = entry.file_name();
+        let Some(file_name) = file_name.to_str() else {
+            continue;
+        };
+        if file_name.starts_with(&file_prefix) && file_name.ends_with(".jsonl") {
+            paths.push(entry.path());
+        }
+    }
+    paths.sort();
+    Ok(paths)
 }
 
 fn read_recent_session_logs(path: &Path, limit: usize) -> io::Result<Vec<CodexSessionLogEntry>> {

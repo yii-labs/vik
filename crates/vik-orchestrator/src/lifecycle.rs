@@ -8,7 +8,7 @@ use vik_workflow::{LoadedWorkflow, ServiceConfig};
 use vik_workspace::WorkspaceManager;
 
 use crate::engine::Orchestrator;
-use crate::state::RunningEntry;
+use crate::state::{RunningEntry, new_session_file_id};
 
 impl<T, W> Orchestrator<T, W>
 where
@@ -67,6 +67,7 @@ where
         let outcome_tx = self.outcome_tx.clone();
         let issue_id = issue.id.clone();
         let issue_identifier = issue.identifier.clone();
+        let session_file_id = new_session_file_id(Utc::now());
         let handle = tokio::spawn(async move {
             let outcome = worker.run(request, events).await;
             let _ = outcome_tx.send(outcome.clone());
@@ -76,6 +77,9 @@ where
         state
             .issue_identifiers
             .insert(issue_id.clone(), issue_identifier.clone());
+        state
+            .session_file_ids
+            .insert(issue_id.clone(), session_file_id.clone());
         state.claimed.insert(issue_id.clone());
         state.retry_attempts.remove(&issue_id);
         state.running.insert(
@@ -86,6 +90,7 @@ where
                 retry_attempt: attempt,
                 started_at: Utc::now(),
                 workspace_path: Some(workspace_path),
+                session_file_id,
                 session_id: None,
                 turn_count: 0,
                 last_event: None,

@@ -3,7 +3,7 @@ use vik_workflow::ServiceConfig;
 
 use crate::CONTINUATION_RETRY_MS;
 use crate::dispatch::failure_backoff_ms;
-use crate::state::OrchestratorState;
+use crate::state::{OrchestratorState, new_session_file_id};
 
 impl OrchestratorState {
     pub fn apply_agent_event(&mut self, event: AgentEvent) -> CodexSessionLogEntry {
@@ -17,6 +17,14 @@ impl OrchestratorState {
             self.issue_identifiers
                 .insert(event.issue_id.clone(), issue_identifier.clone());
         }
+        let session_file_id = self
+            .running
+            .get(&event.issue_id)
+            .map(|entry| entry.session_file_id.clone())
+            .or_else(|| self.session_file_ids.get(&event.issue_id).cloned())
+            .unwrap_or_else(|| new_session_file_id(event.timestamp));
+        self.session_file_ids
+            .insert(event.issue_id.clone(), session_file_id.clone());
         let session_id = event
             .session
             .as_ref()
@@ -29,7 +37,8 @@ impl OrchestratorState {
             codex_event=%event.event,
             "codex_update outcome=received"
         );
-        let log_entry = CodexSessionLogEntry::from_agent_event(issue_identifier, &event);
+        let log_entry = CodexSessionLogEntry::from_agent_event(issue_identifier, &event)
+            .with_session_file_id(session_file_id.clone());
         if let Some(entry) = self.running.get_mut(&event.issue_id) {
             entry.last_event = Some(event.event.clone());
             entry.last_message = event.message.clone();
@@ -88,6 +97,8 @@ impl OrchestratorState {
             .insert(outcome.issue_id.clone(), outcome.issue_identifier.clone());
         let running = self.running.remove(&outcome.issue_id);
         if let Some(entry) = running {
+            self.session_file_ids
+                .insert(outcome.issue_id.clone(), entry.session_file_id.clone());
             self.codex_totals.seconds_running += (outcome.finished_at - entry.started_at)
                 .num_milliseconds()
                 .max(0) as f64
