@@ -15,16 +15,19 @@ Default log directory:
 Service runs also write detached stdout and stderr to:
 
 ```text
-<workflow-directory>/.vik/service/<workflow-name>.log
+<workflow-directory>/.vik/service/<workflow-stem>-<path-hash>.log
 ```
 
 Useful commands:
 
 ```sh
-tail -f .vik/logs/vik.log.*
+tail -f "$HOME/code/vik-workspaces/.vik/logs"/vik.log.*
 cargo run --locked -p vik-cli -- service logs --lines 100
 cargo run --locked -p vik-cli -- service logs --follow
 ```
+
+Adjust the first command when `workspace.root` or `logging.dir` differs from
+the checked-in `WORKFLOW.md`.
 
 ## HTTP Server
 

@@ -35,11 +35,20 @@ LINEAR_API_KEY=ci-placeholder cargo run --locked -p vik-cli -- ./WORKFLOW.md --c
 
 ## Local Smoke Run
 
-Use an isolated Linear project and workspace root for real daemon testing:
+Use an isolated Linear project and workspace root for real daemon testing. Do
+not point a smoke run at the shared project unless that is the test target.
 
 ```sh
-mkdir -p "$HOME/code/vik-workspaces"
-cargo run --locked -p vik-cli -- ./WORKFLOW.md --port 3000
+: "${VIK_LINEAR_PROJECT_SLUG:?set isolated Linear project slug}"
+mkdir -p .tests "$HOME/code/vik-workspaces-local"
+cp WORKFLOW.md .tests/WORKFLOW.local.md
+perl -0pi -e "s/project_slug: \"[^\"]+\"/project_slug: \"$VIK_LINEAR_PROJECT_SLUG\"/" \
+  .tests/WORKFLOW.local.md
+perl -0pi -e "s|root: .*|root: ~/code/vik-workspaces-local|" \
+  .tests/WORKFLOW.local.md
+LINEAR_API_KEY=ci-placeholder cargo run --locked -p vik-cli -- \
+  .tests/WORKFLOW.local.md --check
+cargo run --locked -p vik-cli -- .tests/WORKFLOW.local.md --port 3000
 ```
 
 Inspect:

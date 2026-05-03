@@ -36,8 +36,13 @@ Status values:
 Service stdout and stderr are written to:
 
 ```text
-<workflow-directory>/.vik/service/<workflow-name>.log
+<workflow-directory>/.vik/service/<workflow-stem>-<path-hash>.log
 ```
+
+The service state file uses the same name with `.json`. The CLI derives the
+name from the sanitized workflow file stem plus a stable hash of the full
+workflow path. Use `service status` or `service logs` when possible; both
+commands resolve the exact file path for the workflow.
 
 Read recent logs:
 
