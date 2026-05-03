@@ -51,8 +51,9 @@ cargo run -p vik-cli -- service uninstall
 ```
 
 The service commands default to `./WORKFLOW.md` in the current working directory when no workflow
-path is provided. Pass a workflow path only when managing a workflow from another directory.
-Service state and detached stdout/stderr logs live under `<workflow-directory>/.vik/service`.
+path is provided. Pass a workflow path when managing a workflow from another directory or when the
+workflow file is not named `WORKFLOW.md`. Service state and detached stdout/stderr logs live under
+`<workflow-directory>/.vik/service`.
 
 Daemon logs are JSON lines on stdout and in a daily file under `logging.dir`. If
 `logging.dir` is omitted, Vik writes to `<workspace.root>/.vik/logs/vik.log.<date>`.
