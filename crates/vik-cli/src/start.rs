@@ -4,6 +4,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use clap::Args;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 use vik_agent::LocalAgentWorker;
@@ -12,12 +13,22 @@ use vik_orchestrator::Orchestrator;
 use vik_tracker::{DEFAULT_LINEAR_ENDPOINT, LinearClient, LinearClientConfig};
 use vik_workflow::WorkflowReloader;
 
-pub(crate) async fn run(
-    workflow: Option<PathBuf>,
-    port: Option<u16>,
-    bind_address: Option<IpAddr>,
-) -> Result<(), Box<dyn Error>> {
-    let reloader = WorkflowReloader::start(workflow)?;
+#[derive(Debug, Args)]
+pub(crate) struct StartArgs {
+    /// Path to WORKFLOW.md. Defaults to ./WORKFLOW.md.
+    pub(crate) workflow: Option<PathBuf>,
+
+    /// Enable HTTP status server. Overrides server.port from WORKFLOW.md.
+    #[arg(long)]
+    pub(crate) port: Option<u16>,
+
+    /// HTTP status server bind address. Defaults to 127.0.0.1.
+    #[arg(long, alias = "host", value_name = "ADDR")]
+    pub(crate) bind_address: Option<IpAddr>,
+}
+
+pub(crate) async fn run(args: StartArgs) -> Result<(), Box<dyn Error>> {
+    let reloader = WorkflowReloader::start(args.workflow)?;
     let loaded = reloader.current().clone();
     loaded.config.validate_for_dispatch()?;
 
@@ -39,11 +50,13 @@ pub(crate) async fn run(
     let worker = Arc::new(LocalAgentWorker::new(Arc::clone(&tracker)));
     let orchestrator = Arc::new(Orchestrator::new(Arc::clone(&tracker), worker, reloader));
 
-    let port = port.or(loaded.config.server.as_ref().map(|server| server.port));
+    let port = args
+        .port
+        .or(loaded.config.server.as_ref().map(|server| server.port));
     if let Some(port) = port {
         let orch_for_state = Arc::clone(&orchestrator);
         let orch_for_issue = Arc::clone(&orchestrator);
-        let addr = http_addr(bind_address, port);
+        let addr = http_addr(args.bind_address, port);
         let bound = serve(
             addr,
             HttpState {

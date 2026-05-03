@@ -1,6 +1,4 @@
 use std::error::Error;
-use std::net::IpAddr;
-use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
@@ -17,24 +15,10 @@ pub(crate) struct Args {
     command: Command,
 }
 
-#[derive(Debug, clap::Args)]
-struct StartArgs {
-    /// Path to WORKFLOW.md. Defaults to ./WORKFLOW.md.
-    workflow: Option<PathBuf>,
-
-    /// Enable HTTP status server. Overrides server.port from WORKFLOW.md.
-    #[arg(long)]
-    port: Option<u16>,
-
-    /// HTTP status server bind address. Defaults to 127.0.0.1.
-    #[arg(long, alias = "host", value_name = "ADDR")]
-    bind_address: Option<IpAddr>,
-}
-
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Start Vik coding-agent orchestration.
-    Start(StartArgs),
+    Start(crate::start::StartArgs),
     /// Validate workflow and exit.
     Check(crate::check::CheckArgs),
     /// Manage Vik as a detached local service.
@@ -44,19 +28,15 @@ enum Command {
 pub(crate) async fn run(args: Args) -> Result<(), Box<dyn Error>> {
     match args.command {
         Command::Start(args) => {
-            load_dotenv()?;
-            crate::start::run(args.workflow, args.port, args.bind_address).await
+            crate::env::load_dotenv()?;
+            crate::start::run(args).await
         }
         Command::Check(args) => {
-            load_dotenv()?;
+            crate::env::load_dotenv()?;
             crate::check::run(args.workflow)
         }
         Command::Service(args) => crate::service::run(args).await,
     }
-}
-
-fn load_dotenv() -> Result<(), Box<dyn Error>> {
-    crate::env::load_dotenv()
 }
 
 #[cfg(test)]
