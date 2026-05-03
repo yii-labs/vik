@@ -44,8 +44,8 @@ Fields:
 - `terminal_states`: states that stop tracking and may trigger cleanup.
 - `filter`: optional delegable issue filter. Omitted filter values and empty
   lists match all issues.
-  - `assignee`: Linear user IDs, names, display names, or email addresses.
-  - `tag`: Linear label names.
+  - `assignees`: Linear user IDs, names, display names, or email addresses.
+  - `tags`: Linear label names.
 
 `LINEAR_API_KEY` is loaded from `.env` before dispatch validation. Do not commit
 real keys.
@@ -56,8 +56,8 @@ Linear labels:
 ```yaml
 tracker:
   filter:
-    assignee: [user-a, user-b]
-    tag: [agent, codex]
+    assignees: [user-a, user-b]
+    tags: [agent, codex]
 ```
 
 ## Polling

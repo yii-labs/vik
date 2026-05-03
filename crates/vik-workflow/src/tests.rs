@@ -72,8 +72,8 @@ fn applies_defaults_and_path_resolution() {
         config.codex.approvals_reviewer,
         Some(serde_json::Value::String("auto_review".to_string()))
     );
-    assert!(config.tracker.filter.assignee.is_empty());
-    assert!(config.tracker.filter.tag.is_empty());
+    assert!(config.tracker.filter.assignees.is_empty());
+    assert!(config.tracker.filter.tags.is_empty());
     assert!(
         !config
             .agent
@@ -88,15 +88,15 @@ fn parses_tracker_filter() {
     let path = dir.path().join("WORKFLOW.md");
     fs::write(
         &path,
-        "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\n  filter:\n    assignee:\n      - user-a\n      - user-b\n    tag:\n      - agent\n      - codex\nworkspace:\n  root: work\n---\nBody",
+        "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\n  filter:\n    assignees:\n      - user-a\n      - user-b\n    tags:\n      - agent\n      - codex\nworkspace:\n  root: work\n---\nBody",
     )
     .unwrap();
 
     let def = parse_workflow_file(&path).unwrap();
     let config = ServiceConfig::from_definition(&def).unwrap();
 
-    assert_eq!(config.tracker.filter.assignee, vec!["user-a", "user-b"]);
-    assert_eq!(config.tracker.filter.tag, vec!["agent", "codex"]);
+    assert_eq!(config.tracker.filter.assignees, vec!["user-a", "user-b"]);
+    assert_eq!(config.tracker.filter.tags, vec!["agent", "codex"]);
 }
 
 #[test]
@@ -105,15 +105,15 @@ fn empty_tracker_filter_lists_match_all_issues() {
     let path = dir.path().join("WORKFLOW.md");
     fs::write(
         &path,
-        "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\n  filter:\n    assignee: []\n    tag: []\nworkspace:\n  root: work\n---\nBody",
+        "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\n  filter:\n    assignees: []\n    tags: []\nworkspace:\n  root: work\n---\nBody",
     )
     .unwrap();
 
     let def = parse_workflow_file(&path).unwrap();
     let config = ServiceConfig::from_definition(&def).unwrap();
 
-    assert!(config.tracker.filter.assignee.is_empty());
-    assert!(config.tracker.filter.tag.is_empty());
+    assert!(config.tracker.filter.assignees.is_empty());
+    assert!(config.tracker.filter.tags.is_empty());
 }
 
 #[test]

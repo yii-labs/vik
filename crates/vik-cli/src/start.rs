@@ -49,8 +49,8 @@ pub(crate) async fn run(args: StartArgs) -> Result<(), Box<dyn Error>> {
         loaded.config.tracker.active_states.clone(),
     )
     .with_filter(LinearIssueFilterConfig::new(
-        loaded.config.tracker.filter.assignee.clone(),
-        loaded.config.tracker.filter.tag.clone(),
+        loaded.config.tracker.filter.assignees.clone(),
+        loaded.config.tracker.filter.tags.clone(),
     ));
     let tracker = Arc::new(LinearClient::new(tracker_config)?);
     let worker = Arc::new(LocalAgentWorker::new(Arc::clone(&tracker)));

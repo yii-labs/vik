@@ -46,21 +46,21 @@ impl LinearClientConfig {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LinearIssueFilterConfig {
-    pub assignee: Vec<String>,
-    pub tag: Vec<String>,
+    pub assignees: Vec<String>,
+    pub tags: Vec<String>,
 }
 
 impl LinearIssueFilterConfig {
-    pub fn new(assignee: Vec<String>, tag: Vec<String>) -> Self {
+    pub fn new(assignees: Vec<String>, tags: Vec<String>) -> Self {
         Self {
-            assignee: clean_filter_values(assignee),
-            tag: clean_filter_values(tag),
+            assignees: clean_filter_values(assignees),
+            tags: clean_filter_values(tags),
         }
     }
 
     pub(crate) fn assignee_filter_value(&self) -> Value {
         let clauses = self
-            .assignee
+            .assignees
             .iter()
             .flat_map(|assignee| {
                 [
@@ -76,7 +76,7 @@ impl LinearIssueFilterConfig {
 
     pub(crate) fn label_filter_value(&self) -> Value {
         let clauses = self
-            .tag
+            .tags
             .iter()
             .map(|tag| json!({ "name": { "eqIgnoreCase": tag } }))
             .collect();

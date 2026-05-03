@@ -26,9 +26,9 @@ pub struct TrackerConfig {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrackerFilterConfig {
     #[serde(default)]
-    pub assignee: Vec<String>,
+    pub assignees: Vec<String>,
     #[serde(default)]
-    pub tag: Vec<String>,
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -217,8 +217,8 @@ impl ServiceConfig {
         });
         let tracker_filter_map = nested_map(tracker_map, "filter");
         let filter = TrackerFilterConfig {
-            assignee: string_vec(tracker_filter_map, "assignee").unwrap_or_default(),
-            tag: string_vec(tracker_filter_map, "tag").unwrap_or_default(),
+            assignees: string_vec(tracker_filter_map, "assignees").unwrap_or_default(),
+            tags: string_vec(tracker_filter_map, "tags").unwrap_or_default(),
         };
 
         let workspace_root = string_value(workspace_map, "root")
