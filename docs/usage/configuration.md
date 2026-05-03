@@ -78,13 +78,15 @@ Vik sanitizes workspace names and prevents paths from escaping the root.
 
 ## Logging
 
-`logging.dir` controls daemon JSON log files. Default:
+`logging.dir` controls foreground daemon JSON log files. Default:
 
 ```text
 <workspace.root>/.vik/logs
 ```
 
-Each run logs to stdout and to a daily file named `vik.log.<date>`.
+Foreground `vik start` writes to stdout and to a daily file named
+`vik.log.<date>`. Service runs log to the service stdout/stderr log only and do
+not write `logging.dir`.
 
 ## Hooks
 

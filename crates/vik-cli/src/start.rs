@@ -27,6 +27,10 @@ pub(crate) struct StartArgs {
     /// HTTP status server bind address. Defaults to 127.0.0.1.
     #[arg(long, alias = "host", value_name = "ADDR")]
     pub(crate) bind_address: Option<IpAddr>,
+
+    /// Internal flag used by `vik service` to avoid duplicate daemon log files.
+    #[arg(long, hide = true)]
+    pub(crate) service_mode: bool,
 }
 
 pub(crate) async fn run(args: StartArgs) -> Result<(), Box<dyn Error>> {
@@ -35,8 +39,14 @@ pub(crate) async fn run(args: StartArgs) -> Result<(), Box<dyn Error>> {
     loaded.config.validate_for_dispatch()?;
 
     let log_dir = loaded.config.logging.dir.clone();
-    let _log_guard = init_logging(&log_dir)?;
-    tracing::info!(log_dir=%log_dir.display(), "logging outcome=started");
+    let log_mode = LogMode::from_service_mode(args.service_mode);
+    let _log_guard = init_logging(&log_dir, log_mode)?;
+    tracing::info!(
+        log_dir=%log_dir.display(),
+        service_mode=args.service_mode,
+        file_log=log_mode.writes_file(),
+        "logging outcome=started"
+    );
 
     let tracker_config = LinearClientConfig::new(
         if loaded.config.tracker.endpoint.is_empty() {
@@ -85,16 +95,25 @@ pub(crate) async fn run(args: StartArgs) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn init_logging(log_dir: &Path) -> Result<WorkerGuard, Box<dyn Error>> {
-    fs::create_dir_all(log_dir)?;
-    let file_appender = tracing_appender::rolling::daily(log_dir, "vik.log");
-    let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
+fn init_logging(log_dir: &Path, mode: LogMode) -> Result<Option<WorkerGuard>, Box<dyn Error>> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     let stdout_layer = tracing_subscriber::fmt::layer()
         .json()
         .with_current_span(false)
         .with_span_list(false);
+
+    if !mode.writes_file() {
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(stdout_layer)
+            .init();
+        return Ok(None);
+    }
+
+    fs::create_dir_all(log_dir)?;
+    let file_appender = tracing_appender::rolling::daily(log_dir, "vik.log");
+    let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(file_writer)
         .json()
@@ -106,11 +125,31 @@ fn init_logging(log_dir: &Path) -> Result<WorkerGuard, Box<dyn Error>> {
         .with(stdout_layer)
         .with(file_layer)
         .init();
-    Ok(guard)
+    Ok(Some(guard))
 }
 
 fn http_addr(host: Option<IpAddr>, port: u16) -> SocketAddr {
     SocketAddr::new(host.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)), port)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LogMode {
+    Foreground,
+    Service,
+}
+
+impl LogMode {
+    fn from_service_mode(service_mode: bool) -> Self {
+        if service_mode {
+            Self::Service
+        } else {
+            Self::Foreground
+        }
+    }
+
+    fn writes_file(self) -> bool {
+        matches!(self, Self::Foreground)
+    }
 }
 
 #[cfg(test)]
@@ -131,5 +170,15 @@ mod tests {
             http_addr(Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED)), 3000),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 3000)
         );
+    }
+
+    #[test]
+    fn foreground_mode_writes_configured_file_log() {
+        assert!(LogMode::from_service_mode(false).writes_file());
+    }
+
+    #[test]
+    fn service_mode_skips_configured_file_log() {
+        assert!(!LogMode::from_service_mode(true).writes_file());
     }
 }

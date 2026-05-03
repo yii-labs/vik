@@ -274,6 +274,7 @@ impl ServiceTarget {
         let mut args = vec![
             "start".to_string(),
             self.workflow_path.display().to_string(),
+            "--service-mode".to_string(),
         ];
         if let Some(port) = port {
             args.push("--port".to_string());
@@ -730,7 +731,13 @@ mod tests {
 
         assert_eq!(
             target.daemon_args(target.port),
-            vec!["start", "/tmp/vik/WORKFLOW.md", "--port", "3000"]
+            vec![
+                "start",
+                "/tmp/vik/WORKFLOW.md",
+                "--service-mode",
+                "--port",
+                "3000"
+            ]
         );
     }
 

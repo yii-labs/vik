@@ -56,7 +56,8 @@ Follow logs:
 vik service logs --follow
 ```
 
-Daemon JSON logs still use `logging.dir` from `WORKFLOW.md`.
+Service runs write daemon JSON logs through stdout/stderr into this service log.
+They do not also write the regular `logging.dir` file from `WORKFLOW.md`.
 
 ## Restart And Stop
 

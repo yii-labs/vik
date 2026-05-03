@@ -112,6 +112,16 @@ mod tests {
     }
 
     #[test]
+    fn start_command_accepts_hidden_service_mode() {
+        let args = Args::try_parse_from(["vik", "start", "WORKFLOW.md", "--service-mode"]).unwrap();
+
+        match args.command {
+            Command::Start(args) => assert!(args.service_mode),
+            other => panic!("expected start command, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn implicit_workflow_arg_is_rejected() {
         let err = Args::try_parse_from(["vik", "WORKFLOW.md"]).unwrap_err();
 
