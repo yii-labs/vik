@@ -121,7 +121,7 @@ pub struct CodexSessionLogEntry {
     #[serde(default)]
     pub sequence: u64,
     #[serde(default)]
-    pub session_log_id: String,
+    pub session_file_id: String,
     pub issue_id: String,
     pub issue_identifier: String,
     pub source: String,
@@ -150,7 +150,7 @@ impl CodexSessionLogEntry {
         };
         Self {
             sequence: 0,
-            session_log_id: String::new(),
+            session_file_id: String::new(),
             issue_id: event.issue_id.clone(),
             issue_identifier,
             source: "codex_app_server".to_string(),
@@ -167,6 +167,11 @@ impl CodexSessionLogEntry {
             message: event.message.clone(),
             raw: event.raw.clone(),
         }
+    }
+
+    pub fn with_session_file_id(mut self, session_file_id: impl Into<String>) -> Self {
+        self.session_file_id = session_file_id.into();
+        self
     }
 }
 

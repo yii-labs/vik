@@ -21,12 +21,11 @@ require_cmd() {
 
 require_env GITHUB_REPOSITORY
 require_env GITHUB_WORKSPACE
-require_env PR_NUMBER
 require_env BASE_REF
 require_env CODEX_REVIEW_OUTPUT
+require_env GH_TOKEN
 
 review_workspace="${REVIEW_WORKSPACE:-${GITHUB_WORKSPACE:-}}"
-prompt_file="${CODEX_REVIEW_PROMPT:-.github/codex/prompts/pr-review.md}"
 
 if [[ -z "${review_workspace}" ]]; then
   echo "Missing required environment variable: REVIEW_WORKSPACE or GITHUB_WORKSPACE" >&2
@@ -34,48 +33,38 @@ if [[ -z "${review_workspace}" ]]; then
 fi
 
 require_cmd codex
-require_cmd gh
 require_cmd git
+require_cmd base64
 
 cd "${review_workspace}"
-
-if [[ ! -f "${prompt_file}" ]]; then
-  echo "Missing Codex review prompt: ${prompt_file}" >&2
-  exit 2
-fi
 
 mkdir -p "$(dirname "${CODEX_REVIEW_OUTPUT}")"
 : >"${CODEX_REVIEW_OUTPUT}"
 
-gh auth status --hostname github.com >/dev/null
-
-git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
-
-tmp_dir="$(mktemp -d)"
-trap 'rm -rf "${tmp_dir}"' EXIT
-
-pr_context="${tmp_dir}/pr-context.json"
-review_prompt="${tmp_dir}/review-prompt.md"
-
-gh pr view "${PR_NUMBER}" \
-  --repo "${GITHUB_REPOSITORY}" \
-  --json title,url,body,author,baseRefName,headRefName,files \
-  >"${pr_context}"
-
-{
-  cat "${prompt_file}"
-  printf '\n## Pull Request Context\n\n'
-  printf '```json\n'
-  cat "${pr_context}"
-  printf '\n```\n'
-} >"${review_prompt}"
+basic_auth="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+git_auth_key='http.https://github.com/.extraheader'
+git config --local "${git_auth_key}" "AUTHORIZATION: basic ${basic_auth}"
+unset basic_auth
 
 set +e
+git fetch --no-tags "https://github.com/${GITHUB_REPOSITORY}.git" \
+  "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+fetch_status=$?
+set -e
+git config --local --unset-all "${git_auth_key}" >/dev/null 2>&1 || true
+unset git_auth_key
+
+if [[ "${fetch_status}" -ne 0 ]]; then
+  exit "${fetch_status}"
+fi
+
+set +e
+# The review subcommand owns prompt and PR context loading. Do not pass stdin:
+# current Codex CLI rejects combining `review --base` with a prompt argument.
 env -u GH_TOKEN -u GITHUB_TOKEN codex exec --sandbox read-only review \
   --base "origin/${BASE_REF}" \
   --ephemeral \
-  --output-last-message "${CODEX_REVIEW_OUTPUT}" \
-  - <"${review_prompt}"
+  --output-last-message "${CODEX_REVIEW_OUTPUT}"
 codex_status=$?
 set -e
 
