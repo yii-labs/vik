@@ -166,6 +166,34 @@ fn claude_code_spawn_process_command_uses_shell() {
 }
 
 #[test]
+fn claude_code_spawn_process_command_uses_direct_windows_argv() {
+    let config = ClaudeCodeConfig {
+        command: r#""C:\Program Files\Claude\claude.exe" -p --output-format stream-json"#
+            .to_string(),
+        model: Some("o'hara".to_string()),
+        permission_mode: Some("acceptEdits".to_string()),
+        ..ClaudeCodeConfig::default()
+    };
+    let command = claude_code_spawn_process_command_for_platform(&config, 1, HostPlatform::Windows);
+
+    assert_eq!(command.program(), r#"C:\Program Files\Claude\claude.exe"#);
+    assert_eq!(
+        command.args(),
+        &[
+            "-p".to_string(),
+            "--output-format".to_string(),
+            "stream-json".to_string(),
+            "--model".to_string(),
+            "o'hara".to_string(),
+            "--permission-mode".to_string(),
+            "acceptEdits".to_string(),
+            "--max-turns".to_string(),
+            "1".to_string(),
+        ]
+    );
+}
+
+#[test]
 fn thread_start_payload_uses_workspace_cwd() {
     let config = CodexConfig {
         approvals_reviewer: Some(json!("auto_review")),

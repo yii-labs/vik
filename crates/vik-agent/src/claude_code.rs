@@ -10,10 +10,13 @@ use tokio::time;
 use vik_core::{AgentEvent, HostPlatform, LiveSession, PosixShell, ShellInvocation, TokenUsage};
 use vik_workflow::{ClaudeCodeConfig, CodingAgentKind};
 
+use crate::adapter::EventSink;
 use crate::adapter::{CodingAgentAdapter, CodingAgentRun};
 use crate::error::AgentError;
 use crate::event::{agent_event, truncate};
 use crate::process::ProcessCommand;
+
+const CONTINUATION_PROMPT: &str = "Continue working on this Linear issue. Check current issue state and proceed only if it is still active.";
 
 #[derive(Debug, Clone)]
 pub(crate) struct ClaudeCodeClient {
@@ -45,30 +48,67 @@ async fn run_claude_code(
         return Err(AgentError::InvalidWorkspaceCwd);
     }
 
-    let command_display = claude_code_spawn_command(config, request.max_turns);
-    let command = claude_code_spawn_process_command(config, request.max_turns);
     let CodingAgentRun {
         workspace_path,
         issue_id,
         issue_title,
-        prompt,
+        prompt: first_prompt,
         on_event,
-        should_continue: _,
-        max_turns: _,
+        should_continue,
+        max_turns,
     } = request;
     let mut on_event = on_event;
+    let mut should_continue = should_continue;
+    let mut prompt = first_prompt;
+
+    for turn_count in 1..=max_turns {
+        run_claude_code_turn(
+            config,
+            ClaudeCodeTurn {
+                workspace_path: &workspace_path,
+                issue_id: &issue_id,
+                issue_title: &issue_title,
+                prompt,
+                turn_count,
+            },
+            &mut on_event,
+        )
+        .await?;
+        if turn_count >= max_turns || !should_continue().await? {
+            break;
+        }
+        prompt = CONTINUATION_PROMPT.to_string();
+    }
+    Ok(())
+}
+
+struct ClaudeCodeTurn<'a> {
+    workspace_path: &'a std::path::Path,
+    issue_id: &'a str,
+    issue_title: &'a str,
+    prompt: String,
+    turn_count: u32,
+}
+
+async fn run_claude_code_turn(
+    config: &ClaudeCodeConfig,
+    turn: ClaudeCodeTurn<'_>,
+    on_event: &mut EventSink,
+) -> Result<(), AgentError> {
+    let command_display = claude_code_spawn_command(config, 1);
+    let command = claude_code_spawn_process_command(config, 1);
 
     emit_lifecycle_event(
-        &mut on_event,
-        &issue_id,
+        on_event,
+        turn.issue_id,
         None,
         "claude_code_process_starting",
-        json!({ "command": command_display }),
+        json!({ "command": command_display, "turn_count": turn.turn_count }),
     );
     let mut process = Command::new(command.program());
     process
         .args(command.args())
-        .current_dir(&workspace_path)
+        .current_dir(turn.workspace_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -84,7 +124,7 @@ async fn run_claude_code(
             .unwrap_or_else(|| format!("process-{}", Utc::now().timestamp_millis())),
     );
     live.codex_app_server_pid = pid.clone();
-    live.turn_count = 1;
+    live.turn_count = turn.turn_count;
 
     if let Some(stderr) = child.stderr.take() {
         tokio::spawn(async move {
@@ -96,23 +136,27 @@ async fn run_claude_code(
     }
 
     emit_lifecycle_event(
-        &mut on_event,
-        &issue_id,
+        on_event,
+        turn.issue_id,
         Some(live.clone()),
         "claude_code_process_started",
         json!({ "pid": pid }),
     );
     emit_lifecycle_event(
-        &mut on_event,
-        &issue_id,
+        on_event,
+        turn.issue_id,
         Some(live.clone()),
         "claude_code_turn_started",
-        json!({ "title": issue_title, "cwd": workspace_path.display().to_string() }),
+        json!({
+            "title": turn.issue_title,
+            "cwd": turn.workspace_path.display().to_string(),
+            "turn_count": turn.turn_count,
+        }),
     );
 
     let mut stdin = child.stdin.take().ok_or(AgentError::PortExit)?;
     stdin
-        .write_all(prompt.as_bytes())
+        .write_all(turn.prompt.as_bytes())
         .await
         .map_err(|err| AgentError::ResponseError(err.to_string()))?;
     stdin
@@ -142,7 +186,7 @@ async fn run_claude_code(
                 }
                 let event = claude_code_event_name(&raw);
                 on_event(agent_event(
-                    issue_id.clone(),
+                    turn.issue_id.to_string(),
                     event,
                     Some(live.clone()),
                     claude_code_usage(&raw),
@@ -163,10 +207,13 @@ async fn run_claude_code(
         let _ = child.kill().await;
         return Err(AgentError::TurnTimeout);
     };
-    let status = time::timeout(remaining, child.wait())
-        .await
-        .map_err(|_| AgentError::TurnTimeout)?
-        .map_err(|err| AgentError::ResponseError(err.to_string()))?;
+    let status = match time::timeout(remaining, child.wait()).await {
+        Ok(result) => result.map_err(|err| AgentError::ResponseError(err.to_string()))?,
+        Err(_) => {
+            let _ = child.kill().await;
+            return Err(AgentError::TurnTimeout);
+        }
+    };
     if !status.success() {
         return Err(AgentError::ProcessExit {
             program: command.program().to_string(),
@@ -175,11 +222,11 @@ async fn run_claude_code(
     }
 
     emit_lifecycle_event(
-        &mut on_event,
-        &issue_id,
+        on_event,
+        turn.issue_id,
         Some(live),
         "claude_code_turn_completed",
-        json!({ "status": "completed" }),
+        json!({ "status": "completed", "turn_count": turn.turn_count }),
     );
     Ok(())
 }
@@ -217,16 +264,31 @@ pub(crate) fn claude_code_spawn_process_command_for_platform(
     max_turns: u32,
     platform: HostPlatform,
 ) -> ProcessCommand {
-    let command = claude_code_spawn_command(config, max_turns);
-    let shell = ShellInvocation::for_platform(&command, platform, PosixShell::Bash);
-    ProcessCommand::new(
-        shell.program(),
-        shell
-            .args()
-            .iter()
-            .copied()
-            .chain(std::iter::once(shell.command())),
-    )
+    match platform {
+        HostPlatform::Posix => {
+            let command = claude_code_spawn_command(config, max_turns);
+            let shell = ShellInvocation::for_platform(&command, platform, PosixShell::Bash);
+            ProcessCommand::new(
+                shell.program(),
+                shell
+                    .args()
+                    .iter()
+                    .copied()
+                    .chain(std::iter::once(shell.command())),
+            )
+        }
+        HostPlatform::Windows => claude_code_spawn_direct_command(config, max_turns),
+    }
+}
+
+fn claude_code_spawn_direct_command(config: &ClaudeCodeConfig, max_turns: u32) -> ProcessCommand {
+    let mut argv = split_windows_command_line(&config.command);
+    if argv.is_empty() {
+        return ProcessCommand::new(config.command.trim(), std::iter::empty::<String>());
+    }
+    argv.extend(claude_code_runtime_args(config, max_turns));
+    let program = argv.remove(0);
+    ProcessCommand::new(program, argv)
 }
 
 fn append_shell_arg(command: &mut String, value: &str) {
@@ -242,6 +304,74 @@ fn append_raw_arg(command: &mut String, value: &str) {
 
 fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn claude_code_runtime_args(config: &ClaudeCodeConfig, max_turns: u32) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(model) = config.model.as_deref().map(str::trim)
+        && !model.is_empty()
+    {
+        args.push("--model".to_string());
+        args.push(model.to_string());
+    }
+    if let Some(mode) = config.permission_mode.as_deref().map(str::trim)
+        && !mode.is_empty()
+    {
+        args.push("--permission-mode".to_string());
+        args.push(mode.to_string());
+    }
+    if max_turns > 0 {
+        args.push("--max-turns".to_string());
+        args.push(max_turns.to_string());
+    }
+    args
+}
+
+fn split_windows_command_line(input: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut arg_started = false;
+    let mut backslashes = 0;
+
+    for ch in input.trim().chars() {
+        match ch {
+            '\\' => {
+                backslashes += 1;
+                arg_started = true;
+            }
+            '"' => {
+                arg_started = true;
+                current.extend(std::iter::repeat_n('\\', backslashes / 2));
+                if backslashes % 2 == 0 {
+                    in_quotes = !in_quotes;
+                } else {
+                    current.push('"');
+                }
+                backslashes = 0;
+            }
+            ch if ch.is_whitespace() && !in_quotes => {
+                current.extend(std::iter::repeat_n('\\', backslashes));
+                backslashes = 0;
+                if arg_started {
+                    args.push(std::mem::take(&mut current));
+                    arg_started = false;
+                }
+            }
+            _ => {
+                current.extend(std::iter::repeat_n('\\', backslashes));
+                backslashes = 0;
+                current.push(ch);
+                arg_started = true;
+            }
+        }
+    }
+
+    current.extend(std::iter::repeat_n('\\', backslashes));
+    if arg_started {
+        args.push(current);
+    }
+    args
 }
 
 fn remaining_time(deadline: time::Instant) -> Option<Duration> {

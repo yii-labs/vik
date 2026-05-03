@@ -43,9 +43,9 @@ claude-code:
 - `permission_mode`: optional value appended as `--permission-mode`.
 - `turn_timeout_ms`: timeout for the headless process. Default: `3600000`.
 
-Vik writes the rendered issue prompt to the command stdin. Vik also appends
-`--max-turns` from `agent.max_turns` so the Claude Code process has the same
-turn budget as other adapters.
+Vik writes the rendered issue prompt to command stdin. Vik appends
+`--max-turns 1` for each headless process and repeats that process up to
+`agent.max_turns`, checking issue state between turns.
 
 If the agent needs Linear or GitHub access through MCP, include the required
 Claude Code MCP flags in `command` and validate them before daemon startup.

@@ -187,8 +187,9 @@ Common fields:
 - `permission_mode`
 - `turn_timeout_ms`
 
-Vik writes the rendered issue prompt to stdin and appends `--max-turns` from
-`agent.max_turns`.
+Vik writes the rendered issue prompt to stdin. Vik appends `--max-turns 1` for
+each headless process and repeats that process up to `agent.max_turns`, checking
+issue state between turns.
 
 See [Claude Code Agent](agents/claude-code.md) for setup and validation.
 
