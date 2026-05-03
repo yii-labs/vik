@@ -1,10 +1,12 @@
 use serde_json::json;
 use std::path::Path;
+use tempfile::TempDir;
 use vik_workflow::{CodexConfig, TrackerConfig};
 
-use crate::client::codex_spawn_command;
+use crate::client::{codex_spawn_command, message_belongs_to_turn};
 use crate::event::extract_usage;
 use crate::process::{permission_approval_result, thread_start_params, turn_start_params};
+use crate::session_log::{SessionLog, session_log_dir, session_log_path};
 use crate::tools::DynamicTools;
 
 #[test]
@@ -183,5 +185,103 @@ fn turn_start_external_sandbox_policy_is_preserved() {
     assert_eq!(
         payload.pointer("/sandboxPolicy/networkAccess"),
         Some(&json!("enabled"))
+    );
+}
+
+#[test]
+fn turn_start_buffered_message_routing_uses_message_turn_id() {
+    let early_new_turn = json!({
+        "method": "turn/started",
+        "params": {
+            "threadId": "thread-1",
+            "turn": { "id": "turn-2" }
+        }
+    });
+    let stale_old_turn = json!({
+        "method": "turn/completed",
+        "params": {
+            "threadId": "thread-1",
+            "turn": { "id": "turn-1" }
+        }
+    });
+    let server_request_without_turn = json!({
+        "id": 7,
+        "method": "item/tool/call",
+        "params": {}
+    });
+
+    assert!(message_belongs_to_turn(&early_new_turn, "turn-2"));
+    assert!(!message_belongs_to_turn(&stale_old_turn, "turn-2"));
+    assert!(message_belongs_to_turn(
+        &server_request_without_turn,
+        "turn-2"
+    ));
+}
+
+#[tokio::test]
+async fn session_log_appends_raw_codex_jsonl_under_workspace_sessions() {
+    let workspace_root = TempDir::new().unwrap();
+    let sessions = session_log_dir(workspace_root.path());
+    let path = session_log_path(&sessions, "VIK-11", "thread/one:turn two");
+    let mut session_log = SessionLog::open(path.clone()).await.unwrap();
+
+    session_log
+        .append_message(&json!({
+            "method": "turn/started",
+            "params": { "turn": { "id": "turn two" } }
+        }))
+        .await
+        .unwrap();
+    session_log
+        .append_message(&json!({
+            "method": "turn/completed",
+            "params": { "turn": { "status": "completed" } }
+        }))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        path,
+        workspace_root
+            .path()
+            .join(".vik")
+            .join("sessions")
+            .join("VIK-11-thread_one_turn_two.jsonl")
+    );
+    let contents = tokio::fs::read_to_string(&path).await.unwrap();
+    assert!(!contents.contains("VIK-11"));
+    assert!(!contents.contains("thread_one_turn_two"));
+    let lines: Vec<_> = contents.lines().collect();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(lines[0]).unwrap()["method"],
+        "turn/started"
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(lines[1]).unwrap()["method"],
+        "turn/completed"
+    );
+}
+
+#[tokio::test]
+async fn session_log_starts_new_line_after_torn_write() {
+    let workspace_root = TempDir::new().unwrap();
+    let sessions = session_log_dir(workspace_root.path());
+    let path = session_log_path(&sessions, "VIK-11", "session-1");
+    tokio::fs::create_dir_all(path.parent().unwrap())
+        .await
+        .unwrap();
+    tokio::fs::write(&path, b"{\"partial\":true").await.unwrap();
+    let mut session_log = SessionLog::open(path.clone()).await.unwrap();
+
+    session_log
+        .append_message(&json!({ "method": "turn/completed" }))
+        .await
+        .unwrap();
+
+    let contents = tokio::fs::read_to_string(&path).await.unwrap();
+    assert_eq!(
+        contents,
+        "{\"partial\":true\n{\"method\":\"turn/completed\"}\n"
     );
 }
