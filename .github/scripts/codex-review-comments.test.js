@@ -18,6 +18,20 @@ const files = [
   },
 ];
 
+const multiHunkFiles = [
+  {
+    filename: 'crates/vik-agent/src/process.rs',
+    patch: [
+      '@@ -10,2 +10,2 @@',
+      ' context 10',
+      '+new line 11',
+      '@@ -20,2 +20,2 @@',
+      ' context 20',
+      '+new line 21',
+    ].join('\n'),
+  },
+];
+
 test('extracts JSON-first review comments', () => {
   const comments = extractReviewComments(
     JSON.stringify({
@@ -109,6 +123,31 @@ test('keeps distinct range and single-line comments during dedupe', () => {
       line: 220,
       side: 'RIGHT',
       body: 'Same body.',
+    },
+  ]);
+});
+
+test('drops range metadata when endpoints cross diff hunks', () => {
+  const comments = extractReviewComments(
+    JSON.stringify({
+      comments: [
+        {
+          path: 'crates/vik-agent/src/process.rs',
+          start_line: 11,
+          line: 21,
+          body: 'Cross-hunk range.',
+        },
+      ],
+    }),
+    multiHunkFiles,
+  );
+
+  assert.deepEqual(comments, [
+    {
+      path: 'crates/vik-agent/src/process.rs',
+      line: 21,
+      side: 'RIGHT',
+      body: 'Cross-hunk range.',
     },
   ]);
 });

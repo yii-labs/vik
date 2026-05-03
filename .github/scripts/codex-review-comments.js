@@ -104,6 +104,16 @@ function parsePositiveInteger(value) {
   return Number.isInteger(number) && number > 0 ? number : null;
 }
 
+function hasVisibleLineRange(changedLines, startLine, endLine) {
+  for (let line = startLine; line <= endLine; line += 1) {
+    if (!changedLines.has(line)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 function normalizeCommentPayload(payload, changedLineMap) {
   if (!payload || typeof payload !== 'object') {
     return null;
@@ -123,14 +133,6 @@ function normalizeCommentPayload(payload, changedLineMap) {
     return null;
   }
 
-  if (startLine && startLine > line) {
-    return null;
-  }
-
-  if (startLine && !changedLines.has(startLine)) {
-    return null;
-  }
-
   const comment = {
     path,
     line,
@@ -138,7 +140,7 @@ function normalizeCommentPayload(payload, changedLineMap) {
     body,
   };
 
-  if (startLine && startLine !== line) {
+  if (startLine && startLine < line && hasVisibleLineRange(changedLines, startLine, line)) {
     comment.start_line = startLine;
     comment.start_side = 'RIGHT';
   }
