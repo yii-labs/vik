@@ -157,11 +157,47 @@ function collectPayloads(value) {
     return value.comments;
   }
 
+  if (value && Array.isArray(value.findings)) {
+    return value.findings.map(findingToPayload);
+  }
+
   if (value && typeof value === 'object') {
     return [value];
   }
 
   return [];
+}
+
+function parsePriorityLabel(value) {
+  const number = Number(value);
+  if (Number.isInteger(number) && number >= 0 && number <= 3) {
+    return `P${number}`;
+  }
+
+  const match = /^P([0-3])$/i.exec(String(value || '').trim());
+  return match ? `P${match[1]}` : '';
+}
+
+function findingToPayload(finding) {
+  if (!finding || typeof finding !== 'object') {
+    return null;
+  }
+
+  const codeLocation = finding.code_location || {};
+  const lineRange = codeLocation.line_range || finding.line_range || {};
+  const startLine = lineRange.start || lineRange.start_line;
+  const endLine = lineRange.end || lineRange.end_line || startLine;
+  const priority = parsePriorityLabel(finding.priority ?? finding.severity);
+  const title = String(finding.title || finding.summary || 'Codex finding').trim();
+  const detail = String(finding.body || finding.description || finding.explanation || '').trim();
+  const heading = priority ? `[${priority}] ${title}` : title;
+
+  return {
+    path: codeLocation.absolute_file_path || codeLocation.path || finding.path || finding.file || finding.filename || '',
+    start_line: startLine,
+    line: endLine,
+    body: [heading, detail].filter(Boolean).join('\n\n'),
+  };
 }
 
 function collectNormalizedPayloads(value, changedLineMap) {

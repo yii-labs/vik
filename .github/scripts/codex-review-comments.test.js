@@ -56,6 +56,43 @@ test('extracts JSON-first review comments', () => {
   ]);
 });
 
+test('extracts standard Codex findings JSON', () => {
+  const comments = extractReviewComments(
+    JSON.stringify({
+      findings: [
+        {
+          title: 'Route delayed turn messages before logging',
+          body: 'Apply turn-id routing before appending to the current session log.',
+          priority: 2,
+          code_location: {
+            absolute_file_path: '/tmp/github-runner-workdir/vik/vik/review/crates/vik-agent/src/process.rs',
+            line_range: {
+              start: 219,
+              end: 220,
+            },
+          },
+        },
+      ],
+    }),
+    files,
+  );
+
+  assert.deepEqual(comments, [
+    {
+      path: 'crates/vik-agent/src/process.rs',
+      line: 220,
+      side: 'RIGHT',
+      body: [
+        '[P2] Route delayed turn messages before logging',
+        '',
+        'Apply turn-id routing before appending to the current session log.',
+      ].join('\n'),
+      start_line: 219,
+      start_side: 'RIGHT',
+    },
+  ]);
+});
+
 test('extracts fenced JSON review comments with ranges', () => {
   const comments = extractReviewComments(
     [
