@@ -76,7 +76,7 @@ pub(crate) fn read_session_logs(
 }
 
 fn read_all_session_logs(path: &Path) -> io::Result<Vec<CodexSessionLogEntry>> {
-    let file = match File::open(&path) {
+    let file = match File::open(path) {
         Ok(file) => file,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(err) => return Err(err),
