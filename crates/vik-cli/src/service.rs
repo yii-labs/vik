@@ -617,15 +617,15 @@ fn command_mentions_workflow(command: &str, workflow_path: &Path) -> bool {
 
 #[cfg(unix)]
 fn terminate_pid(pid: u32) -> io::Result<()> {
-    if !process_alive(pid) {
+    if !process_group_alive(pid) && !process_alive(pid) {
         return Ok(());
     }
     signal_service_process_group(pid, libc::SIGTERM)?;
-    if wait_until_dead(pid, Duration::from_secs(5)) {
+    if wait_until_process_group_dead(pid, Duration::from_secs(5)) {
         return Ok(());
     }
     signal_service_process_group(pid, libc::SIGKILL)?;
-    let _ = wait_until_dead(pid, Duration::from_secs(2));
+    let _ = wait_until_process_group_dead(pid, Duration::from_secs(2));
     Ok(())
 }
 
@@ -685,17 +685,6 @@ fn terminate_pid(pid: u32) -> io::Result<()> {
 #[cfg(windows)]
 fn terminate_stale_service_processes(_pid: u32) -> io::Result<()> {
     Ok(())
-}
-
-fn wait_until_dead(pid: u32, timeout: Duration) -> bool {
-    let start = SystemTime::now();
-    while process_alive(pid) {
-        if start.elapsed().unwrap_or_default() >= timeout {
-            return false;
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-    true
 }
 
 #[cfg(unix)]
@@ -999,6 +988,31 @@ mod tests {
         assert!(process_alive(child_pid));
 
         terminate_stale_service_processes(service_pid).unwrap();
+
+        assert!(wait_for_dead(child_pid, Duration::from_secs(2)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminate_pid_force_kills_unix_descendants_after_leader_exit() {
+        let dir = tempfile::tempdir().unwrap();
+        let child_pid_path = dir.path().join("child.pid");
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg("sh -c 'trap \"\" TERM; while true; do sleep 1; done' & echo $! > \"$CHILD_PID_FILE\"; wait")
+            .env("CHILD_PID_FILE", &child_pid_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        detach_command(&mut command);
+
+        let mut child = command.spawn().unwrap();
+        let service_pid = child.id();
+        let child_pid = read_child_pid(&child_pid_path);
+
+        terminate_pid(service_pid).unwrap();
+        let _ = child.wait();
 
         assert!(wait_for_dead(child_pid, Duration::from_secs(2)));
     }
