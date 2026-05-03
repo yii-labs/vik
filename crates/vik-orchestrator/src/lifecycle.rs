@@ -61,7 +61,6 @@ where
             issue: issue.clone(),
             session_file_id: session_file_id.clone(),
             attempt,
-            session_file_id: session_file_id.clone(),
             workflow: loaded.definition,
             config: loaded.config,
         };

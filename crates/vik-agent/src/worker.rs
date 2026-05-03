@@ -67,7 +67,6 @@ where
         let active_states = request.config.tracker.active_states.clone();
         let terminal_states = request.config.tracker.terminal_states.clone();
         let issue_id = request.issue.id.clone();
-        let session_file_id = request.session_file_id.clone();
         let tracker = Arc::clone(&self.tracker);
         let result = client
             .run_turns(
@@ -98,8 +97,7 @@ where
                                 .any(|s| s.to_lowercase() == normalized))
                     }
                 },
-                move |mut event| {
-                    event.session_file_id = Some(session_file_id.clone());
+                |event| {
                     let _ = events.send(event);
                 },
             )
