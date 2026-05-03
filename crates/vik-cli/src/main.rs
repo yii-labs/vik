@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{fs, io};
 
+mod check;
 mod service;
 
 #[cfg(test)]
@@ -14,7 +15,7 @@ use vik_agent::LocalAgentWorker;
 use vik_http::{HttpState, serve};
 use vik_orchestrator::Orchestrator;
 use vik_tracker::{DEFAULT_LINEAR_ENDPOINT, LinearClient, LinearClientConfig};
-use vik_workflow::{WorkflowReloader, load_effective_workflow};
+use vik_workflow::WorkflowReloader;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -46,15 +47,9 @@ struct Args {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Validate workflow and exit.
-    Check(CheckArgs),
+    Check(check::CheckArgs),
     /// Manage Vik as a detached local service.
     Service(service::ServiceArgs),
-}
-
-#[derive(Debug, Parser)]
-struct CheckArgs {
-    /// Path to WORKFLOW.md. Defaults to ./WORKFLOW.md.
-    workflow: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -71,7 +66,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         match command {
             Command::Check(args) => {
                 load_dotenv()?;
-                return check_workflow(args.workflow);
+                return check::run(args.workflow);
             }
             Command::Service(args) => return service::run(args).await,
         }
@@ -88,7 +83,7 @@ async fn run_daemon(
     check: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if check {
-        return check_workflow(workflow);
+        return check::run(workflow);
     }
 
     let reloader = WorkflowReloader::start(workflow)?;
@@ -137,13 +132,6 @@ async fn run_daemon(
     }
 
     orchestrator.run_forever().await?;
-    Ok(())
-}
-
-fn check_workflow(workflow: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
-    let loaded = load_effective_workflow(workflow)?;
-    loaded.config.validate_for_dispatch()?;
-    println!("workflow valid: {}", loaded.definition.path.display());
     Ok(())
 }
 
