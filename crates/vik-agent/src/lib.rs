@@ -2,6 +2,7 @@ mod client;
 mod error;
 mod event;
 mod process;
+mod session_log;
 mod tools;
 mod worker;
 
