@@ -60,6 +60,7 @@ async fn run_claude_code(
     } = request;
     let mut on_event = on_event;
     let mut should_continue = should_continue;
+    let original_prompt = first_prompt.clone();
     let mut prompt = first_prompt;
 
     for turn_count in 1..=max_turns {
@@ -78,7 +79,7 @@ async fn run_claude_code(
         if turn_count >= max_turns || !should_continue().await? {
             break;
         }
-        prompt = CONTINUATION_PROMPT.to_string();
+        prompt = claude_code_continuation_prompt(&original_prompt);
     }
     Ok(())
 }
@@ -407,6 +408,10 @@ fn remaining_time(deadline: time::Instant) -> Option<Duration> {
 
 fn heartbeat_interval() -> Duration {
     Duration::from_secs(HEARTBEAT_INTERVAL_SECS)
+}
+
+fn claude_code_continuation_prompt(original_prompt: &str) -> String {
+    format!("{CONTINUATION_PROMPT}\n\nOriginal issue prompt:\n\n{original_prompt}")
 }
 
 fn emit_lifecycle_event(
