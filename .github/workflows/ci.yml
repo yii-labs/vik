@@ -29,8 +29,12 @@ jobs:
         run: cargo run --locked -p vik-cli -- ./WORKFLOW.md --check
 
   rust:
-    name: Rust
-    runs-on: ubuntu-latest
+    name: Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -51,3 +55,15 @@ jobs:
 
       - name: Run tests
         run: cargo test --locked --workspace --all-features
+
+  rust-required:
+    name: Rust
+    runs-on: ubuntu-latest
+    needs: rust
+    if: always()
+    steps:
+      - name: Check Rust matrix result
+        run: |
+          if [ "${{ needs.rust.result }}" != "success" ]; then
+            exit 1
+          fi

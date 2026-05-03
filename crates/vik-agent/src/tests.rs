@@ -1,9 +1,12 @@
 use serde_json::json;
 use std::path::Path;
 use tempfile::TempDir;
+use vik_core::HostPlatform;
 use vik_workflow::{CodexConfig, TrackerConfig};
 
-use crate::client::{codex_spawn_command, message_belongs_to_turn};
+use crate::client::{
+    codex_spawn_command, codex_spawn_process_command_for_platform, message_belongs_to_turn,
+};
 use crate::event::extract_usage;
 use crate::process::{permission_approval_result, thread_start_params, turn_start_params};
 use crate::session_log::{SessionLog, session_log_dir, session_log_path};
@@ -69,6 +72,61 @@ fn codex_spawn_command_keeps_command_when_model_config_absent() {
         ..CodexConfig::default()
     };
     assert_eq!(codex_spawn_command(&config), config.command);
+}
+
+#[test]
+fn codex_spawn_process_command_uses_bash_on_posix() {
+    let config = CodexConfig {
+        command: "codex --config shell_environment_policy.inherit=all app-server".to_string(),
+        model: Some("gpt-5.5".to_string()),
+        ..CodexConfig::default()
+    };
+    let command = codex_spawn_process_command_for_platform(&config, HostPlatform::Posix);
+    assert_eq!(command.program(), "bash");
+    assert_eq!(
+        command.args(),
+        &[
+            "-lc".to_string(),
+            "codex --config shell_environment_policy.inherit=all --config 'model=\"gpt-5.5\"' app-server"
+                .to_string()
+        ]
+    );
+}
+
+#[test]
+fn codex_spawn_process_command_uses_direct_windows_argv() {
+    let config = CodexConfig {
+        command: r#"C:\Users\me\bin\codex.exe app-server"#.to_string(),
+        model: Some("o'hara".to_string()),
+        model_reasoning_effort: Some("xhigh".to_string()),
+        ..CodexConfig::default()
+    };
+    let command = codex_spawn_process_command_for_platform(&config, HostPlatform::Windows);
+    assert_eq!(command.program(), r#"C:\Users\me\bin\codex.exe"#);
+    assert_eq!(
+        command.args(),
+        &[
+            "--config".to_string(),
+            "model=\"o'hara\"".to_string(),
+            "--config".to_string(),
+            "model_reasoning_effort=xhigh".to_string(),
+            "app-server".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn codex_spawn_process_command_preserves_quoted_windows_path() {
+    let config = CodexConfig {
+        command: r#""C:\Program Files\Codex\codex.exe" app-server --stdio"#.to_string(),
+        ..CodexConfig::default()
+    };
+    let command = codex_spawn_process_command_for_platform(&config, HostPlatform::Windows);
+    assert_eq!(command.program(), r#"C:\Program Files\Codex\codex.exe"#);
+    assert_eq!(
+        command.args(),
+        &["app-server".to_string(), "--stdio".to_string()]
+    );
 }
 
 #[test]

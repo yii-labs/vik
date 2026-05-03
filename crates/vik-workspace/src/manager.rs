@@ -5,7 +5,7 @@ use std::time::Duration;
 use tokio::fs;
 use tokio::process::Command;
 use tokio::time;
-use vik_core::{Workspace, sanitize_workspace_key};
+use vik_core::{PosixShell, ShellInvocation, Workspace, sanitize_workspace_key};
 use vik_workflow::HooksConfig;
 
 use crate::error::WorkspaceError;
@@ -134,10 +134,11 @@ impl WorkspaceManager {
             return Ok(());
         };
         tracing::info!(hook=name, cwd=%cwd.display(), "hook outcome=started");
-        let mut child = Command::new("sh");
+        let shell = ShellInvocation::for_current_platform(script, PosixShell::Sh);
+        let mut child = Command::new(shell.program());
         child
-            .arg("-lc")
-            .arg(script)
+            .args(shell.args())
+            .arg(shell.command())
             .current_dir(cwd)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

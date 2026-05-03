@@ -675,10 +675,7 @@ fn terminate_pid(pid: u32) -> io::Result<()> {
     if status.success() {
         Ok(())
     } else {
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("taskkill failed for pid {pid}"),
-        ))
+        Err(io::Error::other(format!("taskkill failed for pid {pid}")))
     }
 }
 

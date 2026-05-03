@@ -9,6 +9,8 @@ pub enum AgentError {
     InvalidWorkspaceCwd,
     #[error("codex_not_found: {0}")]
     CodexNotFound(String),
+    #[error("process_spawn: {program}: {reason}")]
+    ProcessSpawn { program: String, reason: String },
     #[error("response_timeout")]
     ResponseTimeout,
     #[error("turn_timeout")]
