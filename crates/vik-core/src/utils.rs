@@ -1,5 +1,80 @@
 use crate::{BlockerRef, Issue};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostPlatform {
+    Posix,
+    Windows,
+}
+
+impl HostPlatform {
+    pub fn current() -> Self {
+        current_host_platform()
+    }
+}
+
+#[cfg(windows)]
+fn current_host_platform() -> HostPlatform {
+    HostPlatform::Windows
+}
+
+#[cfg(not(windows))]
+fn current_host_platform() -> HostPlatform {
+    HostPlatform::Posix
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PosixShell {
+    Bash,
+    Sh,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShellInvocation<'a> {
+    program: &'static str,
+    args: &'static [&'static str],
+    command: &'a str,
+}
+
+impl<'a> ShellInvocation<'a> {
+    pub fn for_current_platform(command: &'a str, posix_shell: PosixShell) -> Self {
+        Self::for_platform(command, HostPlatform::current(), posix_shell)
+    }
+
+    pub fn for_platform(command: &'a str, platform: HostPlatform, posix_shell: PosixShell) -> Self {
+        match platform {
+            HostPlatform::Posix => match posix_shell {
+                PosixShell::Bash => Self {
+                    program: "bash",
+                    args: &["-lc"],
+                    command,
+                },
+                PosixShell::Sh => Self {
+                    program: "sh",
+                    args: &["-lc"],
+                    command,
+                },
+            },
+            HostPlatform::Windows => Self {
+                program: "powershell.exe",
+                args: &["-NoProfile", "-NonInteractive", "-Command"],
+                command,
+            },
+        }
+    }
+
+    pub fn program(&self) -> &'static str {
+        self.program
+    }
+
+    pub fn args(&self) -> &'static [&'static str] {
+        self.args
+    }
+
+    pub fn command(&self) -> &'a str {
+        self.command
+    }
+}
+
 pub fn normalize_state(state: &str) -> String {
     state.to_lowercase()
 }
@@ -42,4 +117,45 @@ pub fn blocker_is_terminal(blocker: &BlockerRef, terminal_states: &[String]) -> 
                 .any(|terminal| normalize_state(terminal) == state)
         })
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HostPlatform, PosixShell, ShellInvocation};
+
+    #[test]
+    fn shell_invocation_uses_bash_for_posix_app_server() {
+        let invocation = ShellInvocation::for_platform(
+            "codex app-server",
+            HostPlatform::Posix,
+            PosixShell::Bash,
+        );
+        assert_eq!(invocation.program(), "bash");
+        assert_eq!(invocation.args(), &["-lc"]);
+        assert_eq!(invocation.command(), "codex app-server");
+    }
+
+    #[test]
+    fn shell_invocation_uses_sh_for_posix_hooks() {
+        let invocation =
+            ShellInvocation::for_platform("echo hook", HostPlatform::Posix, PosixShell::Sh);
+        assert_eq!(invocation.program(), "sh");
+        assert_eq!(invocation.args(), &["-lc"]);
+        assert_eq!(invocation.command(), "echo hook");
+    }
+
+    #[test]
+    fn shell_invocation_uses_powershell_for_windows_hooks() {
+        let invocation = ShellInvocation::for_platform(
+            "Write-Output hook",
+            HostPlatform::Windows,
+            PosixShell::Sh,
+        );
+        assert_eq!(invocation.program(), "powershell.exe");
+        assert_eq!(
+            invocation.args(),
+            &["-NoProfile", "-NonInteractive", "-Command"]
+        );
+        assert_eq!(invocation.command(), "Write-Output hook");
+    }
 }
