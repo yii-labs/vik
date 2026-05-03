@@ -17,6 +17,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Test Codex review parser
+        run: node --test .github/scripts/codex-review-comments.test.js
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
