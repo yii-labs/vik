@@ -38,10 +38,6 @@ struct Args {
     /// HTTP status server bind address. Defaults to 127.0.0.1.
     #[arg(long, alias = "host", value_name = "ADDR")]
     bind_address: Option<IpAddr>,
-
-    /// Validate workflow and exit.
-    #[arg(long, hide = true)]
-    check: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -73,19 +69,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     load_dotenv()?;
-    run_daemon(args.workflow, args.port, args.bind_address, args.check).await
+    run_daemon(args.workflow, args.port, args.bind_address).await
 }
 
 async fn run_daemon(
     workflow: Option<PathBuf>,
     port: Option<u16>,
     bind_address: Option<IpAddr>,
-    check: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if check {
-        return check::run(workflow);
-    }
-
     let reloader = WorkflowReloader::start(workflow)?;
     let loaded = reloader.current().clone();
     loaded.config.validate_for_dispatch()?;
@@ -257,11 +248,12 @@ mod tests {
     }
 
     #[test]
-    fn legacy_check_flag_still_parses() {
-        let args = Args::try_parse_from(["vik", "./WORKFLOW.md", "--check"]).unwrap();
+    fn legacy_check_flag_is_rejected() {
+        let err = Args::try_parse_from(["vik", "./WORKFLOW.md", "--check"])
+            .unwrap_err()
+            .to_string();
 
-        assert_eq!(args.workflow, Some(PathBuf::from("./WORKFLOW.md")));
-        assert!(args.check);
+        assert!(err.contains("unexpected argument '--check'"));
     }
 
     #[test]
