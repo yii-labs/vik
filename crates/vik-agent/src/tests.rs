@@ -1,8 +1,9 @@
 use serde_json::json;
 use std::path::Path;
+use vik_core::HostPlatform;
 use vik_workflow::{CodexConfig, TrackerConfig};
 
-use crate::client::codex_spawn_command;
+use crate::client::{codex_spawn_command, codex_spawn_invocation};
 use crate::event::extract_usage;
 use crate::process::{permission_approval_result, thread_start_params, turn_start_params};
 use crate::tools::DynamicTools;
@@ -67,6 +68,55 @@ fn codex_spawn_command_keeps_command_when_model_config_absent() {
         ..CodexConfig::default()
     };
     assert_eq!(codex_spawn_command(&config), config.command);
+}
+
+#[test]
+fn codex_spawn_invocation_keeps_posix_shell_launch() {
+    let config = CodexConfig {
+        command: "codex --config shell_environment_policy.inherit=all app-server".to_string(),
+        model: Some("gpt-5.5".to_string()),
+        model_reasoning_effort: Some("xhigh".to_string()),
+        ..CodexConfig::default()
+    };
+
+    let invocation = codex_spawn_invocation(&config, HostPlatform::Posix).unwrap();
+
+    assert_eq!(invocation.program(), "bash");
+    assert_eq!(
+        invocation.args(),
+        [
+            "-lc",
+            "codex --config shell_environment_policy.inherit=all --config 'model=\"gpt-5.5\"' --config 'model_reasoning_effort=xhigh' app-server"
+        ]
+    );
+}
+
+#[test]
+fn codex_spawn_invocation_uses_windows_direct_argv() {
+    let command =
+        r#"C:\Users\runner\bin\codex.exe --config shell_environment_policy.inherit=all app-server"#;
+    let config = CodexConfig {
+        command: command.to_string(),
+        model: Some("gpt-5.5".to_string()),
+        model_reasoning_effort: Some("xhigh".to_string()),
+        ..CodexConfig::default()
+    };
+
+    let invocation = codex_spawn_invocation(&config, HostPlatform::Windows).unwrap();
+
+    assert_eq!(invocation.program(), r#"C:\Users\runner\bin\codex.exe"#);
+    assert_eq!(
+        invocation.args(),
+        [
+            "--config",
+            "shell_environment_policy.inherit=all",
+            "--config",
+            "model=\"gpt-5.5\"",
+            "--config",
+            "model_reasoning_effort=xhigh",
+            "app-server"
+        ]
+    );
 }
 
 #[test]

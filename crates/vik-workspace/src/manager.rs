@@ -5,7 +5,7 @@ use std::time::Duration;
 use tokio::fs;
 use tokio::process::Command;
 use tokio::time;
-use vik_core::{Workspace, sanitize_workspace_key};
+use vik_core::{CommandInvocation, HostPlatform, Workspace, sanitize_workspace_key};
 use vik_workflow::HooksConfig;
 
 use crate::error::WorkspaceError;
@@ -134,10 +134,10 @@ impl WorkspaceManager {
             return Ok(());
         };
         tracing::info!(hook=name, cwd=%cwd.display(), "hook outcome=started");
-        let mut child = Command::new("sh");
+        let invocation = CommandInvocation::hook_script(HostPlatform::current(), script);
+        let mut child = Command::new(invocation.program());
         child
-            .arg("-lc")
-            .arg(script)
+            .args(invocation.args())
             .current_dir(cwd)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

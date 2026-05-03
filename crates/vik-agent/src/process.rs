@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::time;
-use vik_core::{AgentEvent, LiveSession};
+use vik_core::{AgentEvent, CommandInvocation, HostPlatform, LiveSession};
 use vik_workflow::CodexConfig;
 
 use crate::error::AgentError;
@@ -30,15 +30,18 @@ impl JsonlRpcProcess {
         cwd: &Path,
         tools: DynamicTools,
     ) -> Result<Self, AgentError> {
-        let mut child = Command::new("bash")
-            .arg("-lc")
-            .arg(command)
+        let invocation = CommandInvocation::codex_app_server(HostPlatform::current(), command)
+            .map_err(|err| AgentError::CodexNotFound(format!("invalid codex command: {err}")))?;
+        let mut child = Command::new(invocation.program())
+            .args(invocation.args())
             .current_dir(cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|err| AgentError::CodexNotFound(err.to_string()))?;
+            .map_err(|err| {
+                AgentError::CodexNotFound(format!("{}: {err}", invocation.program()))
+            })?;
         let stdin = child.stdin.take().ok_or(AgentError::PortExit)?;
         let stdout = child.stdout.take().ok_or(AgentError::PortExit)?;
         if let Some(stderr) = child.stderr.take() {

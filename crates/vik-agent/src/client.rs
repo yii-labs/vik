@@ -2,7 +2,7 @@ use std::future::Future;
 use std::path::Path;
 
 use serde_json::json;
-use vik_core::{AgentEvent, LiveSession};
+use vik_core::{AgentEvent, CommandInvocation, CommandParseError, HostPlatform, LiveSession};
 use vik_workflow::CodexConfig;
 
 use crate::error::AgentError;
@@ -166,6 +166,13 @@ pub(crate) fn codex_spawn_command(config: &CodexConfig) -> String {
         let command = config.command.trim();
         format!("{command} {joined_args}")
     }
+}
+
+pub(crate) fn codex_spawn_invocation(
+    config: &CodexConfig,
+    platform: HostPlatform,
+) -> Result<CommandInvocation, CommandParseError> {
+    CommandInvocation::codex_app_server(platform, &codex_spawn_command(config))
 }
 
 fn codex_model_config_args(config: &CodexConfig) -> Vec<String> {
