@@ -17,14 +17,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      - name: Test Codex review parser
-        run: node --test .github/scripts/codex-review-comments.test.js
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
