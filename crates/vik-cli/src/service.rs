@@ -189,12 +189,13 @@ impl ServiceTarget {
                 println!("service already stopped: {}", self.state_path.display());
             }
             RuntimeStatus::Stale => {
+                let pid = state.pid.unwrap_or_default();
+                if pid != 0 {
+                    terminate_stale_service_processes(pid)?;
+                }
                 state.status = StoredStatus::Stopped;
                 state.stopped_at_unix = Some(now_unix());
-                println!(
-                    "service stale: pid={} is not running",
-                    state.pid.unwrap_or_default()
-                );
+                println!("service stale: pid={pid} is not running");
             }
         }
 
@@ -531,6 +532,16 @@ fn process_alive(pid: u32) -> bool {
 }
 
 #[cfg(unix)]
+fn process_group_alive(pid: u32) -> bool {
+    let process_group = -(pid as libc::pid_t);
+    let result = unsafe { libc::kill(process_group, 0) };
+    if result == 0 {
+        return true;
+    }
+    io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(unix)]
 fn process_matches_state(pid: u32, state: &ServiceState) -> bool {
     if !process_alive(pid) {
         return false;
@@ -604,6 +615,20 @@ fn terminate_pid(pid: u32) -> io::Result<()> {
 }
 
 #[cfg(unix)]
+fn terminate_stale_service_processes(pid: u32) -> io::Result<()> {
+    if !process_group_alive(pid) {
+        return Ok(());
+    }
+    signal_service_process_group(pid, libc::SIGTERM)?;
+    if wait_until_process_group_dead(pid, Duration::from_secs(5)) {
+        return Ok(());
+    }
+    signal_service_process_group(pid, libc::SIGKILL)?;
+    let _ = wait_until_process_group_dead(pid, Duration::from_secs(2));
+    Ok(())
+}
+
+#[cfg(unix)]
 fn signal_service_process_group(pid: u32, signal: libc::c_int) -> io::Result<()> {
     // Services call setsid() on spawn, so the service pid is also the process group id.
     let process_group = -(pid as libc::pid_t);
@@ -642,9 +667,26 @@ fn terminate_pid(pid: u32) -> io::Result<()> {
     }
 }
 
+#[cfg(windows)]
+fn terminate_stale_service_processes(_pid: u32) -> io::Result<()> {
+    Ok(())
+}
+
 fn wait_until_dead(pid: u32, timeout: Duration) -> bool {
     let start = SystemTime::now();
     while process_alive(pid) {
+        if start.elapsed().unwrap_or_default() >= timeout {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    true
+}
+
+#[cfg(unix)]
+fn wait_until_process_group_dead(pid: u32, timeout: Duration) -> bool {
+    let start = SystemTime::now();
+    while process_group_alive(pid) {
         if start.elapsed().unwrap_or_default() >= timeout {
             return false;
         }
@@ -898,6 +940,34 @@ mod tests {
 
         signal_service_process_group(service_pid, libc::SIGTERM).unwrap();
         let _ = child.wait();
+
+        assert!(wait_for_dead(child_pid, Duration::from_secs(2)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminate_stale_service_processes_stops_group_without_leader() {
+        let dir = tempfile::tempdir().unwrap();
+        let child_pid_path = dir.path().join("child.pid");
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg("sleep 60 & echo $! > \"$CHILD_PID_FILE\"")
+            .env("CHILD_PID_FILE", &child_pid_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        detach_command(&mut command);
+
+        let mut child = command.spawn().unwrap();
+        let service_pid = child.id();
+        let child_pid = read_child_pid(&child_pid_path);
+        let _ = child.wait();
+
+        assert!(!process_alive(service_pid));
+        assert!(process_alive(child_pid));
+
+        terminate_stale_service_processes(service_pid).unwrap();
 
         assert!(wait_for_dead(child_pid, Duration::from_secs(2)));
     }
