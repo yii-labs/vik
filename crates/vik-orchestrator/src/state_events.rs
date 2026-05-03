@@ -7,23 +7,25 @@ use crate::state::OrchestratorState;
 
 impl OrchestratorState {
     pub fn apply_agent_event(&mut self, event: AgentEvent) {
-        let issue_identifier = self
-            .running
-            .get(&event.issue_id)
-            .map(|entry| entry.identifier.clone())
-            .unwrap_or_default();
-        let session_id = event
-            .session
-            .as_ref()
-            .map(|session| session.session_id.clone())
-            .unwrap_or_default();
-        tracing::info!(
-            issue_id=%event.issue_id,
-            issue_identifier,
-            session_id,
-            codex_event=%event.event,
-            "codex_update outcome=received"
-        );
+        if should_log_agent_event_to_service(&event) {
+            let issue_identifier = self
+                .running
+                .get(&event.issue_id)
+                .map(|entry| entry.identifier.clone())
+                .unwrap_or_default();
+            let session_id = event
+                .session
+                .as_ref()
+                .map(|session| session.session_id.clone())
+                .unwrap_or_default();
+            tracing::info!(
+                issue_id=%event.issue_id,
+                issue_identifier,
+                session_id,
+                codex_event=%event.event,
+                "codex_update outcome=received"
+            );
+        }
         if let Some(entry) = self.running.get_mut(&event.issue_id) {
             entry.last_event = Some(event.event.clone());
             entry.last_message = event.message.clone();
@@ -115,4 +117,8 @@ impl OrchestratorState {
             }
         }
     }
+}
+
+pub(crate) fn should_log_agent_event_to_service(event: &AgentEvent) -> bool {
+    event.session.is_none() || event.event == "session_started"
 }

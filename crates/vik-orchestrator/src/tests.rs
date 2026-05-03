@@ -8,6 +8,7 @@ use vik_workflow::{
     TrackerConfig, WorkspaceConfig,
 };
 
+use crate::state_events::should_log_agent_event_to_service;
 use crate::{
     OrchestratorState, RunningEntry, failure_backoff_ms, should_dispatch, sort_for_dispatch,
 };
@@ -177,4 +178,29 @@ async fn lifecycle_event_without_session_updates_running_status() {
     assert_eq!(running.last_message.as_deref(), Some("starting"));
     assert!(running.last_event_at.is_some());
     assert_eq!(state.recent_events["A"][0].event, "codex_thread_starting");
+}
+
+#[test]
+fn service_log_decision_suppresses_session_log_duplicates() {
+    let codex_event = AgentEvent {
+        issue_id: "A".into(),
+        event: "turn/completed".into(),
+        timestamp: Utc::now(),
+        codex_app_server_pid: Some("123".into()),
+        session: Some(vik_core::LiveSession::new("thread-1", "turn-1")),
+        usage: None,
+        rate_limits: None,
+        message: Some("completed".into()),
+        raw: json!({ "method": "turn/completed" }),
+    };
+    assert!(!should_log_agent_event_to_service(&codex_event));
+
+    let mut session_started = codex_event.clone();
+    session_started.event = "session_started".into();
+    assert!(should_log_agent_event_to_service(&session_started));
+
+    let mut lifecycle = codex_event.clone();
+    lifecycle.event = "codex_thread_starting".into();
+    lifecycle.session = None;
+    assert!(should_log_agent_event_to_service(&lifecycle));
 }
