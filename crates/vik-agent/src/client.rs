@@ -8,6 +8,7 @@ use vik_workflow::CodexConfig;
 use crate::error::AgentError;
 use crate::event::agent_event;
 use crate::process::JsonlRpcProcess;
+use crate::session_log::{ensure_session_log, session_log_path};
 use crate::tools::DynamicTools;
 
 const CONTINUATION_PROMPT: &str = "Continue working on this Linear issue. Check current issue state and proceed only if it is still active.";
@@ -22,6 +23,7 @@ pub struct CodexAppServerClient {
 #[derive(Debug, Clone)]
 pub struct CodexIssueContext {
     pub issue_id: String,
+    pub issue_identifier: String,
     pub title: String,
 }
 
@@ -118,6 +120,11 @@ impl CodexAppServerClient {
             let mut live = LiveSession::new(thread_id.clone(), turn_id.clone());
             live.turn_count = turn_count;
             live.codex_app_server_pid = process.child.id().map(|pid| pid.to_string());
+            let session_log =
+                session_log_path(workspace_path, &issue.issue_identifier, &live.session_id);
+            ensure_session_log(&session_log)
+                .await
+                .map_err(|err| AgentError::SessionLog(err.to_string()))?;
             on_event(agent_event(
                 issue.issue_id.clone(),
                 "session_started",
@@ -132,6 +139,7 @@ impl CodexAppServerClient {
                     &turn_id,
                     &mut live,
                     &issue.issue_id,
+                    &session_log,
                     &mut on_event,
                 )
                 .await?;

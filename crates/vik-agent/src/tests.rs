@@ -5,6 +5,9 @@ use vik_workflow::{CodexConfig, TrackerConfig};
 use crate::client::codex_spawn_command;
 use crate::event::extract_usage;
 use crate::process::{permission_approval_result, thread_start_params, turn_start_params};
+use crate::session_log::{
+    append_session_message, ensure_session_log, read_session_messages, session_log_path,
+};
 use crate::tools::DynamicTools;
 
 #[test]
@@ -29,6 +32,74 @@ fn session_id_composes_thread_and_turn() {
         vik_core::session_id("thread-1", "turn-2"),
         "thread-1-turn-2"
     );
+}
+
+#[test]
+fn session_log_path_uses_workspace_sessions_dir() {
+    let path = session_log_path(Path::new("/tmp/workspace"), "VIK/11", "thread-1/turn-2");
+    assert_eq!(
+        path,
+        Path::new("/tmp/workspace/.vik/sessions/VIK_11-thread-1_turn-2.jsonl")
+    );
+}
+
+#[tokio::test]
+async fn session_log_appends_raw_codex_messages_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = session_log_path(dir.path(), "VIK-11", "thread-1-turn-2");
+    ensure_session_log(&path).await.unwrap();
+
+    let message = json!({
+        "method": "turn/completed",
+        "params": {
+            "threadId": "thread-1",
+            "turn": { "id": "turn-2", "status": "completed" }
+        }
+    });
+    append_session_message(&path, &message).await.unwrap();
+
+    let text = tokio::fs::read_to_string(&path).await.unwrap();
+    assert_eq!(
+        text,
+        format!("{}\n", serde_json::to_string(&message).unwrap())
+    );
+    assert!(!text.contains("issue_id"));
+    assert!(!text.contains("issue_identifier"));
+    assert!(!text.contains("workspace_path"));
+}
+
+#[tokio::test]
+async fn session_log_preserves_existing_records_across_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = session_log_path(dir.path(), "VIK-11", "thread-1-turn-2");
+    let first = json!({ "method": "thread/item/updated", "params": { "item": 1 } });
+    let second = json!({ "method": "turn/completed", "params": { "turn": 2 } });
+
+    append_session_message(&path, &first).await.unwrap();
+    append_session_message(&path, &second).await.unwrap();
+
+    let messages = read_session_messages(&path).await.unwrap();
+    assert_eq!(messages, vec![first, second]);
+}
+
+#[tokio::test]
+async fn session_log_separates_torn_tail_before_next_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = session_log_path(dir.path(), "VIK-11", "thread-1-turn-2");
+    tokio::fs::create_dir_all(path.parent().unwrap())
+        .await
+        .unwrap();
+    tokio::fs::write(&path, b"{\"method\":\"partial\"")
+        .await
+        .unwrap();
+
+    let message = json!({ "method": "turn/completed" });
+    append_session_message(&path, &message).await.unwrap();
+
+    let text = tokio::fs::read_to_string(&path).await.unwrap();
+    assert!(text.contains("\"partial\"\n{"));
+    let messages = read_session_messages(&path).await.unwrap();
+    assert_eq!(messages, vec![message]);
 }
 
 #[test]

@@ -73,6 +73,7 @@ where
                 &workspace.path,
                 CodexIssueContext {
                     issue_id: request.issue.id.clone(),
+                    issue_identifier: request.issue.identifier.clone(),
                     title: format!("{}: {}", request.issue.identifier, request.issue.title),
                 },
                 prompt,

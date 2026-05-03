@@ -23,6 +23,8 @@ pub enum AgentError {
     TurnCancelled,
     #[error("turn_input_required")]
     TurnInputRequired,
+    #[error("session_log: {0}")]
+    SessionLog(String),
     #[error("workspace: {0}")]
     Workspace(#[from] WorkspaceError),
     #[error("workflow: {0}")]

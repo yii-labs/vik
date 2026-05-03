@@ -57,6 +57,10 @@ workflow file is not named `WORKFLOW.md`. Service state and detached stdout/stde
 
 Daemon logs are JSON lines on stdout and in a daily file under `logging.dir`. If
 `logging.dir` is omitted, Vik writes to `<workspace.root>/.vik/logs/vik.log.<date>`.
+Codex app-server session messages are persisted in each issue workspace under
+`.vik/sessions/<issue-id>-<codex-session-id>.jsonl`. These files contain raw Codex
+app-server JSONL messages only; Vik runtime, workpad, and debug metadata stay in
+Vik logs.
 
 ## Docker
 

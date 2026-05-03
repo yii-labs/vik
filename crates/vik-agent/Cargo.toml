@@ -20,6 +20,7 @@ vik-workflow = { version = "0.1.0", path = "../vik-workflow" }
 vik-workspace = { version = "0.1.0", path = "../vik-workspace" }
 thiserror = "2.0.18"
 tokio = { version = "1.52.1", features = [
+  "fs",
   "io-util",
   "process",
   "time",
@@ -28,3 +29,6 @@ tokio = { version = "1.52.1", features = [
   "sync",
 ] }
 tracing = "0.1.43"
+
+[dev-dependencies]
+tempfile = "3.23.0"

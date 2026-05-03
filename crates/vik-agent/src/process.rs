@@ -12,6 +12,7 @@ use vik_workflow::CodexConfig;
 
 use crate::error::AgentError;
 use crate::event::{agent_event, extract_rate_limits, extract_usage, summarize_message, truncate};
+use crate::session_log::append_session_message;
 use crate::tools::DynamicTools;
 
 pub(crate) struct JsonlRpcProcess {
@@ -146,6 +147,7 @@ impl JsonlRpcProcess {
         turn_id: &str,
         live: &mut LiveSession,
         issue_id: &str,
+        session_log_path: &Path,
         on_event: &mut impl FnMut(AgentEvent),
     ) -> Result<(), AgentError> {
         let deadline = time::Instant::now() + self.turn_timeout;
@@ -156,6 +158,9 @@ impl JsonlRpcProcess {
             }
             let timeout = deadline - now;
             let message = self.read_message(timeout).await?;
+            append_session_message(session_log_path, &message)
+                .await
+                .map_err(|err| AgentError::SessionLog(err.to_string()))?;
             if message.get("id").is_some() && message.get("method").is_some() {
                 self.respond_to_server_request(&message).await?;
                 continue;
