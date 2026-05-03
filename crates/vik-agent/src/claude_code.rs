@@ -62,6 +62,7 @@ async fn run_claude_code(
     let mut should_continue = should_continue;
     let original_prompt = first_prompt.clone();
     let mut prompt = first_prompt;
+    let mut usage = ClaudeUsageAccumulator::default();
 
     for turn_count in 1..=max_turns {
         run_claude_code_turn(
@@ -74,8 +75,10 @@ async fn run_claude_code(
                 turn_count,
             },
             &mut on_event,
+            &mut usage,
         )
         .await?;
+        usage.finish_turn();
         if turn_count >= max_turns || !should_continue().await? {
             break;
         }
@@ -96,6 +99,7 @@ async fn run_claude_code_turn(
     config: &ClaudeCodeConfig,
     turn: ClaudeCodeTurn<'_>,
     on_event: &mut EventSink,
+    usage: &mut ClaudeUsageAccumulator,
 ) -> Result<(), AgentError> {
     let command_display = claude_code_spawn_command(config, 1);
     let command = claude_code_spawn_process_command(config, 1);
@@ -189,17 +193,19 @@ async fn run_claude_code_turn(
                 }
                 let raw = serde_json::from_str::<Value>(&line)
                     .unwrap_or_else(|_| json!({ "text": line }));
-                if let Some(usage) = claude_code_usage(&raw) {
-                    live.codex_input_tokens = usage.input_tokens;
-                    live.codex_output_tokens = usage.output_tokens;
-                    live.codex_total_tokens = usage.total_tokens;
+                let cumulative_usage =
+                    claude_code_usage(&raw).map(|turn_usage| usage.update(turn_usage));
+                if let Some(cumulative_usage) = cumulative_usage {
+                    live.codex_input_tokens = cumulative_usage.input_tokens;
+                    live.codex_output_tokens = cumulative_usage.output_tokens;
+                    live.codex_total_tokens = cumulative_usage.total_tokens;
                 }
                 let event = claude_code_event_name(&raw);
                 on_event(agent_event(
                     turn.issue_id.to_string(),
                     event,
                     Some(live.clone()),
-                    claude_code_usage(&raw),
+                    cumulative_usage,
                     None,
                     raw,
                 ));
@@ -262,6 +268,37 @@ async fn run_claude_code_turn(
         json!({ "status": "completed", "turn_count": turn.turn_count }),
     );
     Ok(())
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct ClaudeUsageAccumulator {
+    completed: TokenUsage,
+    current_turn: TokenUsage,
+}
+
+impl ClaudeUsageAccumulator {
+    pub(crate) fn update(&mut self, turn_usage: TokenUsage) -> TokenUsage {
+        self.current_turn.input_tokens =
+            self.current_turn.input_tokens.max(turn_usage.input_tokens);
+        self.current_turn.output_tokens = self
+            .current_turn
+            .output_tokens
+            .max(turn_usage.output_tokens);
+        self.current_turn.total_tokens =
+            self.current_turn.total_tokens.max(turn_usage.total_tokens);
+        TokenUsage {
+            input_tokens: self.completed.input_tokens + self.current_turn.input_tokens,
+            output_tokens: self.completed.output_tokens + self.current_turn.output_tokens,
+            total_tokens: self.completed.total_tokens + self.current_turn.total_tokens,
+        }
+    }
+
+    pub(crate) fn finish_turn(&mut self) {
+        self.completed.input_tokens += self.current_turn.input_tokens;
+        self.completed.output_tokens += self.current_turn.output_tokens;
+        self.completed.total_tokens += self.current_turn.total_tokens;
+        self.current_turn = TokenUsage::default();
+    }
 }
 
 pub(crate) async fn write_prompt_with_deadline<W>(

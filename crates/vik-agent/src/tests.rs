@@ -4,13 +4,13 @@ use std::time::Duration;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::time;
-use vik_core::{HostPlatform, LiveSession};
+use vik_core::{HostPlatform, LiveSession, TokenUsage};
 use vik_workflow::{ClaudeCodeConfig, CodexConfig, TrackerConfig};
 
 use crate::adapter::EventSink;
 use crate::claude_code::{
-    claude_code_spawn_command, claude_code_spawn_process_command_for_platform,
-    write_prompt_with_deadline,
+    ClaudeUsageAccumulator, claude_code_spawn_command,
+    claude_code_spawn_process_command_for_platform, write_prompt_with_deadline,
 };
 use crate::client::{
     codex_spawn_command, codex_spawn_process_command_for_platform, message_belongs_to_turn,
@@ -218,6 +218,51 @@ async fn claude_code_prompt_write_obeys_turn_deadline() {
     .await;
 
     assert!(matches!(result, Err(AgentError::TurnTimeout)));
+}
+
+#[test]
+fn claude_code_usage_accumulator_reports_run_totals_across_turns() {
+    let mut usage = ClaudeUsageAccumulator::default();
+
+    assert_eq!(
+        usage.update(TokenUsage {
+            input_tokens: 10,
+            output_tokens: 4,
+            total_tokens: 14,
+        }),
+        TokenUsage {
+            input_tokens: 10,
+            output_tokens: 4,
+            total_tokens: 14,
+        }
+    );
+    assert_eq!(
+        usage.update(TokenUsage {
+            input_tokens: 8,
+            output_tokens: 6,
+            total_tokens: 14,
+        }),
+        TokenUsage {
+            input_tokens: 10,
+            output_tokens: 6,
+            total_tokens: 14,
+        }
+    );
+
+    usage.finish_turn();
+
+    assert_eq!(
+        usage.update(TokenUsage {
+            input_tokens: 3,
+            output_tokens: 2,
+            total_tokens: 5,
+        }),
+        TokenUsage {
+            input_tokens: 13,
+            output_tokens: 8,
+            total_tokens: 19,
+        }
+    );
 }
 
 #[test]
