@@ -3,6 +3,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use serde_yaml::Mapping;
 use vik_core::WorkflowDefinition;
 
 use crate::WorkflowError;
