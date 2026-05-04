@@ -65,10 +65,6 @@ fn applies_defaults_and_path_resolution() {
         dir.path().join("work").join(".vik").join("logs")
     );
     assert_eq!(
-        config.logging.service_dir,
-        dir.path().join(".vik").join("service")
-    );
-    assert_eq!(
         config.agent.max_concurrent_agents_by_state.get("todo"),
         Some(&2)
     );
@@ -134,22 +130,6 @@ fn resolves_explicit_logging_dir() {
     let config = ServiceConfig::from_definition(&def).unwrap();
 
     assert_eq!(config.logging.dir, dir.path().join("logs"));
-}
-
-#[test]
-fn resolves_explicit_service_logging_dir() {
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("WORKFLOW.md");
-    fs::write(
-        &path,
-        "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\nworkspace:\n  root: work\nlogging:\n  service_dir: service-logs\n---\nBody",
-    )
-    .unwrap();
-
-    let def = parse_workflow_file(&path).unwrap();
-    let config = ServiceConfig::from_definition(&def).unwrap();
-
-    assert_eq!(config.logging.service_dir, dir.path().join("service-logs"));
 }
 
 #[test]

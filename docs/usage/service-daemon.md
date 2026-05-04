@@ -36,14 +36,15 @@ Status values:
 Service stdout and stderr are written to:
 
 ```text
-<workflow-directory>/.vik/service/<workflow-stem>-<path-hash>.log
+$HOME/.vik/<workflow-stem>-<path-hash>/logs/<workflow-stem>-<path-hash>.log
 ```
 
-Set `logging.service_dir` in `WORKFLOW.md` to use a different directory:
+Set `logging.dir` in `WORKFLOW.md` to use a different directory. Relative
+paths are resolved from the workflow directory:
 
 ```yaml
 logging:
-  service_dir: service
+  dir: .vik/logs
 ```
 
 The service state file uses the same name with `.json`. The CLI derives the
@@ -63,7 +64,8 @@ Follow logs:
 vik service logs --follow
 ```
 
-Daemon JSON logs still use `logging.dir` from `WORKFLOW.md`.
+Daemon JSON logs and detached service stdout/stderr use the same log directory
+for service starts.
 
 ## Restart And Stop
 
@@ -91,22 +93,22 @@ Required credentials:
 
 ## State Files
 
-Service state lives under:
+Service state lives in the service log directory:
 
 ```text
-<workflow-directory>/.vik/service/
+$HOME/.vik/<workflow-stem>-<path-hash>/logs/
 ```
 
-When `logging.service_dir` is set, state files live in that configured
-directory instead.
+When `logging.dir` is set, state files live in that configured directory
+instead.
 
-Changing `logging.service_dir` does not migrate or read service state from the
-previous directory. Stop or uninstall the existing service before changing the
-service state directory.
+Changing `logging.dir` does not migrate or read service state from the previous
+directory. Stop or uninstall the existing service before changing the service
+log directory.
 
-Service management loads `.env` before reading `logging.service_dir` and before
-full dispatch validation, so `status`, `logs`, and `stop` can still find
-configured state when unrelated workflow fields are invalid.
+Service management loads `.env` before reading `logging.dir` and before full
+dispatch validation, so `status`, `logs`, and `stop` can still find configured
+state when unrelated workflow fields are invalid.
 
 The state JSON records workflow path, cwd, pid, log path, port, and command.
 Delete state only after confirming no matching Vik process is alive.

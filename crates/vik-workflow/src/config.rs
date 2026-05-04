@@ -44,7 +44,6 @@ pub struct WorkspaceConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoggingConfig {
     pub dir: PathBuf,
-    pub service_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -230,8 +229,6 @@ impl ServiceConfig {
             .map(|raw| expand_path_value(&raw, &workflow_dir))
             .transpose()?
             .unwrap_or_else(|| workspace_root.join(".vik").join("logs"));
-        let service_logging_dir = service_logging_dir_from_definition(definition)?
-            .unwrap_or_else(|| default_service_logging_dir(&workflow_dir));
 
         let hooks = HooksConfig {
             after_create: string_value(hooks_map, "after_create"),
@@ -292,10 +289,7 @@ impl ServiceConfig {
             workspace: WorkspaceConfig {
                 root: workspace_root,
             },
-            logging: LoggingConfig {
-                dir: logging_dir,
-                service_dir: service_logging_dir,
-            },
+            logging: LoggingConfig { dir: logging_dir },
             hooks,
             agent: AgentConfig {
                 max_concurrent_agents,
@@ -356,7 +350,7 @@ impl ServiceConfig {
         Ok(())
     }
 }
-pub fn service_logging_dir_from_definition(
+pub fn logging_dir_from_definition(
     definition: &WorkflowDefinition,
 ) -> Result<Option<PathBuf>, WorkflowError> {
     let workflow_dir = definition
@@ -365,11 +359,7 @@ pub fn service_logging_dir_from_definition(
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
     let logging_map = get_map(&definition.config, "logging");
-    string_value(logging_map, "service_dir")
+    string_value(logging_map, "dir")
         .map(|raw| expand_path_value(&raw, &workflow_dir))
         .transpose()
-}
-
-fn default_service_logging_dir(workflow_dir: &Path) -> PathBuf {
-    workflow_dir.join(".vik").join("service")
 }

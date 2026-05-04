@@ -78,20 +78,22 @@ Vik sanitizes workspace names and prevents paths from escaping the root.
 
 ## Logging
 
-`logging.dir` controls daemon JSON log files. Default:
+`logging.dir` controls Vik log files. Foreground `vik start` default:
 
 ```text
 <workspace.root>/.vik/logs
 ```
 
-Each run logs to stdout and to a daily file named `vik.log.<date>`.
-
-`logging.service_dir` controls service daemon stdout/stderr logs and service
-state files. Default:
+Service commands use the same configured `logging.dir` when it is set. When it
+is omitted, service mode defaults to:
 
 ```text
-<workflow-directory>/.vik/service
+$HOME/.vik/<workflow-stem>-<path-hash>/logs
 ```
+
+Each run logs to stdout and to a daily file named `vik.log.<date>`. Service
+mode also writes detached stdout/stderr and service state in the same log
+directory.
 
 Relative logging paths are resolved from the directory that contains
 `WORKFLOW.md`:
@@ -99,7 +101,6 @@ Relative logging paths are resolved from the directory that contains
 ```yaml
 logging:
   dir: .vik/logs
-  service_dir: .vik/service
 ```
 
 ## Hooks

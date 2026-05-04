@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use clap::{Args as ClapArgs, Subcommand};
 use serde::{Deserialize, Serialize};
-use vik_workflow::{load_effective_workflow, load_workflow, service_logging_dir_from_definition};
+use vik_workflow::{load_effective_workflow, load_workflow, logging_dir_from_definition};
 
 #[derive(Debug, ClapArgs)]
 pub(crate) struct ServiceArgs {
@@ -69,7 +69,7 @@ struct LogsArgs {
 #[derive(Debug)]
 struct ServiceTarget {
     workflow_path: PathBuf,
-    service_dir: PathBuf,
+    log_dir: PathBuf,
     state_path: PathBuf,
     log_path: PathBuf,
     cwd: PathBuf,
@@ -90,31 +90,28 @@ impl ServiceTarget {
             let loaded = load_effective_workflow(Some(workflow_path))?;
             loaded.config.validate_for_dispatch()?;
             let workflow_path = fs::canonicalize(&loaded.definition.path)?;
-            return Self::from_workflow_path(
-                workflow_path,
-                loaded.config.logging.service_dir,
-                cwd,
-                port,
-            );
+            let log_dir = configured_log_dir_from_definition(&loaded.definition)
+                .unwrap_or_else(|| service_log_dir_for_workflow(&workflow_path));
+            return Self::from_workflow_path(workflow_path, log_dir, cwd, port);
         }
 
-        let service_dir = configured_service_dir(&workflow_path)
-            .unwrap_or_else(|| service_dir_for_workflow(&workflow_path));
-        Self::from_workflow_path(workflow_path, service_dir, cwd, port)
+        let log_dir = configured_log_dir(&workflow_path)
+            .unwrap_or_else(|| service_log_dir_for_workflow(&workflow_path));
+        Self::from_workflow_path(workflow_path, log_dir, cwd, port)
     }
 
     fn from_workflow_path(
         workflow_path: PathBuf,
-        service_dir: PathBuf,
+        log_dir: PathBuf,
         cwd: PathBuf,
         port: Option<u16>,
     ) -> Result<Self, Box<dyn Error>> {
         let name = service_name(&workflow_path);
         Ok(Self {
             workflow_path,
-            service_dir: service_dir.clone(),
-            state_path: service_dir.join(format!("{name}.json")),
-            log_path: service_dir.join(format!("{name}.log")),
+            log_dir: log_dir.clone(),
+            state_path: log_dir.join(format!("{name}.json")),
+            log_path: log_dir.join(format!("{name}.log")),
             cwd,
             port,
         })
@@ -149,12 +146,13 @@ impl ServiceTarget {
         let previous = previous_state.as_ref().map(|(_, state)| state);
         let port = self.effective_port(previous);
         let cwd = self.effective_cwd(previous);
-        fs::create_dir_all(&self.service_dir)?;
+        fs::create_dir_all(&self.log_dir)?;
         let executable = env::current_exe()?;
         let mut command = Command::new(&executable);
         for arg in self.daemon_args(port) {
             command.arg(arg);
         }
+        command.env(crate::env::SERVICE_LOG_DIR_ENV, &self.log_dir);
         command.current_dir(&cwd);
         detach_command(&mut command);
 
@@ -455,22 +453,35 @@ fn stale_service_group_cleanup_allowed(pid: u32) -> bool {
     !process_alive(pid)
 }
 
-fn service_dir_for_workflow(workflow_path: &Path) -> PathBuf {
-    workflow_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
+fn service_log_dir_for_workflow(workflow_path: &Path) -> PathBuf {
+    service_home_dir(workflow_path)
         .join(".vik")
-        .join("service")
+        .join(service_name(workflow_path))
+        .join("logs")
 }
 
-fn configured_service_dir(workflow_path: &Path) -> Option<PathBuf> {
+fn service_home_dir(workflow_path: &Path) -> PathBuf {
+    env::var_os("HOME")
+        .or_else(|| env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            workflow_path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .to_path_buf()
+        })
+}
+
+fn configured_log_dir(workflow_path: &Path) -> Option<PathBuf> {
     load_workflow(Some(workflow_path.to_path_buf()))
         .ok()
-        .and_then(|definition| {
-            service_logging_dir_from_definition(&definition)
-                .ok()
-                .flatten()
-        })
+        .and_then(|definition| configured_log_dir_from_definition(&definition))
+}
+
+fn configured_log_dir_from_definition(
+    definition: &vik_core::WorkflowDefinition,
+) -> Option<PathBuf> {
+    logging_dir_from_definition(definition).ok().flatten()
 }
 
 fn service_name(workflow_path: &Path) -> String {
@@ -760,9 +771,9 @@ mod tests {
     fn daemon_args_include_workflow_and_optional_port() {
         let target = ServiceTarget {
             workflow_path: PathBuf::from("/tmp/vik/WORKFLOW.md"),
-            service_dir: PathBuf::from("/tmp/vik/.vik/service"),
-            state_path: PathBuf::from("/tmp/vik/.vik/service/state.json"),
-            log_path: PathBuf::from("/tmp/vik/.vik/service/service.log"),
+            log_dir: PathBuf::from("/tmp/vik/.vik/logs"),
+            state_path: PathBuf::from("/tmp/vik/.vik/logs/state.json"),
+            log_path: PathBuf::from("/tmp/vik/.vik/logs/service.log"),
             cwd: PathBuf::from("/tmp/vik"),
             port: Some(3000),
         };
@@ -812,71 +823,60 @@ mod tests {
         let second = ServiceTarget::load(Some(workflow_path.clone()), None, false).unwrap();
 
         assert_eq!(first.state_path, second.state_path);
-        let expected_root = fs::canonicalize(dir.path()).unwrap();
         assert_eq!(
-            first.service_dir,
-            expected_root.join(".vik").join("service")
+            first.log_dir,
+            service_log_dir_for_workflow(&first.workflow_path)
         );
+        assert!(first.log_dir.ends_with("logs"));
     }
 
     #[test]
-    fn service_dir_uses_logging_service_dir_for_management_target() {
+    fn service_log_dir_uses_logging_dir_for_management_target() {
         let dir = tempfile::tempdir().unwrap();
         let workflow_path = dir.path().join("WORKFLOW.md");
-        write_workflow_with_logging_service_dir(&workflow_path, "service-logs");
+        write_workflow_with_logging_dir(&workflow_path, "logs");
 
         let target = ServiceTarget::load(Some(workflow_path), None, false).unwrap();
-        let expected_dir = fs::canonicalize(dir.path()).unwrap().join("service-logs");
+        let expected_dir = fs::canonicalize(dir.path()).unwrap().join("logs");
 
-        assert_eq!(target.service_dir, expected_dir);
-        assert_eq!(
-            target.state_path.parent(),
-            Some(target.service_dir.as_path())
-        );
-        assert_eq!(target.log_path.parent(), Some(target.service_dir.as_path()));
+        assert_eq!(target.log_dir, expected_dir);
+        assert_eq!(target.state_path.parent(), Some(target.log_dir.as_path()));
+        assert_eq!(target.log_path.parent(), Some(target.log_dir.as_path()));
     }
 
     #[test]
-    fn service_dir_uses_logging_service_dir_for_dispatch_target() {
+    fn service_log_dir_uses_logging_dir_for_dispatch_target() {
         let dir = tempfile::tempdir().unwrap();
         let workflow_path = dir.path().join("WORKFLOW.md");
-        write_workflow_with_logging_service_dir(&workflow_path, "service-logs");
+        write_workflow_with_logging_dir(&workflow_path, "logs");
 
         let target = ServiceTarget::load_for_dispatch(Some(workflow_path), None).unwrap();
-        let expected_dir = fs::canonicalize(dir.path()).unwrap().join("service-logs");
+        let expected_dir = fs::canonicalize(dir.path()).unwrap().join("logs");
 
-        assert_eq!(target.service_dir, expected_dir);
-        assert_eq!(
-            target.state_path.parent(),
-            Some(target.service_dir.as_path())
-        );
-        assert_eq!(target.log_path.parent(), Some(target.service_dir.as_path()));
+        assert_eq!(target.log_dir, expected_dir);
+        assert_eq!(target.state_path.parent(), Some(target.log_dir.as_path()));
+        assert_eq!(target.log_path.parent(), Some(target.log_dir.as_path()));
     }
 
     #[test]
-    fn configured_service_dir_does_not_read_default_state() {
+    fn configured_log_dir_does_not_read_default_state() {
         let dir = tempfile::tempdir().unwrap();
         let workflow_path = dir.path().join("WORKFLOW.md");
-        write_workflow_with_logging_service_dir(&workflow_path, "service-logs");
+        write_workflow_with_logging_dir(&workflow_path, "logs");
         let target = ServiceTarget::load(Some(workflow_path.clone()), None, false).unwrap();
-        let default_state_path = service_dir_for_workflow(&target.workflow_path)
+        let default_state_path = service_log_dir_for_workflow(&target.workflow_path)
             .join(format!("{}.json", service_name(&target.workflow_path)));
-        let state = service_state_with_cwd(fs::canonicalize(dir.path()).unwrap(), Some(3000));
-        write_state(&default_state_path, &state).unwrap();
 
+        assert_ne!(target.state_path, default_state_path);
         assert!(target.read_existing_state().unwrap().is_none());
-        assert_eq!(
-            target.state_path.parent(),
-            Some(target.service_dir.as_path())
-        );
-        assert!(default_state_path.exists());
+        assert_eq!(target.state_path.parent(), Some(target.log_dir.as_path()));
     }
 
     #[test]
-    fn configured_state_is_read_from_configured_service_dir() {
+    fn configured_state_is_read_from_configured_log_dir() {
         let dir = tempfile::tempdir().unwrap();
         let workflow_path = dir.path().join("WORKFLOW.md");
-        write_workflow_with_logging_service_dir(&workflow_path, "service-logs");
+        write_workflow_with_logging_dir(&workflow_path, "logs");
         let target = ServiceTarget::load(Some(workflow_path.clone()), None, false).unwrap();
         write_state(
             &target.state_path,
@@ -891,33 +891,30 @@ mod tests {
     }
 
     #[test]
-    fn service_dir_survives_unrelated_invalid_config_for_management_target() {
+    fn log_dir_survives_unrelated_invalid_config_for_management_target() {
         let dir = tempfile::tempdir().unwrap();
         let workflow_path = dir.path().join("WORKFLOW.md");
-        write_workflow_with_logging_service_dir_and_invalid_agent(&workflow_path, "service-logs");
+        write_workflow_with_logging_dir_and_invalid_agent(&workflow_path, "logs");
 
         let target = ServiceTarget::load(Some(workflow_path), None, false).unwrap();
-        let expected_dir = fs::canonicalize(dir.path()).unwrap().join("service-logs");
+        let expected_dir = fs::canonicalize(dir.path()).unwrap().join("logs");
 
-        assert_eq!(target.service_dir, expected_dir);
-        assert_eq!(
-            target.state_path.parent(),
-            Some(target.service_dir.as_path())
-        );
+        assert_eq!(target.log_dir, expected_dir);
+        assert_eq!(target.state_path.parent(), Some(target.log_dir.as_path()));
     }
 
     #[test]
-    fn service_dir_uses_dotenv_for_management_target() {
+    fn log_dir_uses_dotenv_for_management_target() {
         let dir = tempfile::tempdir().unwrap();
         let workflow_path = dir.path().join("WORKFLOW.md");
-        let key = unique_env_key("SERVICE_DIR");
-        write_workflow_with_logging_service_dir(&workflow_path, &format!("${key}"));
-        fs::write(dir.path().join(".env"), format!("{key}=service-logs\n")).unwrap();
+        let key = unique_env_key("LOG_DIR");
+        write_workflow_with_logging_dir(&workflow_path, &format!("${key}"));
+        fs::write(dir.path().join(".env"), format!("{key}=logs\n")).unwrap();
 
         let target = ServiceTarget::load(Some(workflow_path), None, false).unwrap();
-        let expected_dir = fs::canonicalize(dir.path()).unwrap().join("service-logs");
+        let expected_dir = fs::canonicalize(dir.path()).unwrap().join("logs");
 
-        assert_eq!(target.service_dir, expected_dir);
+        assert_eq!(target.log_dir, expected_dir);
     }
 
     #[test]
@@ -929,11 +926,8 @@ mod tests {
         let target = ServiceTarget::load(Some(workflow_path.clone()), None, false).unwrap();
 
         assert_eq!(
-            target.service_dir,
-            fs::canonicalize(dir.path())
-                .unwrap()
-                .join(".vik")
-                .join("service")
+            target.log_dir,
+            service_log_dir_for_workflow(&target.workflow_path)
         );
     }
 
@@ -945,7 +939,10 @@ mod tests {
         let target = ServiceTarget::load(Some(workflow_path.clone()), None, false).unwrap();
 
         assert_eq!(target.workflow_path, workflow_path);
-        assert_eq!(target.service_dir, dir.path().join(".vik").join("service"));
+        assert_eq!(
+            target.log_dir,
+            service_log_dir_for_workflow(&target.workflow_path)
+        );
     }
 
     #[test]
@@ -979,11 +976,11 @@ mod tests {
         let nested = dir.path().join("nested").join("service");
         fs::create_dir_all(&nested).unwrap();
         let key = unique_env_key("SERVICE");
-        fs::write(dir.path().join(".env"), format!("{key}=from_service_dir\n")).unwrap();
+        fs::write(dir.path().join(".env"), format!("{key}=from_log_dir\n")).unwrap();
 
         load_dotenv_from_dir(&nested).unwrap();
 
-        assert_eq!(env::var(key).unwrap(), "from_service_dir");
+        assert_eq!(env::var(key).unwrap(), "from_log_dir");
     }
 
     #[test]
@@ -1031,9 +1028,9 @@ mod tests {
     fn service_target_with_cwd(cwd: PathBuf) -> ServiceTarget {
         ServiceTarget {
             workflow_path: PathBuf::from("/tmp/vik/WORKFLOW.md"),
-            service_dir: PathBuf::from("/tmp/vik/.vik/service"),
-            state_path: PathBuf::from("/tmp/vik/.vik/service/state.json"),
-            log_path: PathBuf::from("/tmp/vik/.vik/service/service.log"),
+            log_dir: PathBuf::from("/tmp/vik/.vik/logs"),
+            state_path: PathBuf::from("/tmp/vik/.vik/logs/state.json"),
+            log_path: PathBuf::from("/tmp/vik/.vik/logs/service.log"),
             cwd,
             port: None,
         }
@@ -1049,21 +1046,21 @@ mod tests {
         .unwrap();
     }
 
-    fn write_workflow_with_logging_service_dir(path: &Path, service_dir: &str) {
+    fn write_workflow_with_logging_dir(path: &Path, log_dir: &str) {
         fs::write(
             path,
             format!(
-                "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\nworkspace:\n  root: work\nlogging:\n  service_dir: {service_dir}\n---\nBody"
+                "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\nworkspace:\n  root: work\nlogging:\n  dir: {log_dir}\n---\nBody"
             ),
         )
         .unwrap();
     }
 
-    fn write_workflow_with_logging_service_dir_and_invalid_agent(path: &Path, service_dir: &str) {
+    fn write_workflow_with_logging_dir_and_invalid_agent(path: &Path, log_dir: &str) {
         fs::write(
             path,
             format!(
-                "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\nworkspace:\n  root: work\nlogging:\n  service_dir: {service_dir}\nagent:\n  max_turns: 0\n---\nBody"
+                "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\nworkspace:\n  root: work\nlogging:\n  dir: {log_dir}\nagent:\n  max_turns: 0\n---\nBody"
             ),
         )
         .unwrap();

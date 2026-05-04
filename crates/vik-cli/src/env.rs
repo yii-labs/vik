@@ -1,6 +1,8 @@
 use std::error::Error;
 use std::io;
 
+pub(crate) const SERVICE_LOG_DIR_ENV: &str = "VIK_SERVICE_LOG_DIR";
+
 pub(crate) fn load_dotenv() -> Result<(), Box<dyn Error>> {
     match dotenvy::dotenv() {
         Ok(_) => Ok(()),

@@ -1,4 +1,6 @@
+use std::env;
 use std::error::Error;
+use std::ffi::OsString;
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -34,7 +36,7 @@ pub(crate) async fn run(args: StartArgs) -> Result<(), Box<dyn Error>> {
     let loaded = reloader.current().clone();
     loaded.config.validate_for_dispatch()?;
 
-    let log_dir = loaded.config.logging.dir.clone();
+    let log_dir = service_log_dir_override().unwrap_or_else(|| loaded.config.logging.dir.clone());
     let _log_guard = init_logging(&log_dir)?;
     tracing::info!(log_dir=%log_dir.display(), "logging outcome=started");
 
@@ -109,6 +111,16 @@ fn init_logging(log_dir: &Path) -> Result<WorkerGuard, Box<dyn Error>> {
     Ok(guard)
 }
 
+fn service_log_dir_override() -> Option<PathBuf> {
+    service_log_dir_override_from(env::var_os(crate::env::SERVICE_LOG_DIR_ENV))
+}
+
+fn service_log_dir_override_from(value: Option<OsString>) -> Option<PathBuf> {
+    value
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+}
+
 fn http_addr(host: Option<IpAddr>, port: u16) -> SocketAddr {
     SocketAddr::new(host.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)), port)
 }
@@ -130,6 +142,19 @@ mod tests {
         assert_eq!(
             http_addr(Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED)), 3000),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 3000)
+        );
+    }
+
+    #[test]
+    fn service_log_dir_override_ignores_empty_value() {
+        assert_eq!(service_log_dir_override_from(Some(OsString::new())), None);
+    }
+
+    #[test]
+    fn service_log_dir_override_accepts_path_value() {
+        assert_eq!(
+            service_log_dir_override_from(Some(OsString::from("/tmp/vik/logs"))),
+            Some(PathBuf::from("/tmp/vik/logs"))
         );
     }
 }

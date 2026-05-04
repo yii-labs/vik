@@ -12,13 +12,12 @@ Default log directory:
 <workspace.root>/.vik/logs
 ```
 
-Service runs also write detached stdout and stderr to:
+Service runs use the same configured `logging.dir` when it is set. When it is
+omitted, service mode writes JSON logs plus detached stdout/stderr to:
 
 ```text
-<workflow-directory>/.vik/service/<workflow-stem>-<path-hash>.log
+$HOME/.vik/<workflow-stem>-<path-hash>/logs/
 ```
-
-Set `logging.service_dir` to move service logs and state files together.
 
 Useful commands:
 
