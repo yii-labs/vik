@@ -401,6 +401,14 @@ struct RegisteredWorkflow {
     registered_at_unix: u64,
 }
 
+impl RegisteredWorkflow {
+    fn runtime_equivalent(&self, other: &Self) -> bool {
+        self.workflow_path == other.workflow_path
+            && self.cwd == other.cwd
+            && self.registration_env == other.registration_env
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct WorkflowRegistry {
     version: u32,
@@ -705,7 +713,7 @@ async fn reconcile_registered_workflows(
             .lock()
             .await
             .get(&workflow.workflow_path)
-            .is_some_and(|runtime| runtime.registration == workflow);
+            .is_some_and(|runtime| runtime.registration.runtime_equivalent(&workflow));
         if runtime_is_current {
             continue;
         }
@@ -1865,6 +1873,29 @@ workspace:
             Some("new")
         );
         assert_ne!(first, *refreshed);
+    }
+
+    #[test]
+    fn registered_workflow_runtime_equivalence_ignores_registration_timestamp() {
+        let mut left = RegisteredWorkflow {
+            workflow_path: PathBuf::from("/tmp/workflow/WORKFLOW.md"),
+            cwd: PathBuf::from("/tmp/workflow"),
+            registration_env: HashMap::from([("LINEAR_API_KEY".to_string(), "old".to_string())]),
+            registered_at_unix: 1,
+        };
+        let mut right = left.clone();
+        right.registered_at_unix = 2;
+
+        assert!(left.runtime_equivalent(&right));
+
+        right
+            .registration_env
+            .insert("LINEAR_API_KEY".to_string(), "new".to_string());
+        assert!(!left.runtime_equivalent(&right));
+
+        left.registration_env = right.registration_env.clone();
+        right.cwd = PathBuf::from("/tmp/other");
+        assert!(!left.runtime_equivalent(&right));
     }
 
     #[test]
