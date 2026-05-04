@@ -148,6 +148,19 @@ fn github_tracker_requires_repository() {
 }
 
 #[test]
+fn github_tracker_rejects_malformed_repository() {
+    let def = parse_workflow_content(
+        PathBuf::from("WORKFLOW.md"),
+        "---\ntracker:\n  kind: github\n  api_key: gh_token\n  repository: yii-labs\n---\nBody",
+    )
+    .unwrap();
+    let config = ServiceConfig::from_definition(&def).unwrap();
+    let err = config.validate_for_dispatch().unwrap_err();
+
+    assert!(matches!(err, WorkflowError::InvalidTrackerRepository(_)));
+}
+
+#[test]
 fn unsupported_tracker_kind_is_rejected_for_dispatch() {
     let def = parse_workflow_content(
         PathBuf::from("WORKFLOW.md"),

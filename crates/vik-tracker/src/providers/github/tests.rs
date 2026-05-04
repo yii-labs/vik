@@ -56,24 +56,67 @@ fn issue_identifier_is_url_safe() {
 #[test]
 fn search_uses_issue_search_not_repository_issue_pagination() {
     assert_eq!(SEARCH_ISSUES_PATH, "/search/issues");
-    let client = GitHubClient::new(GitHubClientConfig::new(
-        DEFAULT_GITHUB_ENDPOINT,
-        "gh_token",
-        "yii-labs/vik",
-        vec!["Todo".to_string()],
-        vec!["Done".to_string()],
-    ))
+    let client = GitHubClient::new(
+        GitHubClientConfig::new(
+            DEFAULT_GITHUB_ENDPOINT,
+            "gh_token",
+            "yii-labs/vik",
+            vec!["Todo".to_string()],
+            vec!["Done".to_string()],
+        )
+        .with_filter(GitHubIssueFilterConfig::new(
+            vec!["forehalo".to_string()],
+            vec!["agent".to_string()],
+        )),
+    )
     .unwrap();
     let selector = state_selectors(&["In Progress".to_string()])
         .into_iter()
         .next()
         .unwrap();
-    let query = client.search_query(&selector);
+    let query = client.search_queries(&selector).remove(0);
 
     assert!(query.contains("repo:yii-labs/vik"));
     assert!(query.contains("is:issue"));
     assert!(query.contains("state:open"));
     assert!(query.contains("label:\"In Progress\""));
+    assert!(query.contains("assignee:\"forehalo\""));
+    assert!(query.contains("label:\"agent\""));
+}
+
+#[test]
+fn github_filter_or_semantics_use_separate_search_queries() {
+    let client = GitHubClient::new(
+        GitHubClientConfig::new(
+            DEFAULT_GITHUB_ENDPOINT,
+            "gh_token",
+            "yii-labs/vik",
+            vec!["Todo".to_string()],
+            vec!["Done".to_string()],
+        )
+        .with_filter(GitHubIssueFilterConfig::new(
+            vec!["one".to_string(), "two".to_string()],
+            vec!["agent".to_string(), "codex".to_string()],
+        )),
+    )
+    .unwrap();
+    let selector = state_selectors(&["Todo".to_string()])
+        .into_iter()
+        .next()
+        .unwrap();
+    let queries = client.search_queries(&selector);
+
+    assert_eq!(queries.len(), 4);
+    assert!(
+        queries
+            .iter()
+            .any(|query| query.contains("assignee:\"one\"") && query.contains("label:\"agent\""))
+    );
+    assert!(
+        queries
+            .iter()
+            .any(|query| query.contains("assignee:\"two\"") && query.contains("label:\"codex\""))
+    );
 }
 
 #[test]

@@ -13,7 +13,9 @@ use crate::providers::{IssueAttachment, IssueComment, IssueUpdate, Tracker};
 use super::queries::{SEARCH_ISSUES_PATH, issue_comment_path, issue_comments_path, issue_path};
 
 pub const DEFAULT_GITHUB_ENDPOINT: &str = "https://api.github.com";
+const GITHUB_USER_AGENT: &str = "vik-tracker/0.1";
 const DEFAULT_PAGE_SIZE: u64 = 100;
+const STATE_REFRESH_CONCURRENCY: usize = 8;
 
 #[derive(Debug, Clone)]
 pub struct GitHubClientConfig {
@@ -164,6 +166,7 @@ impl GitHubClient {
             .http
             .request(method, &url)
             .bearer_auth(&self.api_key)
+            .header("User-Agent", GITHUB_USER_AGENT)
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28");
         if let Some(body) = body {
@@ -195,50 +198,101 @@ impl GitHubClient {
         let mut issues = Vec::new();
         let mut seen = HashSet::new();
         for selector in selectors {
-            let query_text = self.search_query(&selector);
-            let mut page = 1_u64;
-            loop {
-                let payload = self
-                    .request_json(
-                        Method::GET,
-                        SEARCH_ISSUES_PATH,
-                        &[
-                            ("q", query_text.clone()),
-                            ("per_page", self.page_size.to_string()),
-                            ("page", page.to_string()),
-                        ],
-                        None,
-                    )
-                    .await?;
-                let items = payload
-                    .get("items")
-                    .and_then(Value::as_array)
-                    .ok_or_else(|| {
-                        TrackerError::GitHubUnknownPayload("missing search.items".to_string())
-                    })?;
-                for item in items {
-                    let issue = self.normalize_issue(item, state_names)?;
-                    if self.matches_filter(item, &issue) && seen.insert(issue.id.clone()) {
-                        issues.push(issue);
+            for query_text in self.search_queries(&selector) {
+                let mut page = 1_u64;
+                loop {
+                    let payload = self
+                        .request_json(
+                            Method::GET,
+                            SEARCH_ISSUES_PATH,
+                            &[
+                                ("q", query_text.clone()),
+                                ("per_page", self.page_size.to_string()),
+                                ("page", page.to_string()),
+                            ],
+                            None,
+                        )
+                        .await?;
+                    let total_count = payload
+                        .get("total_count")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0)
+                        .min(1_000);
+                    let items =
+                        payload
+                            .get("items")
+                            .and_then(Value::as_array)
+                            .ok_or_else(|| {
+                                TrackerError::GitHubUnknownPayload(
+                                    "missing search.items".to_string(),
+                                )
+                            })?;
+                    for item in items {
+                        let issue = self.normalize_issue(item, state_names)?;
+                        if self.matches_filter(item, &issue) && seen.insert(issue.id.clone()) {
+                            issues.push(issue);
+                        }
                     }
+                    if items.len() < self.page_size as usize || page * self.page_size >= total_count
+                    {
+                        break;
+                    }
+                    page += 1;
                 }
-                if items.len() < self.page_size as usize {
-                    break;
-                }
-                page += 1;
             }
         }
         Ok(issues)
     }
 
-    pub(crate) fn search_query(&self, selector: &StateSelector) -> String {
+    pub(crate) fn search_queries(&self, selector: &StateSelector) -> Vec<String> {
+        let assignees: Vec<Option<&str>> = if self.filter.assignees.is_empty() {
+            vec![None]
+        } else {
+            self.filter
+                .assignees
+                .iter()
+                .map(|assignee| Some(assignee.as_str()))
+                .collect()
+        };
+        let tags: Vec<Option<&str>> = if self.filter.tags.is_empty() {
+            vec![None]
+        } else {
+            self.filter
+                .tags
+                .iter()
+                .map(|tag| Some(tag.as_str()))
+                .collect()
+        };
+        let mut queries = Vec::new();
+        for assignee in &assignees {
+            for tag in &tags {
+                queries.push(self.search_query(selector, *assignee, *tag));
+            }
+        }
+        queries
+    }
+
+    fn search_query(
+        &self,
+        selector: &StateSelector,
+        assignee: Option<&str>,
+        tag: Option<&str>,
+    ) -> String {
         let mut parts = vec![
             format!("repo:{}", self.repository.name_with_owner()),
             "is:issue".to_string(),
             format!("state:{}", selector.github_state),
         ];
         if let Some(label) = &selector.label {
-            parts.push(format!("label:\"{}\"", label.replace('"', "\\\"")));
+            push_label_qualifier(&mut parts, label);
+        }
+        if let Some(assignee) = assignee {
+            parts.push(format!("assignee:{}", quote_search_value(assignee)));
+        }
+        if let Some(tag) = tag
+            && selector.label.as_deref() != Some(tag)
+        {
+            push_label_qualifier(&mut parts, tag);
         }
         parts.join(" ")
     }
@@ -379,8 +433,21 @@ impl Tracker for GitHubClient {
 
     async fn fetch_states_by_ids(&self, issue_ids: &[String]) -> Result<Vec<Issue>, TrackerError> {
         let mut issues = Vec::new();
-        for issue_id in issue_ids {
-            issues.push(self.get_issue(issue_id).await?);
+        for chunk in issue_ids.chunks(STATE_REFRESH_CONCURRENCY) {
+            let mut tasks = Vec::new();
+            for issue_id in chunk {
+                let client = self.clone();
+                let issue_id = issue_id.clone();
+                tasks.push(tokio::spawn(
+                    async move { client.get_issue(&issue_id).await },
+                ));
+            }
+            for task in tasks {
+                let issue = task
+                    .await
+                    .map_err(|err| TrackerError::GitHubApiRequest(err.to_string()))??;
+                issues.push(issue);
+            }
         }
         Ok(issues)
     }
@@ -669,6 +736,14 @@ fn normalize_comment(comment: &Value) -> Result<IssueComment, TrackerError> {
     let body = string_field(comment, "body").unwrap_or_default();
     let url = string_field(comment, "html_url");
     Ok(IssueComment { id, body, url })
+}
+
+fn push_label_qualifier(parts: &mut Vec<String>, label: &str) {
+    parts.push(format!("label:{}", quote_search_value(label)));
+}
+
+fn quote_search_value(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\\\""))
 }
 
 fn append_query(mut url: String, query: &[(&str, String)]) -> String {

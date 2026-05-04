@@ -321,6 +321,7 @@ impl ServiceConfig {
                 if self.tracker.repository.trim().is_empty() {
                     return Err(WorkflowError::MissingTrackerRepository);
                 }
+                validate_github_repository(&self.tracker.repository)?;
             }
             _ => return Err(WorkflowError::UnsupportedTrackerKind),
         }
@@ -360,6 +361,33 @@ impl ServiceConfig {
             ));
         }
         Ok(())
+    }
+}
+
+fn validate_github_repository(raw: &str) -> Result<(), WorkflowError> {
+    let mut value = raw.trim().trim_end_matches('/').to_string();
+    for prefix in [
+        "https://github.com/",
+        "http://github.com/",
+        "ssh://git@github.com/",
+        "git@github.com:",
+    ] {
+        if let Some(stripped) = value.strip_prefix(prefix) {
+            value = stripped.to_string();
+            break;
+        }
+    }
+    if let Some(stripped) = value.strip_suffix(".git") {
+        value = stripped.to_string();
+    }
+    let parts: Vec<_> = value
+        .split('/')
+        .filter(|part| !part.trim().is_empty())
+        .collect();
+    if parts.len() == 2 {
+        Ok(())
+    } else {
+        Err(WorkflowError::InvalidTrackerRepository(raw.to_string()))
     }
 }
 

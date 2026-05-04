@@ -20,6 +20,8 @@ pub enum WorkflowError {
     MissingTrackerProjectSlug,
     #[error("missing_tracker_repository")]
     MissingTrackerRepository,
+    #[error("invalid_tracker_repository: {0}")]
+    InvalidTrackerRepository(String),
     #[error("invalid_config: {0}")]
     InvalidConfig(String),
 }
