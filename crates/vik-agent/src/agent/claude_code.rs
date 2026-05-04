@@ -316,17 +316,8 @@ impl ClaudeMcpRuntime {
         };
         let current_exe =
             std::env::current_exe().map_err(|err| AgentError::ResponseError(err.to_string()))?;
-        let config_path = std::env::temp_dir().join(format!(
-            "vik-claude-mcp-{}-{}.json",
-            std::process::id(),
-            Utc::now().timestamp_millis()
-        ));
         let body = claude_mcp_config_body(&current_exe);
-        let bytes =
-            serde_json::to_vec(&body).map_err(|err| AgentError::ResponseError(err.to_string()))?;
-        tokio::fs::write(&config_path, bytes)
-            .await
-            .map_err(|err| AgentError::ResponseError(err.to_string()))?;
+        let config_path = write_unique_claude_mcp_config(&body).await?;
         Ok(Some(Self {
             config_path,
             linear_graphql,
@@ -362,6 +353,39 @@ fn claude_mcp_config_body(current_exe: &Path) -> Value {
             }
         }
     })
+}
+
+async fn write_unique_claude_mcp_config(body: &Value) -> Result<PathBuf, AgentError> {
+    let bytes =
+        serde_json::to_vec(body).map_err(|err| AgentError::ResponseError(err.to_string()))?;
+    for attempt in 0..100_u32 {
+        let timestamp = Utc::now()
+            .timestamp_nanos_opt()
+            .map(|nanos| nanos.to_string())
+            .unwrap_or_else(|| Utc::now().timestamp_millis().to_string());
+        let path = std::env::temp_dir().join(format!(
+            "vik-claude-mcp-{}-{timestamp}-{attempt}.json",
+            std::process::id()
+        ));
+        let mut file = match tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .await
+        {
+            Ok(file) => file,
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(AgentError::ResponseError(err.to_string())),
+        };
+        if let Err(err) = file.write_all(&bytes).await {
+            let _ = tokio::fs::remove_file(&path).await;
+            return Err(AgentError::ResponseError(err.to_string()));
+        }
+        return Ok(path);
+    }
+    Err(AgentError::ResponseError(
+        "failed to allocate unique Claude MCP config path".to_string(),
+    ))
 }
 
 #[derive(Debug, Default)]
@@ -887,6 +911,24 @@ mod tests {
             config.pointer("/mcpServers/vik/env/VIK_LINEAR_GRAPHQL_API_KEY"),
             Some(&json!("${VIK_LINEAR_GRAPHQL_API_KEY}"))
         );
+    }
+
+    #[tokio::test]
+    async fn claude_mcp_config_paths_are_created_atomically() {
+        let config = super::claude_mcp_config_body(Path::new("/bin/vik"));
+
+        let first = super::write_unique_claude_mcp_config(&config)
+            .await
+            .unwrap();
+        let second = super::write_unique_claude_mcp_config(&config)
+            .await
+            .unwrap();
+
+        assert_ne!(first, second);
+        assert!(first.exists());
+        assert!(second.exists());
+        let _ = tokio::fs::remove_file(first).await;
+        let _ = tokio::fs::remove_file(second).await;
     }
 
     #[tokio::test]
