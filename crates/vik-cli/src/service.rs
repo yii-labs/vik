@@ -409,15 +409,15 @@ impl ServiceTarget {
         port: Option<u16>,
     ) -> Result<Self, Box<dyn Error>> {
         let explicit_workflow = workflow.is_some();
-        let workflow_path = resolve_workflow_path(workflow)?;
-        let cwd = service_cwd_for_workflow(&workflow_path, explicit_workflow)?;
+        let workflow_path = workflow.unwrap_or_else(|| PathBuf::from("WORKFLOW.md"));
+        let absolute_workflow_path = absolute_workflow_path(&workflow_path)?;
+        let cwd = service_cwd_for_workflow(&absolute_workflow_path, explicit_workflow)?;
         load_dotenv_from_dir(&cwd)?;
 
-        let loaded = load_effective_workflow(Some(workflow_path))?;
+        let loaded = load_effective_workflow(Some(workflow_path.clone()))?;
         loaded.config.validate_for_dispatch()?;
-        let workflow_path = fs::canonicalize(&loaded.definition.path)?;
-        let service_dir = service_dir_for_workflow(&workflow_path);
-        let name = service_name(&workflow_path);
+        let service_dir = service_dir_for_workflow(&absolute_workflow_path);
+        let name = service_name(&absolute_workflow_path);
         Ok(Self {
             workflow_path,
             service_dir: service_dir.clone(),
@@ -426,6 +426,14 @@ impl ServiceTarget {
             cwd,
             port,
         })
+    }
+}
+
+fn absolute_workflow_path(workflow_path: &Path) -> io::Result<PathBuf> {
+    if workflow_path.is_absolute() {
+        Ok(workflow_path.to_path_buf())
+    } else {
+        Ok(env::current_dir()?.join(workflow_path))
     }
 }
 
@@ -890,19 +898,42 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let workflow_path = dir.path().join("WORKFLOW.md");
         write_workflow(&workflow_path, "work");
-        let canonical_workflow = fs::canonicalize(&workflow_path).unwrap();
-        let service_dir = service_dir_for_workflow(&canonical_workflow);
+        let absolute_workflow = absolute_workflow_path(&workflow_path).unwrap();
+        let service_dir = service_dir_for_workflow(&absolute_workflow);
         fs::create_dir_all(&service_dir).unwrap();
         fs::write(
-            service_dir.join(format!("{}.json", service_name(&canonical_workflow))),
+            service_dir.join(format!("{}.json", service_name(&absolute_workflow))),
             "{",
         )
         .unwrap();
 
-        let target = ServiceTarget::load_for_foreground(Some(workflow_path), Some(3000)).unwrap();
+        let target =
+            ServiceTarget::load_for_foreground(Some(workflow_path.clone()), Some(3000)).unwrap();
 
-        assert_eq!(target.workflow_path, canonical_workflow);
+        assert_eq!(target.workflow_path, workflow_path);
         assert_eq!(target.port, Some(3000));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn foreground_target_preserves_symlinked_workflow_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let real_dir = dir.path().join("real");
+        let link_dir = dir.path().join("link");
+        fs::create_dir_all(&real_dir).unwrap();
+        fs::create_dir_all(&link_dir).unwrap();
+        let real_workflow = real_dir.join("WORKFLOW.md");
+        let link_workflow = link_dir.join("WORKFLOW.md");
+        write_workflow(&real_workflow, "work");
+        std::os::unix::fs::symlink(&real_workflow, &link_workflow).unwrap();
+
+        let target = ServiceTarget::load_for_foreground(Some(link_workflow.clone()), None).unwrap();
+
+        assert_eq!(target.workflow_path, link_workflow);
+        assert_ne!(
+            fs::canonicalize(&target.workflow_path).unwrap(),
+            target.workflow_path
+        );
     }
 
     #[test]
