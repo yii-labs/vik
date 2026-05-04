@@ -69,9 +69,9 @@ fn applies_defaults_and_path_resolution() {
         config.codex.approvals_reviewer,
         Some(serde_json::Value::String("auto_review".to_string()))
     );
-    assert!(config.tracker.filter.assignees.is_empty());
-    assert!(config.tracker.filter.tags.is_empty());
-    assert!(config.tracker.repository.is_empty());
+    assert!(config.tracker.filter().assignees.is_empty());
+    assert!(config.tracker.filter().tags.is_empty());
+    assert!(config.tracker.github_provider().is_none());
     assert!(
         !config
             .agent
@@ -93,8 +93,8 @@ fn parses_tracker_filter() {
     let def = parse_workflow_file(&path).unwrap();
     let config = ServiceConfig::from_definition(&def).unwrap();
 
-    assert_eq!(config.tracker.filter.assignees, vec!["user-a", "user-b"]);
-    assert_eq!(config.tracker.filter.tags, vec!["agent", "codex"]);
+    assert_eq!(config.tracker.filter().assignees, vec!["user-a", "user-b"]);
+    assert_eq!(config.tracker.filter().tags, vec!["agent", "codex"]);
 }
 
 #[test]
@@ -110,8 +110,8 @@ fn empty_tracker_filter_lists_match_all_issues() {
     let def = parse_workflow_file(&path).unwrap();
     let config = ServiceConfig::from_definition(&def).unwrap();
 
-    assert!(config.tracker.filter.assignees.is_empty());
-    assert!(config.tracker.filter.tags.is_empty());
+    assert!(config.tracker.filter().assignees.is_empty());
+    assert!(config.tracker.filter().tags.is_empty());
 }
 
 #[test]
@@ -127,10 +127,13 @@ fn accepts_github_tracker_config() {
     let def = parse_workflow_file(&path).unwrap();
     let config = ServiceConfig::from_definition(&def).unwrap();
 
-    assert_eq!(config.tracker.kind, "github");
-    assert_eq!(config.tracker.endpoint, "https://api.github.com");
-    assert_eq!(config.tracker.repository, "yii-labs/vik");
-    assert!(config.tracker.project_slug.is_empty());
+    assert_eq!(config.tracker.kind_name(), "github");
+    assert_eq!(config.tracker.endpoint(), "https://api.github.com");
+    assert_eq!(
+        config.tracker.github_provider().unwrap().repository,
+        "yii-labs/vik"
+    );
+    assert!(config.tracker.linear_provider().is_none());
     config.validate_for_dispatch().unwrap();
 }
 

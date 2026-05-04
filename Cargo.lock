@@ -2106,6 +2106,7 @@ dependencies = [
  "tokio",
  "tracing",
  "vik-core",
+ "vik-tracker",
 ]
 
 [[package]]

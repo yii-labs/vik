@@ -2,7 +2,7 @@ use serde_json::json;
 use std::path::Path;
 use tempfile::TempDir;
 use vik_core::HostPlatform;
-use vik_workflow::{CodexConfig, TrackerConfig};
+use vik_workflow::{CodexConfig, CommonTrackerConfig, LinearTrackerConfig, TrackerConfig};
 
 use crate::client::{
     codex_spawn_command, codex_spawn_process_command_for_platform, message_belongs_to_turn,
@@ -148,14 +148,14 @@ fn thread_start_payload_uses_workspace_cwd() {
 #[test]
 fn thread_start_payload_includes_configured_dynamic_tools() {
     let tools = DynamicTools::from_tracker_config(&TrackerConfig {
-        kind: "linear".to_string(),
-        endpoint: "https://api.linear.app/graphql".to_string(),
-        api_key: "lin_api_key".to_string(),
-        project_slug: "VIK".to_string(),
-        repository: String::new(),
-        active_states: vec!["Todo".to_string()],
-        terminal_states: vec!["Done".to_string()],
-        filter: Default::default(),
+        common: CommonTrackerConfig {
+            endpoint: "https://api.linear.app/graphql".to_string(),
+            api_key: "lin_api_key".to_string(),
+            active_states: vec!["Todo".to_string()],
+            terminal_states: vec!["Done".to_string()],
+            filter: Default::default(),
+        },
+        kind: vik_workflow::TrackerKind::Linear(LinearTrackerConfig::new("VIK")),
     });
     let payload = thread_start_params(
         Path::new("/tmp/workspace"),

@@ -39,13 +39,13 @@ where
             let terminal = loaded
                 .config
                 .tracker
-                .terminal_states
+                .terminal_states()
                 .iter()
                 .any(|state| normalize_state(state) == state_name);
             let active = loaded
                 .config
                 .tracker
-                .active_states
+                .active_states()
                 .iter()
                 .any(|state| normalize_state(state) == state_name);
             if terminal {

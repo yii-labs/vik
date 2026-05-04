@@ -37,8 +37,8 @@ pub fn should_dispatch_retry(
     }
     if !issue_is_active(
         issue,
-        &config.tracker.active_states,
-        &config.tracker.terminal_states,
+        config.tracker.active_states(),
+        config.tracker.terminal_states(),
     ) {
         return false;
     }
@@ -52,7 +52,7 @@ pub fn should_dispatch_retry(
         && issue
             .blocked_by
             .iter()
-            .any(|blocker| !blocker_is_terminal(blocker, &config.tracker.terminal_states))
+            .any(|blocker| !blocker_is_terminal(blocker, config.tracker.terminal_states()))
     {
         return false;
     }

@@ -1,10 +1,171 @@
 use std::path::Path;
+use std::{env, fmt};
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use vik_core::{Issue, IssueTracker, TrackerError};
 
 pub mod github;
 pub mod linear;
+
+#[derive(Debug, Error)]
+pub enum TrackerConfigError {
+    #[error("unsupported_tracker_kind")]
+    UnsupportedTrackerKind,
+    #[error("missing_tracker_api_key")]
+    MissingApiKey,
+    #[error("missing_tracker_project_slug")]
+    MissingProjectSlug,
+    #[error("missing_tracker_repository")]
+    MissingRepository,
+    #[error("invalid_tracker_repository: {0}")]
+    InvalidRepository(String),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrackerFilterConfig {
+    #[serde(default)]
+    pub assignees: Vec<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommonTrackerConfig {
+    pub endpoint: String,
+    pub api_key: String,
+    pub active_states: Vec<String>,
+    pub terminal_states: Vec<String>,
+    #[serde(default)]
+    pub filter: TrackerFilterConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TrackerKind {
+    Linear(linear::LinearTrackerConfig),
+    GitHub(github::GitHubTrackerConfig),
+    Unsupported(String),
+}
+
+impl TrackerKind {
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Linear(_) => "linear",
+            Self::GitHub(_) => "github",
+            Self::Unsupported(kind) => kind,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrackerConfig {
+    pub common: CommonTrackerConfig,
+    pub kind: TrackerKind,
+}
+
+impl TrackerConfig {
+    pub fn linear(common: CommonTrackerConfig, provider: linear::LinearTrackerConfig) -> Self {
+        Self {
+            common,
+            kind: TrackerKind::Linear(provider),
+        }
+    }
+
+    pub fn github(common: CommonTrackerConfig, provider: github::GitHubTrackerConfig) -> Self {
+        Self {
+            common,
+            kind: TrackerKind::GitHub(provider),
+        }
+    }
+
+    pub fn unsupported(common: CommonTrackerConfig, kind: impl Into<String>) -> Self {
+        Self {
+            common,
+            kind: TrackerKind::Unsupported(kind.into()),
+        }
+    }
+
+    pub fn kind_name(&self) -> &str {
+        self.kind.name()
+    }
+
+    pub fn endpoint(&self) -> &str {
+        &self.common.endpoint
+    }
+
+    pub fn api_key(&self) -> &str {
+        &self.common.api_key
+    }
+
+    pub fn active_states(&self) -> &[String] {
+        &self.common.active_states
+    }
+
+    pub fn terminal_states(&self) -> &[String] {
+        &self.common.terminal_states
+    }
+
+    pub fn filter(&self) -> &TrackerFilterConfig {
+        &self.common.filter
+    }
+
+    pub fn linear_provider(&self) -> Option<&linear::LinearTrackerConfig> {
+        match &self.kind {
+            TrackerKind::Linear(config) => Some(config),
+            _ => None,
+        }
+    }
+
+    pub fn github_provider(&self) -> Option<&github::GitHubTrackerConfig> {
+        match &self.kind {
+            TrackerKind::GitHub(config) => Some(config),
+            _ => None,
+        }
+    }
+
+    pub fn default_endpoint(kind: &str) -> Option<&'static str> {
+        match kind {
+            "linear" => Some(linear::DEFAULT_LINEAR_ENDPOINT),
+            "github" => Some(github::DEFAULT_GITHUB_ENDPOINT),
+            _ => None,
+        }
+    }
+
+    pub fn api_key_from_env(kind: &str) -> Option<String> {
+        match kind {
+            "linear" => env::var("LINEAR_API_KEY").ok(),
+            "github" => env::var("GH_TOKEN")
+                .ok()
+                .or_else(|| env::var("GITHUB_TOKEN").ok()),
+            _ => None,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), TrackerConfigError> {
+        match &self.kind {
+            TrackerKind::Linear(config) => {
+                if self.common.api_key.trim().is_empty() {
+                    return Err(TrackerConfigError::MissingApiKey);
+                }
+                config.validate()
+            }
+            TrackerKind::GitHub(config) => {
+                if self.common.api_key.trim().is_empty() {
+                    return Err(TrackerConfigError::MissingApiKey);
+                }
+                config.validate()
+            }
+            TrackerKind::Unsupported(_) => Err(TrackerConfigError::UnsupportedTrackerKind),
+        }
+    }
+}
+
+impl fmt::Display for TrackerKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IssueUpdate {

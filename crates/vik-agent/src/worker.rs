@@ -64,8 +64,8 @@ where
         let tools = DynamicTools::from_tracker_config(&request.config.tracker);
         let client =
             CodexAppServerClient::new(request.config.codex.clone()).with_dynamic_tools(tools);
-        let active_states = request.config.tracker.active_states.clone();
-        let terminal_states = request.config.tracker.terminal_states.clone();
+        let active_states = request.config.tracker.active_states().to_vec();
+        let terminal_states = request.config.tracker.terminal_states().to_vec();
         let issue_id = request.issue.id.clone();
         let tracker = Arc::clone(&self.tracker);
         let result = client
