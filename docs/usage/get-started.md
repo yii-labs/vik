@@ -6,7 +6,7 @@ print, log, or commit secret values.
 
 ## 1. Workspace
 
-Why: Vik creates one working copy per active Linear issue. The workspace root
+Why: Vik creates one working copy per active tracker issue. The workspace root
 must be a directory where Vik may create, mutate, and remove issue directories.
 
 1. Start in the operator directory that contains `WORKFLOW.md`:
@@ -41,18 +41,20 @@ must be a directory where Vik may create, mutate, and remove issue directories.
 
 ## 2. Workflow
 
-Why: `WORKFLOW.md` tells Vik which Linear issues to claim, where to create
+Why: `WORKFLOW.md` tells Vik which tracker issues to claim, where to create
 workspaces, how to clone the repo, and how to launch Codex.
 
 1. Open `WORKFLOW.md`.
-2. Confirm `tracker.project_slug` matches the Linear project slug.
-3. Confirm `tracker.active_states` contains every state Vik may claim.
-4. Confirm `tracker.terminal_states` contains terminal states that should stop
+2. Confirm `tracker.kind` is `linear` or `github`.
+3. For Linear, confirm `tracker.project_slug` matches the Linear project slug.
+4. For GitHub, confirm `tracker.repository` matches the `owner/name` repository.
+5. Confirm `tracker.active_states` contains every state Vik may claim.
+6. Confirm `tracker.terminal_states` contains terminal states that should stop
    tracking and trigger cleanup.
-5. Confirm `workspace.root` points to the directory created above.
-6. Confirm `hooks.after_create` clones this repo into the empty issue
+7. Confirm `workspace.root` points to the directory created above.
+8. Confirm `hooks.after_create` clones this repo into the empty issue
    workspace.
-7. Confirm `codex.command` launches `codex app-server`.
+9. Confirm `codex.command` launches `codex app-server`.
 
 Validate config parsing after connections are configured:
 
@@ -122,7 +124,9 @@ Steps:
 ### GitHub
 
 Why: Vik workflow hooks clone repositories. Agents also need GitHub access for
-branch, push, PR, label, comment, review, and check operations.
+branch, push, PR, label, comment, review, and check operations. When
+`tracker.kind` is `github`, Vik also uses this token to read and update GitHub
+issues.
 
 Official links:
 
@@ -196,8 +200,9 @@ Steps:
 
 ### Linear
 
-Why: Vik reads candidate issues from Linear, updates issue metadata during
-workflow execution, and exposes a `linear_graphql` tool to Codex sessions.
+Why: With `tracker.kind: linear`, Vik reads candidate issues from Linear,
+updates issue metadata during workflow execution, and exposes a `linear_graphql`
+tool to Codex sessions.
 
 Official links:
 
@@ -249,3 +254,5 @@ Steps:
 - [Service Daemon](service-daemon.md)
 - [Configuration](configuration.md)
 - [Observation](observation.md)
+- [Linear Tracker](trackers/linear.md)
+- [GitHub Tracker](trackers/github.md)

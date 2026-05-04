@@ -17,6 +17,7 @@ pub struct TrackerConfig {
     pub endpoint: String,
     pub api_key: String,
     pub project_slug: String,
+    pub repository: String,
     pub active_states: Vec<String>,
     pub terminal_states: Vec<String>,
     #[serde(default)]
@@ -191,19 +192,19 @@ impl ServiceConfig {
         let server_map = get_map(&definition.config, "server");
 
         let tracker_kind = string_value(tracker_map, "kind").unwrap_or_default();
-        let endpoint = string_value(tracker_map, "endpoint").unwrap_or_else(|| {
-            if tracker_kind == "linear" {
-                "https://api.linear.app/graphql".to_string()
-            } else {
-                String::new()
-            }
-        });
+        let endpoint =
+            string_value(tracker_map, "endpoint").unwrap_or_else(|| match tracker_kind.as_str() {
+                "linear" => "https://api.linear.app/graphql".to_string(),
+                "github" => "https://api.github.com".to_string(),
+                _ => String::new(),
+            });
         let api_key = string_value(tracker_map, "api_key")
-            .or_else(|| env::var("LINEAR_API_KEY").ok())
+            .or_else(|| tracker_api_key_from_env(&tracker_kind))
             .map(resolve_exact_env)
             .transpose()?
             .unwrap_or_default();
         let project_slug = string_value(tracker_map, "project_slug").unwrap_or_default();
+        let repository = string_value(tracker_map, "repository").unwrap_or_default();
         let active_states = string_vec(tracker_map, "active_states")
             .unwrap_or_else(|| vec!["Todo".to_string(), "In Progress".to_string()]);
         let terminal_states = string_vec(tracker_map, "terminal_states").unwrap_or_else(|| {
@@ -279,6 +280,7 @@ impl ServiceConfig {
                 endpoint,
                 api_key,
                 project_slug,
+                repository,
                 active_states,
                 terminal_states,
                 filter,
@@ -303,14 +305,24 @@ impl ServiceConfig {
     }
 
     pub fn validate_for_dispatch(&self) -> Result<(), WorkflowError> {
-        if self.tracker.kind != "linear" {
-            return Err(WorkflowError::UnsupportedTrackerKind);
-        }
-        if self.tracker.api_key.trim().is_empty() {
-            return Err(WorkflowError::MissingTrackerApiKey);
-        }
-        if self.tracker.project_slug.trim().is_empty() {
-            return Err(WorkflowError::MissingTrackerProjectSlug);
+        match self.tracker.kind.as_str() {
+            "linear" => {
+                if self.tracker.api_key.trim().is_empty() {
+                    return Err(WorkflowError::MissingTrackerApiKey);
+                }
+                if self.tracker.project_slug.trim().is_empty() {
+                    return Err(WorkflowError::MissingTrackerProjectSlug);
+                }
+            }
+            "github" => {
+                if self.tracker.api_key.trim().is_empty() {
+                    return Err(WorkflowError::MissingTrackerApiKey);
+                }
+                if self.tracker.repository.trim().is_empty() {
+                    return Err(WorkflowError::MissingTrackerRepository);
+                }
+            }
+            _ => return Err(WorkflowError::UnsupportedTrackerKind),
         }
         if self.polling.interval_ms == 0 {
             return Err(WorkflowError::InvalidConfig(
@@ -348,5 +360,15 @@ impl ServiceConfig {
             ));
         }
         Ok(())
+    }
+}
+
+fn tracker_api_key_from_env(tracker_kind: &str) -> Option<String> {
+    match tracker_kind {
+        "linear" => env::var("LINEAR_API_KEY").ok(),
+        "github" => env::var("GH_TOKEN")
+            .ok()
+            .or_else(|| env::var("GITHUB_TOKEN").ok()),
+        _ => None,
     }
 }

@@ -82,11 +82,3 @@ fn opt_datetime(node: &Value, key: &str) -> Option<DateTime<Utc>> {
         .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
         .map(|value| value.with_timezone(&Utc))
 }
-
-pub fn dispatch_sort_key(issue: &Issue) -> (i64, Option<DateTime<Utc>>, String) {
-    (
-        issue.priority.unwrap_or(i64::MAX),
-        issue.created_at,
-        issue.identifier.clone(),
-    )
-}

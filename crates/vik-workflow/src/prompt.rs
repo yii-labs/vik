@@ -4,7 +4,7 @@ use vik_core::{Issue, WorkflowDefinition};
 
 use crate::WorkflowError;
 
-const DEFAULT_PROMPT: &str = "You are working on an issue from Linear.";
+const DEFAULT_PROMPT: &str = "You are working on an issue from the configured tracker.";
 
 pub fn render_prompt(
     definition: &WorkflowDefinition,

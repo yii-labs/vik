@@ -152,6 +152,7 @@ fn thread_start_payload_includes_configured_dynamic_tools() {
         endpoint: "https://api.linear.app/graphql".to_string(),
         api_key: "lin_api_key".to_string(),
         project_slug: "VIK".to_string(),
+        repository: String::new(),
         active_states: vec!["Todo".to_string()],
         terminal_states: vec!["Done".to_string()],
         filter: Default::default(),

@@ -6,7 +6,7 @@
 - Git.
 - GitHub CLI for PR work.
 - Codex CLI for local orchestration runs.
-- Linear API key for real tracker runs.
+- Linear API key or GitHub token for real tracker runs.
 - Docker for image validation when touching Docker files.
 
 ## Clone
@@ -24,10 +24,10 @@ Create `.env` only for local runs:
 cp .env.example .env
 ```
 
-Replace `LINEAR_API_KEY=lin_api_xxx` with a real key. Do not commit `.env`.
+Replace the tracker token placeholders with real keys. Do not commit `.env`.
 
 For config-only validation, a placeholder environment value is enough because
-`vik check` validates config shape and does not call Linear:
+`vik check` validates config shape and does not call the tracker:
 
 ```sh
 LINEAR_API_KEY=ci-placeholder cargo run --locked -p vik-cli -- check ./WORKFLOW.md
@@ -35,8 +35,11 @@ LINEAR_API_KEY=ci-placeholder cargo run --locked -p vik-cli -- check ./WORKFLOW.
 
 ## Local Smoke Run
 
-Use an isolated Linear project and workspace root for real daemon testing. Do
-not point a smoke run at the shared project unless that is the test target.
+Use an isolated tracker project or repository and workspace root for real daemon
+testing. Do not point a smoke run at the shared tracker unless that is the test
+target.
+
+For a Linear smoke run:
 
 ```sh
 : "${VIK_LINEAR_PROJECT_SLUG:?set isolated Linear project slug}"

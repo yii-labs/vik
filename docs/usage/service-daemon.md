@@ -78,7 +78,8 @@ dispatch validation. Existing shell environment values win over `.env` values.
 
 Required credentials:
 
-- `LINEAR_API_KEY`
+- Tracker token: `LINEAR_API_KEY` for Linear, or `GH_TOKEN`/`GITHUB_TOKEN` for
+  GitHub
 - Codex auth in `CODEX_HOME` or `OPENAI_API_KEY`
 - GitHub CLI auth, `GH_TOKEN`, `GITHUB_TOKEN`, or working SSH credentials
 

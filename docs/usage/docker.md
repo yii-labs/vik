@@ -36,7 +36,8 @@ workspace:
 ## Config Check
 
 Pass required secrets as environment variables. Docker does not copy local
-config files unless you mount them.
+config files unless you mount them. Use `LINEAR_API_KEY` for a Linear tracker or
+`GH_TOKEN`/`GITHUB_TOKEN` for a GitHub tracker.
 
 ```sh
 docker run --rm \

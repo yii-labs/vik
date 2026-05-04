@@ -71,6 +71,7 @@ fn applies_defaults_and_path_resolution() {
     );
     assert!(config.tracker.filter.assignees.is_empty());
     assert!(config.tracker.filter.tags.is_empty());
+    assert!(config.tracker.repository.is_empty());
     assert!(
         !config
             .agent
@@ -111,6 +112,52 @@ fn empty_tracker_filter_lists_match_all_issues() {
 
     assert!(config.tracker.filter.assignees.is_empty());
     assert!(config.tracker.filter.tags.is_empty());
+}
+
+#[test]
+fn accepts_github_tracker_config() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("WORKFLOW.md");
+    fs::write(
+        &path,
+        "---\ntracker:\n  kind: github\n  api_key: gh_token\n  repository: yii-labs/vik\n  active_states: [Todo, In Progress]\n  terminal_states: [Done, Closed]\nworkspace:\n  root: work\n---\nBody",
+    )
+    .unwrap();
+
+    let def = parse_workflow_file(&path).unwrap();
+    let config = ServiceConfig::from_definition(&def).unwrap();
+
+    assert_eq!(config.tracker.kind, "github");
+    assert_eq!(config.tracker.endpoint, "https://api.github.com");
+    assert_eq!(config.tracker.repository, "yii-labs/vik");
+    assert!(config.tracker.project_slug.is_empty());
+    config.validate_for_dispatch().unwrap();
+}
+
+#[test]
+fn github_tracker_requires_repository() {
+    let def = parse_workflow_content(
+        PathBuf::from("WORKFLOW.md"),
+        "---\ntracker:\n  kind: github\n  api_key: gh_token\n---\nBody",
+    )
+    .unwrap();
+    let config = ServiceConfig::from_definition(&def).unwrap();
+    let err = config.validate_for_dispatch().unwrap_err();
+
+    assert!(matches!(err, WorkflowError::MissingTrackerRepository));
+}
+
+#[test]
+fn unsupported_tracker_kind_is_rejected_for_dispatch() {
+    let def = parse_workflow_content(
+        PathBuf::from("WORKFLOW.md"),
+        "---\ntracker:\n  kind: jira\n  api_key: token\n---\nBody",
+    )
+    .unwrap();
+    let config = ServiceConfig::from_definition(&def).unwrap();
+    let err = config.validate_for_dispatch().unwrap_err();
+
+    assert!(matches!(err, WorkflowError::UnsupportedTrackerKind));
 }
 
 #[test]

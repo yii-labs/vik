@@ -11,9 +11,11 @@ use vik_agent::LocalAgentWorker;
 use vik_http::{HttpState, serve};
 use vik_orchestrator::Orchestrator;
 use vik_tracker::{
-    DEFAULT_LINEAR_ENDPOINT, LinearClient, LinearClientConfig, LinearIssueFilterConfig,
+    DEFAULT_GITHUB_ENDPOINT, DEFAULT_LINEAR_ENDPOINT, GitHubClient, GitHubClientConfig,
+    GitHubIssueFilterConfig, LinearClient, LinearClientConfig, LinearIssueFilterConfig,
+    TrackerClient,
 };
-use vik_workflow::WorkflowReloader;
+use vik_workflow::{ServiceConfig, WorkflowReloader};
 
 #[derive(Debug, Args)]
 pub(crate) struct StartArgs {
@@ -38,21 +40,7 @@ pub(crate) async fn run(args: StartArgs) -> Result<(), Box<dyn Error>> {
     let _log_guard = init_logging(&log_dir)?;
     tracing::info!(log_dir=%log_dir.display(), "logging outcome=started");
 
-    let tracker_config = LinearClientConfig::new(
-        if loaded.config.tracker.endpoint.is_empty() {
-            DEFAULT_LINEAR_ENDPOINT
-        } else {
-            &loaded.config.tracker.endpoint
-        },
-        &loaded.config.tracker.api_key,
-        &loaded.config.tracker.project_slug,
-        loaded.config.tracker.active_states.clone(),
-    )
-    .with_filter(LinearIssueFilterConfig::new(
-        loaded.config.tracker.filter.assignees.clone(),
-        loaded.config.tracker.filter.tags.clone(),
-    ));
-    let tracker = Arc::new(LinearClient::new(tracker_config)?);
+    let tracker = Arc::new(build_tracker(&loaded.config)?);
     let worker = Arc::new(LocalAgentWorker::new(Arc::clone(&tracker)));
     let orchestrator = Arc::new(Orchestrator::new(Arc::clone(&tracker), worker, reloader));
 
@@ -111,6 +99,48 @@ fn init_logging(log_dir: &Path) -> Result<WorkerGuard, Box<dyn Error>> {
 
 fn http_addr(host: Option<IpAddr>, port: u16) -> SocketAddr {
     SocketAddr::new(host.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)), port)
+}
+
+fn build_tracker(config: &ServiceConfig) -> Result<TrackerClient, Box<dyn Error>> {
+    let tracker = match config.tracker.kind.as_str() {
+        "linear" => {
+            let tracker_config = LinearClientConfig::new(
+                if config.tracker.endpoint.is_empty() {
+                    DEFAULT_LINEAR_ENDPOINT
+                } else {
+                    &config.tracker.endpoint
+                },
+                &config.tracker.api_key,
+                &config.tracker.project_slug,
+                config.tracker.active_states.clone(),
+            )
+            .with_filter(LinearIssueFilterConfig::new(
+                config.tracker.filter.assignees.clone(),
+                config.tracker.filter.tags.clone(),
+            ));
+            TrackerClient::new(Box::new(LinearClient::new(tracker_config)?))
+        }
+        "github" => {
+            let tracker_config = GitHubClientConfig::new(
+                if config.tracker.endpoint.is_empty() {
+                    DEFAULT_GITHUB_ENDPOINT
+                } else {
+                    &config.tracker.endpoint
+                },
+                &config.tracker.api_key,
+                &config.tracker.repository,
+                config.tracker.active_states.clone(),
+                config.tracker.terminal_states.clone(),
+            )
+            .with_filter(GitHubIssueFilterConfig::new(
+                config.tracker.filter.assignees.clone(),
+                config.tracker.filter.tags.clone(),
+            ));
+            TrackerClient::new(Box::new(GitHubClient::new(tracker_config)?))
+        }
+        _ => return Err(Box::new(vik_core::TrackerError::UnsupportedTrackerKind)),
+    };
+    Ok(tracker)
 }
 
 #[cfg(test)]

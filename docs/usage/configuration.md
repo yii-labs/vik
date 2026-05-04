@@ -33,25 +33,26 @@ vik check ./WORKFLOW.md
 
 ## Tracker
 
-`tracker.kind` must be `linear`.
+`tracker.kind` must be `linear` or `github`.
 
-Fields:
+Common fields:
 
-- `endpoint`: defaults to `https://api.linear.app/graphql` for Linear.
-- `api_key`: optional when `LINEAR_API_KEY` is set in the environment or `.env`.
-- `project_slug`: Linear project slug Vik polls.
+- `endpoint`: optional provider API endpoint override.
+- `api_key`: optional when the provider token is set in the environment or
+  `.env`.
 - `active_states`: states Vik may claim.
 - `terminal_states`: states that stop tracking and may trigger cleanup.
 - `filter`: optional delegable issue filter. Omitted filter values and empty
   lists match all issues.
-  - `assignees`: Linear user IDs, names, display names, or email addresses.
-  - `tags`: Linear label names.
 
-`LINEAR_API_KEY` is loaded from `.env` before dispatch validation. Do not commit
-real keys.
+Provider-specific fields:
+
+- Linear requires `project_slug` and uses `LINEAR_API_KEY` by default.
+- GitHub requires `repository` and uses `GH_TOKEN` or `GITHUB_TOKEN` by
+  default.
 
 Limit delegation to issues assigned to specific users and tagged with specific
-Linear labels:
+labels:
 
 ```yaml
 tracker:
@@ -59,6 +60,11 @@ tracker:
     assignees: [user-a, user-b]
     tags: [agent, codex]
 ```
+
+Tracker reference:
+
+- [Linear](trackers/linear.md)
+- [GitHub](trackers/github.md)
 
 ## Polling
 
@@ -168,6 +174,8 @@ bind host.
 - [Docker](docker.md)
 - [Service Daemon](service-daemon.md)
 - [Observation](observation.md)
+- [Linear Tracker](trackers/linear.md)
+- [GitHub Tracker](trackers/github.md)
 - Linear GraphQL API: <https://linear.app/developers/graphql>
 - GitHub CLI auth: <https://cli.github.com/manual/gh_auth>
 - Codex CLI reference: <https://developers.openai.com/codex/cli/reference>

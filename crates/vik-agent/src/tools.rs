@@ -242,6 +242,7 @@ mod tests {
             endpoint: "https://api.linear.app/graphql".to_string(),
             api_key: "lin_api_key".to_string(),
             project_slug: "VIK".to_string(),
+            repository: String::new(),
             active_states: vec!["Todo".to_string()],
             terminal_states: vec!["Done".to_string()],
             filter: Default::default(),
@@ -257,6 +258,16 @@ mod tests {
             definitions[0].pointer("/inputSchema/required/0"),
             Some(&json!("query"))
         );
+    }
+
+    #[test]
+    fn linear_graphql_definition_is_hidden_for_github_tracker() {
+        let mut config = linear_tracker_config();
+        config.kind = "github".to_string();
+        config.repository = "yii-labs/vik".to_string();
+        let tools = DynamicTools::from_tracker_config(&config);
+
+        assert!(tools.definitions().is_empty());
     }
 
     #[test]
