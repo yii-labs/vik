@@ -27,10 +27,7 @@ enum Command {
 
 pub(crate) async fn run(args: Args) -> Result<(), Box<dyn Error>> {
     match args.command {
-        Command::Start(args) => {
-            crate::env::load_dotenv()?;
-            crate::start::run(args).await
-        }
+        Command::Start(args) => crate::service::start(args.into(), false).await,
         Command::Check(args) => {
             crate::env::load_dotenv()?;
             crate::check::run(args.workflow)

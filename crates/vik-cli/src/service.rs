@@ -3,6 +3,7 @@ use std::env;
 use std::error::Error;
 use std::fs::{self, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -44,6 +45,33 @@ struct RunArgs {
     /// Enable HTTP status server. Overrides server.port from WORKFLOW.md.
     #[arg(long)]
     port: Option<u16>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct StartOptions {
+    workflow: Option<PathBuf>,
+    port: Option<u16>,
+    bind_address: Option<IpAddr>,
+}
+
+impl From<crate::start::StartArgs> for StartOptions {
+    fn from(args: crate::start::StartArgs) -> Self {
+        Self {
+            workflow: args.workflow,
+            port: args.port,
+            bind_address: args.bind_address,
+        }
+    }
+}
+
+impl RunArgs {
+    fn into_start_options(self) -> StartOptions {
+        StartOptions {
+            workflow: self.workflow,
+            port: self.port,
+            bind_address: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, ClapArgs)]
@@ -114,7 +142,7 @@ impl ServiceTarget {
         Self::load(Some(management_target.workflow_path), port, true)
     }
 
-    fn start(&self, verb: &str) -> Result<(), Box<dyn Error>> {
+    fn start_detached(&self, verb: &str) -> Result<(), Box<dyn Error>> {
         let previous_state = read_state(&self.state_path)?;
         if let Some(state) = &previous_state
             && classify_state(state) == RuntimeStatus::Running
@@ -170,6 +198,15 @@ impl ServiceTarget {
             self.log_path.display()
         );
         Ok(())
+    }
+
+    async fn start_foreground(&self, bind_address: Option<IpAddr>) -> Result<(), Box<dyn Error>> {
+        crate::start::run(crate::start::StartArgs {
+            workflow: Some(self.workflow_path.clone()),
+            port: self.port,
+            bind_address,
+        })
+        .await
     }
 
     fn stop(&self, remove_state: bool) -> Result<bool, Box<dyn Error>> {
@@ -321,7 +358,7 @@ pub(crate) async fn run(args: ServiceArgs) -> Result<(), Box<dyn Error>> {
     match args.command {
         ServiceCommand::Install(args) => {
             let target = ServiceTarget::load_for_dispatch(args.workflow, args.port)?;
-            target.start("installed")?;
+            target.start_detached("installed")?;
         }
         ServiceCommand::Uninstall(args) => {
             let target = ServiceTarget::load(args.workflow, None, false)?;
@@ -336,8 +373,7 @@ pub(crate) async fn run(args: ServiceArgs) -> Result<(), Box<dyn Error>> {
             target.print_logs(args.lines, args.follow)?;
         }
         ServiceCommand::Start(args) => {
-            let target = ServiceTarget::load_for_dispatch(args.workflow, args.port)?;
-            target.start("started")?;
+            start(args.into_start_options(), true).await?;
         }
         ServiceCommand::Stop(args) => {
             let target = ServiceTarget::load(args.workflow, None, false)?;
@@ -346,10 +382,24 @@ pub(crate) async fn run(args: ServiceArgs) -> Result<(), Box<dyn Error>> {
         ServiceCommand::Restart(args) => {
             let target = ServiceTarget::load_for_dispatch(args.workflow, args.port)?;
             let _ = target.stop(false)?;
-            target.start("restarted")?;
+            target.start_detached("restarted")?;
         }
     }
     Ok(())
+}
+
+pub(crate) async fn start(options: StartOptions, detached: bool) -> Result<(), Box<dyn Error>> {
+    let StartOptions {
+        workflow,
+        port,
+        bind_address,
+    } = options;
+    let target = ServiceTarget::load_for_dispatch(workflow, port)?;
+    if detached {
+        target.start_detached("started")
+    } else {
+        target.start_foreground(bind_address).await
+    }
 }
 
 fn resolve_workflow_path(workflow: Option<PathBuf>) -> io::Result<PathBuf> {
@@ -732,6 +782,34 @@ mod tests {
             target.daemon_args(target.port),
             vec!["start", "/tmp/vik/WORKFLOW.md", "--port", "3000"]
         );
+    }
+
+    #[test]
+    fn start_args_preserve_foreground_options() {
+        let bind_address = "0.0.0.0".parse().unwrap();
+        let options: StartOptions = crate::start::StartArgs {
+            workflow: Some(PathBuf::from("WORKFLOW.md")),
+            port: Some(3000),
+            bind_address: Some(bind_address),
+        }
+        .into();
+
+        assert_eq!(options.workflow, Some(PathBuf::from("WORKFLOW.md")));
+        assert_eq!(options.port, Some(3000));
+        assert_eq!(options.bind_address, Some(bind_address));
+    }
+
+    #[test]
+    fn service_run_args_use_default_bind_address() {
+        let options: StartOptions = RunArgs {
+            workflow: Some(PathBuf::from("WORKFLOW.md")),
+            port: Some(3000),
+        }
+        .into_start_options();
+
+        assert_eq!(options.workflow, Some(PathBuf::from("WORKFLOW.md")));
+        assert_eq!(options.port, Some(3000));
+        assert_eq!(options.bind_address, None);
     }
 
     #[test]
