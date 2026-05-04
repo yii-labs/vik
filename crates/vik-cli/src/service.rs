@@ -894,7 +894,7 @@ mod tests {
     fn service_dir_survives_unrelated_invalid_config_for_management_target() {
         let dir = tempfile::tempdir().unwrap();
         let workflow_path = dir.path().join("WORKFLOW.md");
-        write_workflow_with_logging_service_dir_and_invalid_repo(&workflow_path, "service-logs");
+        write_workflow_with_logging_service_dir_and_invalid_agent(&workflow_path, "service-logs");
 
         let target = ServiceTarget::load(Some(workflow_path), None, false).unwrap();
         let expected_dir = fs::canonicalize(dir.path()).unwrap().join("service-logs");
@@ -1059,11 +1059,11 @@ mod tests {
         .unwrap();
     }
 
-    fn write_workflow_with_logging_service_dir_and_invalid_repo(path: &Path, service_dir: &str) {
+    fn write_workflow_with_logging_service_dir_and_invalid_agent(path: &Path, service_dir: &str) {
         fs::write(
             path,
             format!(
-                "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\nworkspace:\n  root: work\nlogging:\n  service_dir: {service_dir}\nrepo:\n  origin: git@github.com:yii-labs/vik.git\n  clone:\n    depth: 0\n---\nBody"
+                "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\nworkspace:\n  root: work\nlogging:\n  service_dir: {service_dir}\nagent:\n  max_turns: 0\n---\nBody"
             ),
         )
         .unwrap();
