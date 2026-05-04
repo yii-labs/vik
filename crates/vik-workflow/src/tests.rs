@@ -133,6 +133,83 @@ fn resolves_explicit_logging_dir() {
 }
 
 #[test]
+fn parses_repo_config() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("WORKFLOW.md");
+    fs::write(
+        &path,
+        "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\nrepo:\n  origin: git@github.com:yii-labs/vik.git\n  clone:\n    depth: 1\n---\nBody",
+    )
+    .unwrap();
+
+    let def = parse_workflow_file(&path).unwrap();
+    let config = ServiceConfig::from_definition(&def).unwrap();
+
+    let repo = config.repo.unwrap();
+    assert_eq!(repo.origin, "git@github.com:yii-labs/vik.git");
+    assert_eq!(repo.clone.depth, Some(1));
+}
+
+#[test]
+fn validates_supported_repo_origins() {
+    for origin in [
+        "git@github.com:yii-labs/vik.git",
+        "ssh://git@github.com/yii-labs/vik.git",
+        "https://github.com/yii-labs/vik.git",
+        "http://github.com/yii-labs/vik.git",
+    ] {
+        let def = parse_workflow_content(
+            PathBuf::from("WORKFLOW.md"),
+            &format!(
+                "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\nrepo:\n  origin: {origin}\n---\nBody"
+            ),
+        )
+        .unwrap();
+        ServiceConfig::from_definition(&def)
+            .unwrap()
+            .validate_for_dispatch()
+            .unwrap();
+    }
+}
+
+#[test]
+fn rejects_unsupported_repo_origin() {
+    let def = parse_workflow_content(
+        PathBuf::from("WORKFLOW.md"),
+        "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\nrepo:\n  origin: /tmp/repo\n---\nBody",
+    )
+    .unwrap();
+
+    let err = ServiceConfig::from_definition(&def)
+        .unwrap()
+        .validate_for_dispatch()
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        WorkflowError::InvalidConfig(message)
+            if message == "repo.origin must be an SSH or HTTP(S) Git remote"
+    ));
+}
+
+#[test]
+fn rejects_zero_repo_clone_depth() {
+    let def = parse_workflow_content(
+        PathBuf::from("WORKFLOW.md"),
+        "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\nrepo:\n  origin: git@github.com:yii-labs/vik.git\n  clone:\n    depth: 0\n---\nBody",
+    )
+    .unwrap();
+
+    let err = ServiceConfig::from_definition(&def).unwrap_err();
+
+    assert!(matches!(
+        err,
+        WorkflowError::InvalidConfig(message)
+            if message == "repo.clone.depth must be a positive integer"
+    ));
+}
+
+#[test]
 fn parses_codex_model_fields() {
     let def = parse_workflow_content(
         PathBuf::from("WORKFLOW.md"),

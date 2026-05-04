@@ -34,6 +34,7 @@ fn config() -> ServiceConfig {
         logging: LoggingConfig {
             dir: "/tmp/vik/.vik/logs".into(),
         },
+        repo: None,
         hooks: HooksConfig {
             timeout_ms: 60_000,
             ..HooksConfig::default()
