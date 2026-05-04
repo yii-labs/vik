@@ -7,8 +7,8 @@ use crate::providers::Tracker;
 
 use super::{
     client::{
-        DEFAULT_GITHUB_ENDPOINT, GitHubClient, GitHubClientConfig, GitHubIssueFilterConfig,
-        GitHubPullRequest, GitHubRepository, append_closing_reference,
+        DEFAULT_GITHUB_ENDPOINT, GITHUB_API_VERSION, GitHubClient, GitHubClientConfig,
+        GitHubIssueFilterConfig, GitHubPullRequest, GitHubRepository, append_closing_reference,
         body_contains_closing_reference, closing_reference, state_selectors,
         state_selectors_for_scan,
     },
@@ -61,6 +61,11 @@ fn pull_request_path_targets_pull_api() {
         pull_path("yii-labs", "vik", 48),
         "/repos/yii-labs/vik/pulls/48"
     );
+}
+
+#[test]
+fn github_api_version_tracks_latest_supported_version() {
+    assert_eq!(GITHUB_API_VERSION, "2026-03-10");
 }
 
 #[test]

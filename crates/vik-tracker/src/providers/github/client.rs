@@ -15,6 +15,7 @@ use super::queries::{
 };
 
 pub const DEFAULT_GITHUB_ENDPOINT: &str = "https://api.github.com";
+pub(crate) const GITHUB_API_VERSION: &str = "2026-03-10";
 const GITHUB_USER_AGENT: &str = "vik-tracker/0.1";
 const GITHUB_PAGE_SIZE: u64 = 100;
 const STATE_REFRESH_CONCURRENCY: usize = 8;
@@ -172,7 +173,7 @@ impl GitHubClient {
             .bearer_auth(&self.api_key)
             .header("User-Agent", GITHUB_USER_AGENT)
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28");
+            .header("X-GitHub-Api-Version", GITHUB_API_VERSION);
         if let Some(body) = body {
             request = request.json(&body);
         }
