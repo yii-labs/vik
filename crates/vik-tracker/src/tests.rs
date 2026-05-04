@@ -5,8 +5,8 @@ use crate::{
     ISSUE_BY_IDENTIFIER_QUERY, ISSUE_STATES_BY_IDS_QUERY, LinearIssueFilterConfig, normalize_issue,
     provider::{
         github::{
-            GITHUB_ISSUES_BY_IDS_QUERY, GitHubIssueNode, github_graphql_endpoint,
-            github_issue_number, normalize_github_issue,
+            GITHUB_ISSUES_BY_IDS_QUERY, GITHUB_ISSUES_BY_STATES_QUERY, GitHubIssueNode,
+            github_graphql_endpoint, github_issue_number, normalize_github_issue,
         },
         linear::issue_has_attachment_url,
     },
@@ -72,6 +72,14 @@ fn state_refresh_uses_graphql_id_list_type() {
 #[test]
 fn github_state_refresh_uses_graphql_nodes_batch_query() {
     assert!(GITHUB_ISSUES_BY_IDS_QUERY.contains("nodes(ids: $ids)"));
+}
+
+#[test]
+fn github_paginated_reads_use_issue_only_graphql_query() {
+    assert!(GITHUB_ISSUES_BY_STATES_QUERY.contains("repository(owner: $owner, name: $repo)"));
+    assert!(GITHUB_ISSUES_BY_STATES_QUERY.contains("issues("));
+    assert!(GITHUB_ISSUES_BY_STATES_QUERY.contains("states: $states"));
+    assert!(!GITHUB_ISSUES_BY_STATES_QUERY.contains("pullRequest"));
 }
 
 #[test]

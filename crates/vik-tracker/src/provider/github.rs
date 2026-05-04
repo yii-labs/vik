@@ -30,6 +30,49 @@ query VikGitHubIssuesByIds($ids: [ID!]!) {
   }
 }
 "#;
+pub(crate) const GITHUB_ISSUES_BY_STATES_QUERY: &str = r#"
+query VikGitHubIssuesByStates(
+  $owner: String!
+  $repo: String!
+  $states: [IssueState!]
+  $first: Int!
+  $after: String
+) {
+  repository(owner: $owner, name: $repo) {
+    issues(
+      first: $first
+      after: $after
+      states: $states
+      orderBy: { field: UPDATED_AT, direction: DESC }
+    ) {
+      nodes {
+        id
+        number
+        title
+        body
+        state
+        url
+        createdAt
+        updatedAt
+        labels(first: 100) {
+          nodes {
+            name
+          }
+        }
+        assignees(first: 100) {
+          nodes {
+            login
+          }
+        }
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+}
+"#;
 
 #[derive(Debug, Clone)]
 pub struct GitHubClientConfig {
@@ -78,15 +121,24 @@ impl GitHubIssueFilterConfig {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn matches(&self, issue: &GitHubIssueNode) -> bool {
+        self.matches_values(&issue.assignees, &issue.labels)
+    }
+
+    fn matches_graphql(&self, issue: &GitHubGraphqlIssueNode) -> bool {
+        self.matches_values(&issue.assignees.nodes, &issue.labels.nodes)
+    }
+
+    fn matches_values(&self, assignees: &[GitHubUserNode], labels: &[GitHubLabelNode]) -> bool {
         let assignee_matches = self.assignees.is_empty()
-            || issue.assignees.iter().any(|assignee| {
+            || assignees.iter().any(|assignee| {
                 self.assignees
                     .iter()
                     .any(|wanted| assignee.login.eq_ignore_ascii_case(wanted))
             });
         let label_matches = self.labels.is_empty()
-            || issue.labels.iter().any(|label| {
+            || labels.iter().any(|label| {
                 self.labels
                     .iter()
                     .any(|wanted| label.name.eq_ignore_ascii_case(wanted))
@@ -148,48 +200,26 @@ impl GitHubClient {
         state_names: &[String],
         apply_filter: bool,
     ) -> Result<Vec<Issue>, TrackerError> {
-        let states = github_states(state_names);
+        let states = github_graphql_states(state_names);
         let mut issues = Vec::new();
-        for state in states {
-            let mut page = 1;
-            loop {
-                let nodes = self.fetch_page(&state, page).await?;
-                let count = nodes.len();
-                issues.extend(
-                    nodes
-                        .iter()
-                        .filter(|node| node.pull_request.is_none())
-                        .filter(|node| !apply_filter || self.config.filter.matches(node))
-                        .map(|node| normalize_github_issue(&self.config.repository, node)),
-                );
-                if count < self.config.page_size {
-                    break;
-                }
-                page += 1;
+        let mut after: Option<String> = None;
+        loop {
+            let page = self
+                .fetch_graphql_issue_page(&states, after.as_deref())
+                .await?;
+            issues.extend(
+                page.nodes
+                    .into_iter()
+                    .flatten()
+                    .filter(|node| !apply_filter || self.config.filter.matches_graphql(node))
+                    .map(|node| normalize_github_graphql_issue(&node)),
+            );
+            if !page.page_info.has_next_page {
+                break;
             }
+            after = page.page_info.end_cursor;
         }
         Ok(issues)
-    }
-
-    async fn fetch_page(
-        &self,
-        state: &str,
-        page: usize,
-    ) -> Result<Vec<GitHubIssueNode>, TrackerError> {
-        let url = format!(
-            "{}/repos/{}/{}/issues?state={state}&per_page={}&page={page}",
-            self.config.endpoint.trim_end_matches('/'),
-            self.owner,
-            self.repo,
-            self.config.page_size
-        );
-        let response = self
-            .http
-            .get(url)
-            .send()
-            .await
-            .map_err(|err| TrackerError::GithubApiRequest(err.to_string()))?;
-        read_json(response).await
     }
 
     async fn fetch_issue_number(&self, number: &str) -> Result<Issue, TrackerError> {
@@ -243,6 +273,44 @@ impl GitHubClient {
             .flatten()
             .map(|node| normalize_github_graphql_issue(&node))
             .collect())
+    }
+
+    async fn fetch_graphql_issue_page(
+        &self,
+        states: &[String],
+        after: Option<&str>,
+    ) -> Result<GitHubGraphqlIssueConnection, TrackerError> {
+        let body = json!({
+            "query": GITHUB_ISSUES_BY_STATES_QUERY,
+            "variables": {
+                "owner": self.owner,
+                "repo": self.repo,
+                "states": states,
+                "first": self.config.page_size,
+                "after": after,
+            },
+        });
+        let response = self
+            .http
+            .post(github_graphql_endpoint(&self.config.endpoint))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|err| TrackerError::GithubApiRequest(err.to_string()))?;
+        let payload: GitHubIssuesByStatesResponse = read_json(response).await?;
+        if let Some(errors) = payload.errors {
+            return Err(TrackerError::GithubUnknownPayload(format!(
+                "github_graphql_errors: {}",
+                compact_json(&errors)
+            )));
+        }
+        let data = payload.data.ok_or_else(|| {
+            TrackerError::GithubUnknownPayload("missing github graphql data".to_string())
+        })?;
+        let repository = data.repository.ok_or_else(|| {
+            TrackerError::GithubUnknownPayload("missing github graphql repository".to_string())
+        })?;
+        Ok(repository.issues)
     }
 }
 
@@ -301,9 +369,9 @@ pub(crate) struct GitHubIssueNode {
     updated_at: Option<String>,
     #[serde(default)]
     labels: Vec<GitHubLabelNode>,
+    #[cfg(test)]
     #[serde(default)]
     assignees: Vec<GitHubUserNode>,
-    pull_request: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -315,6 +383,37 @@ struct GitHubGraphqlResponse {
 #[derive(Debug, Deserialize)]
 struct GitHubGraphqlData {
     nodes: Vec<Option<GitHubGraphqlIssueNode>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubIssuesByStatesResponse {
+    data: Option<GitHubIssuesByStatesData>,
+    errors: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubIssuesByStatesData {
+    repository: Option<GitHubGraphqlRepositoryNode>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubGraphqlRepositoryNode {
+    issues: GitHubGraphqlIssueConnection,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubGraphqlIssueConnection {
+    nodes: Vec<Option<GitHubGraphqlIssueNode>>,
+    #[serde(rename = "pageInfo")]
+    page_info: GitHubGraphqlPageInfo,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubGraphqlPageInfo {
+    #[serde(rename = "hasNextPage")]
+    has_next_page: bool,
+    #[serde(rename = "endCursor")]
+    end_cursor: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -331,12 +430,20 @@ struct GitHubGraphqlIssueNode {
     updated_at: Option<String>,
     #[serde(default)]
     labels: GitHubGraphqlLabelConnection,
+    #[serde(default)]
+    assignees: GitHubGraphqlUserConnection,
 }
 
 #[derive(Debug, Default, Deserialize)]
 struct GitHubGraphqlLabelConnection {
     #[serde(default)]
     nodes: Vec<GitHubLabelNode>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GitHubGraphqlUserConnection {
+    #[serde(default)]
+    nodes: Vec<GitHubUserNode>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -393,6 +500,17 @@ fn github_states(state_names: &[String]) -> Vec<String> {
             }
             states
         })
+}
+
+fn github_graphql_states(state_names: &[String]) -> Vec<String> {
+    github_states(state_names)
+        .into_iter()
+        .filter_map(|state| match state.as_str() {
+            "open" => Some("OPEN".to_string()),
+            "closed" => Some("CLOSED".to_string()),
+            _ => None,
+        })
+        .collect()
 }
 
 pub(crate) fn github_issue_number(id: &str) -> Result<String, TrackerError> {
