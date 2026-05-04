@@ -175,16 +175,6 @@ impl ServiceConfig {
         let server_map = get_map(&definition.config, "server");
 
         let tracker_kind = string_value(tracker_map, "kind").unwrap_or_default();
-        let endpoint = string_value(tracker_map, "endpoint").unwrap_or_else(|| {
-            TrackerConfig::default_endpoint(&tracker_kind)
-                .unwrap_or_default()
-                .to_string()
-        });
-        let api_key = string_value(tracker_map, "api_key")
-            .or_else(|| TrackerConfig::api_key_from_env(&tracker_kind))
-            .map(resolve_exact_env)
-            .transpose()?
-            .unwrap_or_default();
         let project_slug = string_value(tracker_map, "project_slug").unwrap_or_default();
         let repository = string_value(tracker_map, "repository").unwrap_or_default();
         let active_states = string_vec(tracker_map, "active_states")
@@ -204,17 +194,27 @@ impl ServiceConfig {
             tags: string_vec(tracker_filter_map, "tags").unwrap_or_default(),
         };
         let common_tracker = CommonTrackerConfig {
-            endpoint,
-            api_key,
             active_states,
             terminal_states,
             filter,
         };
         let tracker = match tracker_kind.as_str() {
-            "linear" => {
-                TrackerConfig::linear(common_tracker, LinearTrackerConfig::new(project_slug))
-            }
-            "github" => TrackerConfig::github(common_tracker, GitHubTrackerConfig::new(repository)),
+            "linear" => TrackerConfig::linear(
+                common_tracker,
+                LinearTrackerConfig::new(
+                    provider_endpoint(tracker_map, LinearTrackerConfig::default_endpoint()),
+                    provider_api_key(tracker_map, LinearTrackerConfig::api_key_from_env)?,
+                    project_slug,
+                ),
+            ),
+            "github" => TrackerConfig::github(
+                common_tracker,
+                GitHubTrackerConfig::new(
+                    provider_endpoint(tracker_map, GitHubTrackerConfig::default_endpoint()),
+                    provider_api_key(tracker_map, GitHubTrackerConfig::api_key_from_env)?,
+                    repository,
+                ),
+            ),
             _ => TrackerConfig::unsupported(common_tracker, tracker_kind),
         };
 
@@ -330,4 +330,19 @@ impl ServiceConfig {
         }
         Ok(())
     }
+}
+
+fn provider_endpoint(tracker_map: Option<&serde_yaml::Mapping>, default_endpoint: &str) -> String {
+    string_value(tracker_map, "endpoint").unwrap_or_else(|| default_endpoint.to_string())
+}
+
+fn provider_api_key(
+    tracker_map: Option<&serde_yaml::Mapping>,
+    from_env: fn() -> Option<String>,
+) -> Result<String, WorkflowError> {
+    Ok(string_value(tracker_map, "api_key")
+        .or_else(from_env)
+        .map(resolve_exact_env)
+        .transpose()?
+        .unwrap_or_default())
 }

@@ -128,11 +128,10 @@ fn accepts_github_tracker_config() {
     let config = ServiceConfig::from_definition(&def).unwrap();
 
     assert_eq!(config.tracker.kind_name(), "github");
-    assert_eq!(config.tracker.endpoint(), "https://api.github.com");
-    assert_eq!(
-        config.tracker.github_provider().unwrap().repository,
-        "yii-labs/vik"
-    );
+    let provider = config.tracker.github_provider().unwrap();
+    assert_eq!(provider.endpoint, "https://api.github.com");
+    assert_eq!(provider.api_key, "gh_token");
+    assert_eq!(provider.repository, "yii-labs/vik");
     assert!(config.tracker.linear_provider().is_none());
     config.validate_for_dispatch().unwrap();
 }

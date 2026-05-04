@@ -149,13 +149,15 @@ fn thread_start_payload_uses_workspace_cwd() {
 fn thread_start_payload_includes_configured_dynamic_tools() {
     let tools = DynamicTools::from_tracker_config(&TrackerConfig {
         common: CommonTrackerConfig {
-            endpoint: "https://api.linear.app/graphql".to_string(),
-            api_key: "lin_api_key".to_string(),
             active_states: vec!["Todo".to_string()],
             terminal_states: vec!["Done".to_string()],
             filter: Default::default(),
         },
-        kind: vik_workflow::TrackerKind::Linear(LinearTrackerConfig::new("VIK")),
+        kind: vik_workflow::TrackerKind::Linear(LinearTrackerConfig::new(
+            "https://api.linear.app/graphql",
+            "lin_api_key",
+            "VIK",
+        )),
     });
     let payload = thread_start_params(
         Path::new("/tmp/workspace"),

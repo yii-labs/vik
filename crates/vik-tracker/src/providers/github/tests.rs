@@ -3,9 +3,10 @@ use std::path::Path;
 use serde_json::json;
 use vik_core::TrackerError;
 
-use crate::providers::Tracker;
+use crate::providers::{Tracker, TrackerConfigError};
 
 use super::{
+    GitHubTrackerConfig,
     client::{
         DEFAULT_GITHUB_ENDPOINT, GITHUB_API_VERSION, GitHubClient, GitHubClientConfig,
         GitHubIssueFilterConfig, GitHubPullRequest, GitHubRepository, append_closing_reference,
@@ -14,6 +15,21 @@ use super::{
     },
     queries::{SEARCH_ISSUES_PATH, pull_path},
 };
+
+#[test]
+fn provider_config_owns_endpoint_key_and_validation() {
+    let config = GitHubTrackerConfig::new(DEFAULT_GITHUB_ENDPOINT, "gh_token", "yii-labs/vik");
+
+    assert_eq!(config.endpoint, DEFAULT_GITHUB_ENDPOINT);
+    assert_eq!(config.api_key, "gh_token");
+    config.validate().unwrap();
+
+    let missing_key = GitHubTrackerConfig::new(DEFAULT_GITHUB_ENDPOINT, "", "yii-labs/vik");
+    assert!(matches!(
+        missing_key.validate(),
+        Err(TrackerConfigError::MissingApiKey)
+    ));
+}
 
 #[test]
 fn repository_config_accepts_common_github_forms() {

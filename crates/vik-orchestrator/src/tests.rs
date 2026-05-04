@@ -18,13 +18,11 @@ fn config() -> ServiceConfig {
         workflow_path: "WORKFLOW.md".into(),
         tracker: TrackerConfig::linear(
             CommonTrackerConfig {
-                endpoint: "https://api.linear.app/graphql".into(),
-                api_key: "token".into(),
                 active_states: vec!["Todo".into(), "In Progress".into()],
                 terminal_states: vec!["Done".into(), "Closed".into()],
                 filter: Default::default(),
             },
-            LinearTrackerConfig::new("proj"),
+            LinearTrackerConfig::new("https://api.linear.app/graphql", "token", "proj"),
         ),
         polling: PollingConfig {
             interval_ms: 30_000,

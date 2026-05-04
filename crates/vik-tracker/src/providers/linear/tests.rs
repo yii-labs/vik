@@ -1,12 +1,34 @@
 use serde_json::json;
 
+use crate::providers::TrackerConfigError;
+
 use super::{
+    LinearTrackerConfig,
     client::{LinearIssueFilterConfig, issue_has_attachment_url},
     normalize::normalize_issue,
     queries::{
         ATTACHMENT_CREATE_MUTATION, CANDIDATE_QUERY, ISSUE_BY_ID_QUERY, ISSUE_STATES_BY_IDS_QUERY,
     },
 };
+
+#[test]
+fn provider_config_owns_endpoint_key_and_validation() {
+    let config = LinearTrackerConfig::new(
+        super::DEFAULT_LINEAR_ENDPOINT,
+        "lin_api_key",
+        "vik-08c9cf588aa7",
+    );
+
+    assert_eq!(config.endpoint, super::DEFAULT_LINEAR_ENDPOINT);
+    assert_eq!(config.api_key, "lin_api_key");
+    config.validate().unwrap();
+
+    let missing_key = LinearTrackerConfig::new(super::DEFAULT_LINEAR_ENDPOINT, "", "proj");
+    assert!(matches!(
+        missing_key.validate(),
+        Err(TrackerConfigError::MissingApiKey)
+    ));
+}
 
 #[test]
 fn candidate_query_uses_project_slug_filter() {

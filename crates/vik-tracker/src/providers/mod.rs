@@ -1,5 +1,5 @@
+use std::fmt;
 use std::path::Path;
-use std::{env, fmt};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -33,8 +33,6 @@ pub struct TrackerFilterConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommonTrackerConfig {
-    pub endpoint: String,
-    pub api_key: String,
     pub active_states: Vec<String>,
     pub terminal_states: Vec<String>,
     #[serde(default)]
@@ -90,14 +88,6 @@ impl TrackerConfig {
         self.kind.name()
     }
 
-    pub fn endpoint(&self) -> &str {
-        &self.common.endpoint
-    }
-
-    pub fn api_key(&self) -> &str {
-        &self.common.api_key
-    }
-
     pub fn active_states(&self) -> &[String] {
         &self.common.active_states
     }
@@ -124,38 +114,10 @@ impl TrackerConfig {
         }
     }
 
-    pub fn default_endpoint(kind: &str) -> Option<&'static str> {
-        match kind {
-            "linear" => Some(linear::DEFAULT_LINEAR_ENDPOINT),
-            "github" => Some(github::DEFAULT_GITHUB_ENDPOINT),
-            _ => None,
-        }
-    }
-
-    pub fn api_key_from_env(kind: &str) -> Option<String> {
-        match kind {
-            "linear" => env::var("LINEAR_API_KEY").ok(),
-            "github" => env::var("GH_TOKEN")
-                .ok()
-                .or_else(|| env::var("GITHUB_TOKEN").ok()),
-            _ => None,
-        }
-    }
-
     pub fn validate(&self) -> Result<(), TrackerConfigError> {
         match &self.kind {
-            TrackerKind::Linear(config) => {
-                if self.common.api_key.trim().is_empty() {
-                    return Err(TrackerConfigError::MissingApiKey);
-                }
-                config.validate()
-            }
-            TrackerKind::GitHub(config) => {
-                if self.common.api_key.trim().is_empty() {
-                    return Err(TrackerConfigError::MissingApiKey);
-                }
-                config.validate()
-            }
+            TrackerKind::Linear(config) => config.validate(),
+            TrackerKind::GitHub(config) => config.validate(),
             TrackerKind::Unsupported(_) => Err(TrackerConfigError::UnsupportedTrackerKind),
         }
     }

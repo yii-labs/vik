@@ -106,8 +106,8 @@ fn build_tracker(config: &ServiceConfig) -> Result<TrackerClient, Box<dyn Error>
             let common = &config.tracker.common;
             let filter = config.tracker.filter();
             let tracker_config = LinearClientConfig::new(
-                config.tracker.endpoint(),
-                config.tracker.api_key(),
+                &provider.endpoint,
+                &provider.api_key,
                 &provider.project_slug,
                 common.active_states.clone(),
             )
@@ -121,8 +121,8 @@ fn build_tracker(config: &ServiceConfig) -> Result<TrackerClient, Box<dyn Error>
             let common = &config.tracker.common;
             let filter = config.tracker.filter();
             let tracker_config = GitHubClientConfig::new(
-                config.tracker.endpoint(),
-                config.tracker.api_key(),
+                &provider.endpoint,
+                &provider.api_key,
                 &provider.repository,
                 common.active_states.clone(),
                 common.terminal_states.clone(),

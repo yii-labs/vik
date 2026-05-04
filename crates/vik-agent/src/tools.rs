@@ -21,14 +21,11 @@ impl fmt::Debug for DynamicTools {
 
 impl DynamicTools {
     pub(crate) fn from_tracker_config(config: &TrackerConfig) -> Self {
-        let linear_graphql = if config.linear_provider().is_some()
-            && !config.endpoint().trim().is_empty()
-            && !config.api_key().trim().is_empty()
+        let linear_graphql = if let Some(provider) = config.linear_provider()
+            && !provider.endpoint.trim().is_empty()
+            && !provider.api_key.trim().is_empty()
         {
-            match LinearGraphqlTool::new(
-                config.endpoint().to_string(),
-                config.api_key().to_string(),
-            ) {
+            match LinearGraphqlTool::new(provider.endpoint.clone(), provider.api_key.clone()) {
                 Ok(tool) => Some(tool),
                 Err(err) => {
                     tracing::warn!(error = %err, "linear_graphql tool disabled");
@@ -245,13 +242,11 @@ mod tests {
     fn linear_tracker_config() -> TrackerConfig {
         TrackerConfig::linear(
             CommonTrackerConfig {
-                endpoint: "https://api.linear.app/graphql".to_string(),
-                api_key: "lin_api_key".to_string(),
                 active_states: vec!["Todo".to_string()],
                 terminal_states: vec!["Done".to_string()],
                 filter: Default::default(),
             },
-            LinearTrackerConfig::new("VIK"),
+            LinearTrackerConfig::new("https://api.linear.app/graphql", "lin_api_key", "VIK"),
         )
     }
 
@@ -269,7 +264,11 @@ mod tests {
     #[test]
     fn linear_graphql_definition_is_hidden_for_github_tracker() {
         let mut config = linear_tracker_config();
-        config.kind = TrackerKind::GitHub(GitHubTrackerConfig::new("yii-labs/vik"));
+        config.kind = TrackerKind::GitHub(GitHubTrackerConfig::new(
+            "https://api.github.com",
+            "gh_token",
+            "yii-labs/vik",
+        ));
         let tools = DynamicTools::from_tracker_config(&config);
 
         assert!(tools.definitions().is_empty());
