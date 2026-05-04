@@ -7,8 +7,8 @@ use tokio::time;
 use vik_core::{HostPlatform, LiveSession, TokenUsage};
 use vik_workflow::{ClaudeCodeConfig, CodexConfig, TrackerConfig};
 
-use crate::adapter::EventSink;
-use crate::claude_code::{
+use crate::agent::EventSink;
+use crate::agent::claude_code::{
     ClaudeUsageAccumulator, claude_code_spawn_command,
     claude_code_spawn_process_command_for_platform, write_prompt_with_deadline,
 };

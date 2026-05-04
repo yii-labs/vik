@@ -6,8 +6,12 @@ use async_trait::async_trait;
 use vik_core::AgentEvent;
 use vik_workflow::{CodingAgentKind, ServiceConfig};
 
-use crate::claude_code::ClaudeCodeClient;
-use crate::client::{CodexAppServerClient, CodexIssueContext};
+pub(crate) mod claude_code;
+mod codex;
+
+use self::claude_code::ClaudeCodeClient;
+use self::codex::CodexAdapter;
+use crate::client::CodexAppServerClient;
 use crate::error::AgentError;
 use crate::tools::DynamicTools;
 
@@ -42,42 +46,5 @@ pub(crate) fn adapter_for(
             client: CodexAppServerClient::new(config.codex.clone()).with_dynamic_tools(tools),
         }),
         CodingAgentKind::ClaudeCode => Box::new(ClaudeCodeClient::new(config.claude_code.clone())),
-    }
-}
-
-struct CodexAdapter {
-    client: CodexAppServerClient,
-}
-
-#[async_trait]
-impl CodingAgentAdapter for CodexAdapter {
-    fn kind(&self) -> CodingAgentKind {
-        CodingAgentKind::Codex
-    }
-
-    async fn run(&self, request: CodingAgentRun) -> Result<(), AgentError> {
-        let CodingAgentRun {
-            workspace_path,
-            issue_id,
-            issue_title,
-            prompt,
-            max_turns,
-            should_continue,
-            on_event,
-        } = request;
-
-        self.client
-            .run_turns(
-                &workspace_path,
-                CodexIssueContext {
-                    issue_id,
-                    title: issue_title,
-                },
-                prompt,
-                max_turns,
-                should_continue,
-                on_event,
-            )
-            .await
     }
 }

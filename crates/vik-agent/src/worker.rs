@@ -6,7 +6,7 @@ use vik_core::{AgentEvent, AgentRunRequest, AgentWorker, IssueTracker, WorkerOut
 use vik_workflow::{ServiceConfig, render_prompt};
 use vik_workspace::WorkspaceManager;
 
-use crate::adapter::{CodingAgentRun, adapter_for};
+use crate::agent::{CodingAgentRun, adapter_for};
 use crate::error::AgentError;
 use crate::tools::DynamicTools;
 

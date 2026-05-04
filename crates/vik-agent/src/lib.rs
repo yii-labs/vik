@@ -1,5 +1,4 @@
-mod adapter;
-mod claude_code;
+mod agent;
 mod client;
 mod error;
 mod event;
