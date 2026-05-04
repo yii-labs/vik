@@ -46,8 +46,12 @@ end-to-end daemon run against an isolated project.
 Run when orchestration behavior changes:
 
 ```sh
-cargo run --locked -p vik-cli -- start ./WORKFLOW.md --port 3000
+VIK_SERVICE_DIR="$PWD/.tests/service" cargo run --locked -p vik-cli -- \
+  service start --port 3000
+VIK_SERVICE_DIR="$PWD/.tests/service" cargo run --locked -p vik-cli -- \
+  work --workflow ./WORKFLOW.md
 curl -fsS http://127.0.0.1:3000/api/v1/state | jq .
+VIK_SERVICE_DIR="$PWD/.tests/service" cargo run --locked -p vik-cli -- service stop
 ```
 
 Record the issue state, PR link, and final Linear state when using Vik itself to

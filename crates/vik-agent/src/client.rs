@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::future::Future;
 use std::path::Path;
 
@@ -17,6 +18,7 @@ const CONTINUATION_PROMPT: &str = "Continue working on this Linear issue. Check 
 pub struct CodexAppServerClient {
     command: ProcessCommand,
     config: CodexConfig,
+    env: HashMap<String, String>,
     tools: DynamicTools,
 }
 
@@ -31,8 +33,14 @@ impl CodexAppServerClient {
         Self {
             command: codex_spawn_process_command(&config),
             config,
+            env: HashMap::new(),
             tools: DynamicTools::default(),
         }
+    }
+
+    pub(crate) fn with_env(mut self, env: HashMap<String, String>) -> Self {
+        self.env = env;
+        self
     }
 
     pub(crate) fn with_dynamic_tools(mut self, tools: DynamicTools) -> Self {
@@ -65,7 +73,8 @@ impl CodexAppServerClient {
             json!({}),
         );
         let mut process =
-            JsonlRpcProcess::spawn(&self.command, workspace_path, self.tools.clone()).await?;
+            JsonlRpcProcess::spawn(&self.command, workspace_path, self.tools.clone(), &self.env)
+                .await?;
         process.configure_timeouts(&self.config);
         emit_lifecycle_event(
             &mut on_event,

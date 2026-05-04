@@ -58,10 +58,12 @@ docker run --rm \
 The default command is:
 
 ```sh
-vik start /vik-workspace/WORKFLOW.md
+vik daemon --workflow /vik-workspace/WORKFLOW.md
 ```
 
 Set `VIK_WORKFLOW_PATH` when the workflow file is mounted somewhere else.
+The image defaults `VIK_SERVICE_DIR` to `/vik-workspace/.vik/service` so the
+registry, service state, and service logs remain inside the mounted workspace.
 
 ## Observation Port
 

@@ -62,8 +62,9 @@ where
         manager.before_run(&workspace.path).await?;
         let prompt = render_prompt(&request.workflow, &request.issue, request.attempt)?;
         let tools = DynamicTools::from_tracker_config(&request.config.tracker);
-        let client =
-            CodexAppServerClient::new(request.config.codex.clone()).with_dynamic_tools(tools);
+        let client = CodexAppServerClient::new(request.config.codex.clone())
+            .with_env(request.config.runtime_env.clone())
+            .with_dynamic_tools(tools);
         let active_states = request.config.tracker.active_states.clone();
         let terminal_states = request.config.tracker.terminal_states.clone();
         let issue_id = request.issue.id.clone();

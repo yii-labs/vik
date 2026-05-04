@@ -1,16 +1,32 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::env;
 use std::error::Error;
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use chrono::Utc;
 use clap::{Args as ClapArgs, Subcommand};
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
-use vik_workflow::load_effective_workflow;
+use tempfile::NamedTempFile;
+use tokio::sync::{Mutex, mpsc};
+use tokio::time;
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+use vik_agent::LocalAgentWorker;
+use vik_core::{IssueDebugSnapshot, RuntimeSnapshot, TokenTotals};
+use vik_http::{HttpState, serve};
+use vik_orchestrator::Orchestrator;
+use vik_tracker::{
+    DEFAULT_LINEAR_ENDPOINT, LinearClient, LinearClientConfig, LinearIssueFilterConfig,
+};
+use vik_workflow::{WorkflowReloader, load_effective_workflow_with_env};
 
 #[derive(Debug, ClapArgs)]
 pub(crate) struct ServiceArgs {
@@ -20,43 +36,35 @@ pub(crate) struct ServiceArgs {
 
 #[derive(Debug, Subcommand)]
 enum ServiceCommand {
-    /// Install service state and start Vik in the background.
-    Install(RunArgs),
+    #[command(hide = true)]
+    Install(ServiceRunArgs),
     /// Remove service state and stop Vik if it is running.
-    Uninstall(WorkflowArg),
+    Uninstall,
     /// Print current service status.
-    Status(WorkflowArg),
+    Status,
     /// Print recent service logs.
     Logs(LogsArgs),
-    /// Start Vik in the background.
-    Start(RunArgs),
+    /// Start the Vik service in the background.
+    Start(ServiceRunArgs),
     /// Stop a running Vik service.
-    Stop(WorkflowArg),
-    /// Stop then start Vik in the background.
-    Restart(RunArgs),
+    Stop,
+    /// Stop then start the Vik service in the background.
+    Restart(ServiceRunArgs),
 }
 
 #[derive(Debug, Clone, ClapArgs)]
-struct RunArgs {
-    /// Path to WORKFLOW.md. Defaults to ./WORKFLOW.md.
-    workflow: Option<PathBuf>,
-
+struct ServiceRunArgs {
     /// Enable HTTP status server. Overrides server.port from WORKFLOW.md.
     #[arg(long)]
     port: Option<u16>,
-}
 
-#[derive(Debug, Clone, ClapArgs)]
-struct WorkflowArg {
-    /// Path to WORKFLOW.md. Defaults to ./WORKFLOW.md.
-    workflow: Option<PathBuf>,
+    /// HTTP status server bind address. Defaults to 127.0.0.1.
+    #[arg(long, alias = "host", value_name = "ADDR")]
+    bind_address: Option<IpAddr>,
 }
 
 #[derive(Debug, Clone, ClapArgs)]
 struct LogsArgs {
-    /// Path to WORKFLOW.md. Defaults to ./WORKFLOW.md.
-    workflow: Option<PathBuf>,
-
     /// Number of recent lines to print.
     #[arg(long, default_value_t = 100)]
     lines: usize,
@@ -66,56 +74,66 @@ struct LogsArgs {
     follow: bool,
 }
 
-#[derive(Debug)]
-struct ServiceTarget {
-    workflow_path: PathBuf,
+#[derive(Debug, Clone, ClapArgs)]
+pub(crate) struct DaemonArgs {
+    #[arg(long, hide = true)]
+    service_dir: Option<PathBuf>,
+
+    /// Register a workflow before the daemon starts.
+    #[arg(short = 'w', long = "workflow", value_name = "WORKFLOW")]
+    pub(crate) workflows: Vec<PathBuf>,
+
+    /// Enable HTTP status server. Overrides server.port from WORKFLOW.md.
+    #[arg(long)]
+    pub(crate) port: Option<u16>,
+
+    /// HTTP status server bind address. Defaults to 127.0.0.1.
+    #[arg(long, alias = "host", value_name = "ADDR")]
+    pub(crate) bind_address: Option<IpAddr>,
+}
+
+#[derive(Debug, Clone)]
+struct ServicePaths {
     service_dir: PathBuf,
     state_path: PathBuf,
     log_path: PathBuf,
-    cwd: PathBuf,
+    registry_path: PathBuf,
+}
+
+impl ServicePaths {
+    fn load(service_dir: Option<PathBuf>) -> io::Result<Self> {
+        let service_dir = resolve_service_dir(service_dir)?;
+        Ok(Self::from_dir(service_dir))
+    }
+
+    fn from_dir(service_dir: PathBuf) -> Self {
+        Self {
+            state_path: service_dir.join("service.json"),
+            log_path: service_dir.join("service.log"),
+            registry_path: service_dir.join("workflows.json"),
+            service_dir,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ServiceTarget {
+    paths: ServicePaths,
     port: Option<u16>,
+    bind_address: Option<IpAddr>,
 }
 
 impl ServiceTarget {
-    fn load(
-        workflow: Option<PathBuf>,
-        port: Option<u16>,
-        require_dispatch_config: bool,
-    ) -> Result<Self, Box<dyn Error>> {
-        let explicit_workflow = workflow.is_some();
-        let workflow_path = if require_dispatch_config {
-            let loaded = load_effective_workflow(workflow)?;
-            loaded.config.validate_for_dispatch()?;
-            fs::canonicalize(&loaded.definition.path)?
-        } else {
-            resolve_workflow_path(workflow)?
-        };
-        let cwd = service_cwd_for_workflow(&workflow_path, explicit_workflow)?;
-        let service_dir = service_dir_for_workflow(&workflow_path);
-        let name = service_name(&workflow_path);
+    fn load(port: Option<u16>, bind_address: Option<IpAddr>) -> Result<Self, Box<dyn Error>> {
         Ok(Self {
-            workflow_path,
-            service_dir: service_dir.clone(),
-            state_path: service_dir.join(format!("{name}.json")),
-            log_path: service_dir.join(format!("{name}.log")),
-            cwd,
+            paths: ServicePaths::load(None)?,
             port,
+            bind_address,
         })
     }
 
-    fn load_for_dispatch(
-        workflow: Option<PathBuf>,
-        port: Option<u16>,
-    ) -> Result<Self, Box<dyn Error>> {
-        let management_target = Self::load(workflow, port, false)?;
-        let previous_state = read_state(&management_target.state_path)?;
-        let dotenv_dir = management_target.effective_cwd(previous_state.as_ref());
-        load_dotenv_from_dir(&dotenv_dir)?;
-        Self::load(Some(management_target.workflow_path), port, true)
-    }
-
     fn start(&self, verb: &str) -> Result<(), Box<dyn Error>> {
-        let previous_state = read_state(&self.state_path)?;
+        let previous_state = read_state(&self.paths.state_path)?;
         if let Some(state) = &previous_state
             && classify_state(state) == RuntimeStatus::Running
         {
@@ -128,11 +146,15 @@ impl ServiceTarget {
         }
 
         let port = self.effective_port(previous_state.as_ref());
-        let cwd = self.effective_cwd(previous_state.as_ref());
-        fs::create_dir_all(&self.service_dir)?;
+        let bind_address = self.effective_bind_address(previous_state.as_ref());
+        let cwd = previous_state
+            .as_ref()
+            .map(|state| state.cwd.clone())
+            .unwrap_or(env::current_dir()?);
+        fs::create_dir_all(&self.paths.service_dir)?;
         let executable = env::current_exe()?;
         let mut command = Command::new(&executable);
-        for arg in self.daemon_args(port) {
+        for arg in self.daemon_args(port, bind_address) {
             command.arg(arg);
         }
         command.current_dir(&cwd);
@@ -141,7 +163,7 @@ impl ServiceTarget {
         let log = OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&self.log_path)?;
+            .open(&self.paths.log_path)?;
         let err_log = log.try_clone()?;
         command
             .stdin(Stdio::null())
@@ -151,30 +173,32 @@ impl ServiceTarget {
         let child = command.spawn()?;
         let pid = child.id();
         let state = ServiceState {
-            version: 1,
-            workflow_path: self.workflow_path.clone(),
+            version: 2,
+            service_dir: self.paths.service_dir.clone(),
+            registry_path: self.paths.registry_path.clone(),
             cwd,
             pid: Some(pid),
             status: StoredStatus::Running,
             started_at_unix: Some(now_unix()),
             stopped_at_unix: None,
-            log_path: self.log_path.clone(),
+            log_path: self.paths.log_path.clone(),
             port,
-            command: self.display_command(&executable, port),
+            bind_address: bind_address.map(|addr| addr.to_string()),
+            command: self.display_command(&executable, port, bind_address),
         };
-        write_state(&self.state_path, &state)?;
+        write_state(&self.paths.state_path, &state)?;
         println!(
             "service {verb}: pid={} state={} log={}",
             pid,
-            self.state_path.display(),
-            self.log_path.display()
+            self.paths.state_path.display(),
+            self.paths.log_path.display()
         );
         Ok(())
     }
 
     fn stop(&self, remove_state: bool) -> Result<bool, Box<dyn Error>> {
-        let Some(mut state) = read_state(&self.state_path)? else {
-            println!("service not installed: {}", self.state_path.display());
+        let Some(mut state) = read_state(&self.paths.state_path)? else {
+            println!("service not installed: {}", self.paths.state_path.display());
             return Ok(false);
         };
 
@@ -187,7 +211,10 @@ impl ServiceTarget {
                 println!("service stopped: pid={pid}");
             }
             RuntimeStatus::Stopped => {
-                println!("service already stopped: {}", self.state_path.display());
+                println!(
+                    "service already stopped: {}",
+                    self.paths.state_path.display()
+                );
             }
             RuntimeStatus::Stale => {
                 let pid = state.pid.unwrap_or_default();
@@ -201,52 +228,56 @@ impl ServiceTarget {
         }
 
         if remove_state {
-            remove_state_file(&self.state_path)?;
+            remove_state_file(&self.paths.state_path)?;
         } else {
-            write_state(&self.state_path, &state)?;
+            write_state(&self.paths.state_path, &state)?;
         }
         Ok(true)
     }
 
     fn uninstall(&self) -> Result<(), Box<dyn Error>> {
         if self.stop(true)? {
-            println!("service uninstalled: {}", self.state_path.display());
+            remove_state_file(&self.paths.registry_path)?;
+            println!("service uninstalled: {}", self.paths.state_path.display());
         }
         Ok(())
     }
 
     fn print_status(&self) -> Result<(), Box<dyn Error>> {
-        let Some(state) = read_state(&self.state_path)? else {
-            println!("not installed: {}", self.state_path.display());
+        let registry = read_registry(&self.paths.registry_path)?;
+        let Some(state) = read_state(&self.paths.state_path)? else {
+            println!("not installed: {}", self.paths.state_path.display());
+            print_registry_status(&registry);
             return Ok(());
         };
 
         match classify_state(&state) {
             RuntimeStatus::Running => println!(
-                "running: pid={} workflow={} log={}",
+                "running: pid={} workflows={} log={}",
                 state.pid.unwrap_or_default(),
-                state.workflow_path.display(),
+                registry.workflows.len(),
                 state.log_path.display()
             ),
             RuntimeStatus::Stopped => println!(
-                "stopped: workflow={} log={}",
-                state.workflow_path.display(),
+                "stopped: workflows={} log={}",
+                registry.workflows.len(),
                 state.log_path.display()
             ),
             RuntimeStatus::Stale => println!(
-                "stale: pid={} workflow={} log={}",
+                "stale: pid={} workflows={} log={}",
                 state.pid.unwrap_or_default(),
-                state.workflow_path.display(),
+                registry.workflows.len(),
                 state.log_path.display()
             ),
         }
+        print_registry_status(&registry);
         Ok(())
     }
 
     fn print_logs(&self, lines: usize, follow: bool) -> Result<(), Box<dyn Error>> {
-        let path = read_state(&self.state_path)?
+        let path = read_state(&self.paths.state_path)?
             .map(|state| state.log_path)
-            .unwrap_or_else(|| self.log_path.clone());
+            .unwrap_or_else(|| self.paths.log_path.clone());
         if !path.exists() {
             println!("service logs not found: {}", path.display());
             return Ok(());
@@ -264,27 +295,39 @@ impl ServiceTarget {
             .or_else(|| previous_state.and_then(|state| state.port))
     }
 
-    fn effective_cwd(&self, previous_state: Option<&ServiceState>) -> PathBuf {
-        previous_state
-            .map(|state| state.cwd.clone())
-            .unwrap_or_else(|| self.cwd.clone())
+    fn effective_bind_address(&self, previous_state: Option<&ServiceState>) -> Option<IpAddr> {
+        self.bind_address.or_else(|| {
+            previous_state
+                .and_then(|state| state.bind_address.as_ref())
+                .and_then(|addr| addr.parse().ok())
+        })
     }
 
-    fn daemon_args(&self, port: Option<u16>) -> Vec<String> {
+    fn daemon_args(&self, port: Option<u16>, bind_address: Option<IpAddr>) -> Vec<String> {
         let mut args = vec![
-            "start".to_string(),
-            self.workflow_path.display().to_string(),
+            "daemon".to_string(),
+            "--service-dir".to_string(),
+            self.paths.service_dir.display().to_string(),
         ];
         if let Some(port) = port {
             args.push("--port".to_string());
             args.push(port.to_string());
         }
+        if let Some(bind_address) = bind_address {
+            args.push("--bind-address".to_string());
+            args.push(bind_address.to_string());
+        }
         args
     }
 
-    fn display_command(&self, executable: &Path, port: Option<u16>) -> Vec<String> {
+    fn display_command(
+        &self,
+        executable: &Path,
+        port: Option<u16>,
+        bind_address: Option<IpAddr>,
+    ) -> Vec<String> {
         let mut command = vec![executable.display().to_string()];
-        command.extend(self.daemon_args(port));
+        command.extend(self.daemon_args(port, bind_address));
         command
     }
 }
@@ -292,7 +335,8 @@ impl ServiceTarget {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ServiceState {
     version: u32,
-    workflow_path: PathBuf,
+    service_dir: PathBuf,
+    registry_path: PathBuf,
     cwd: PathBuf,
     pid: Option<u32>,
     status: StoredStatus,
@@ -300,7 +344,30 @@ struct ServiceState {
     stopped_at_unix: Option<u64>,
     log_path: PathBuf,
     port: Option<u16>,
+    bind_address: Option<String>,
     command: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct RegisteredWorkflow {
+    workflow_path: PathBuf,
+    cwd: PathBuf,
+    registered_at_unix: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct WorkflowRegistry {
+    version: u32,
+    workflows: Vec<RegisteredWorkflow>,
+}
+
+impl Default for WorkflowRegistry {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            workflows: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -320,34 +387,120 @@ enum RuntimeStatus {
 pub(crate) async fn run(args: ServiceArgs) -> Result<(), Box<dyn Error>> {
     match args.command {
         ServiceCommand::Install(args) => {
-            let target = ServiceTarget::load_for_dispatch(args.workflow, args.port)?;
+            register_current_workflow_if_present()?;
+            let target = ServiceTarget::load(args.port, args.bind_address)?;
             target.start("installed")?;
         }
-        ServiceCommand::Uninstall(args) => {
-            let target = ServiceTarget::load(args.workflow, None, false)?;
+        ServiceCommand::Uninstall => {
+            let target = ServiceTarget::load(None, None)?;
             target.uninstall()?;
         }
-        ServiceCommand::Status(args) => {
-            let target = ServiceTarget::load(args.workflow, None, false)?;
+        ServiceCommand::Status => {
+            let target = ServiceTarget::load(None, None)?;
             target.print_status()?;
         }
         ServiceCommand::Logs(args) => {
-            let target = ServiceTarget::load(args.workflow, None, false)?;
+            let target = ServiceTarget::load(None, None)?;
             target.print_logs(args.lines, args.follow)?;
         }
         ServiceCommand::Start(args) => {
-            let target = ServiceTarget::load_for_dispatch(args.workflow, args.port)?;
+            register_current_workflow_if_present()?;
+            let target = ServiceTarget::load(args.port, args.bind_address)?;
             target.start("started")?;
         }
-        ServiceCommand::Stop(args) => {
-            let target = ServiceTarget::load(args.workflow, None, false)?;
+        ServiceCommand::Stop => {
+            let target = ServiceTarget::load(None, None)?;
             let _ = target.stop(false)?;
         }
         ServiceCommand::Restart(args) => {
-            let target = ServiceTarget::load_for_dispatch(args.workflow, args.port)?;
+            register_current_workflow_if_present()?;
+            let target = ServiceTarget::load(args.port, args.bind_address)?;
             let _ = target.stop(false)?;
             target.start("restarted")?;
         }
+    }
+    Ok(())
+}
+
+pub(crate) fn register_workflow_and_start_service(
+    workflow: Option<PathBuf>,
+) -> Result<(), Box<dyn Error>> {
+    let target = ServiceTarget::load(None, None)?;
+    register_workflow_in_registry(&target.paths, workflow)?;
+    target.start("started")?;
+    Ok(())
+}
+
+pub(crate) async fn run_daemon(args: DaemonArgs) -> Result<(), Box<dyn Error>> {
+    let paths = ServicePaths::load(args.service_dir)?;
+    fs::create_dir_all(&paths.service_dir)?;
+    for workflow in args.workflows {
+        register_workflow_in_registry(&paths, Some(workflow))?;
+    }
+
+    let _log_guard = init_logging(&paths.service_dir.join("logs"))?;
+    tracing::info!(service_dir=%paths.service_dir.display(), "service_daemon outcome=started");
+
+    run_workflow_center(paths, args.port, args.bind_address).await
+}
+
+fn register_current_workflow_if_present() -> Result<(), Box<dyn Error>> {
+    let workflow_path = env::current_dir()?.join("WORKFLOW.md");
+    if workflow_path.is_file() {
+        let paths = ServicePaths::load(None)?;
+        register_workflow_in_registry(&paths, Some(workflow_path))?;
+    }
+    Ok(())
+}
+
+fn register_workflow_in_registry(
+    paths: &ServicePaths,
+    workflow: Option<PathBuf>,
+) -> Result<(), Box<dyn Error>> {
+    let explicit_workflow = workflow.is_some();
+    let management_path = resolve_workflow_path(workflow)?;
+    let cwd = service_cwd_for_workflow(&management_path, explicit_workflow)?;
+    let runtime_env = workflow_env_from_dir(&cwd)?;
+    let loaded = load_effective_workflow_with_env(Some(management_path), &runtime_env)?;
+    loaded.config.validate_for_dispatch()?;
+    let workflow_path = fs::canonicalize(&loaded.definition.path)?;
+    let cwd = if explicit_workflow {
+        workflow_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf()
+    } else {
+        env::current_dir()?
+    };
+
+    let _registry_lock = lock_registry(&paths.registry_path)?;
+    let mut registry = read_registry(&paths.registry_path)?;
+    let workflow_record = RegisteredWorkflow {
+        workflow_path: workflow_path.clone(),
+        cwd,
+        registered_at_unix: now_unix(),
+    };
+    let already_registered = if let Some(existing) = registry
+        .workflows
+        .iter_mut()
+        .find(|entry| entry.workflow_path == workflow_path)
+    {
+        existing.cwd = workflow_record.cwd;
+        existing.registered_at_unix = workflow_record.registered_at_unix;
+        true
+    } else {
+        registry.workflows.push(workflow_record);
+        false
+    };
+    registry
+        .workflows
+        .sort_by(|left, right| left.workflow_path.cmp(&right.workflow_path));
+    write_registry(&paths.registry_path, &registry)?;
+
+    if already_registered {
+        println!("workflow already registered: {}", workflow_path.display());
+    } else {
+        println!("workflow registered: {}", workflow_path.display());
     }
     Ok(())
 }
@@ -376,6 +529,7 @@ fn service_cwd_for_workflow(workflow_path: &Path, explicit_workflow: bool) -> io
     env::current_dir()
 }
 
+#[cfg(test)]
 fn load_dotenv_from_dir(dir: &Path) -> Result<(), Box<dyn Error>> {
     for ancestor in dir.ancestors() {
         let path = ancestor.join(".env");
@@ -386,6 +540,293 @@ fn load_dotenv_from_dir(dir: &Path) -> Result<(), Box<dyn Error>> {
         }
     }
     Ok(())
+}
+
+fn workflow_env_from_dir(dir: &Path) -> Result<HashMap<String, String>, Box<dyn Error>> {
+    let mut env_map: HashMap<String, String> = env::vars().collect();
+    for ancestor in dir.ancestors() {
+        let path = ancestor.join(".env");
+        match dotenvy::from_path_iter(&path) {
+            Ok(iter) => {
+                for item in iter {
+                    let (key, value) =
+                        item.map_err(|err| format!("failed to load {}: {err}", path.display()))?;
+                    env_map.entry(key).or_insert(value);
+                }
+                return Ok(env_map);
+            }
+            Err(dotenvy::Error::Io(err)) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(format!("failed to load {}: {err}", path.display()).into()),
+        }
+    }
+    Ok(env_map)
+}
+
+type WorkflowOrchestrator = Orchestrator<LinearClient, LocalAgentWorker<LinearClient>>;
+
+struct WorkflowRuntime {
+    orchestrator: Arc<WorkflowOrchestrator>,
+    task: tokio::task::JoinHandle<()>,
+    server_port: Option<u16>,
+}
+
+async fn run_workflow_center(
+    paths: ServicePaths,
+    explicit_port: Option<u16>,
+    bind_address: Option<IpAddr>,
+) -> Result<(), Box<dyn Error>> {
+    let runtimes: Arc<Mutex<BTreeMap<PathBuf, WorkflowRuntime>>> =
+        Arc::new(Mutex::new(BTreeMap::new()));
+    let (refresh_tx, mut refresh_rx) = mpsc::unbounded_channel();
+    let mut http_started = false;
+    if let Some(port) = explicit_port {
+        start_http_server(
+            Arc::clone(&runtimes),
+            refresh_tx.clone(),
+            bind_address,
+            port,
+        )
+        .await?;
+        http_started = true;
+    }
+
+    let mut interval = time::interval(Duration::from_secs(2));
+    interval.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                reconcile_registered_workflows(&paths.registry_path, Arc::clone(&runtimes)).await?;
+                reap_finished_workflows(Arc::clone(&runtimes)).await;
+                if !http_started
+                    && let Some(port) = preferred_runtime_port(Arc::clone(&runtimes)).await
+                {
+                    start_http_server(Arc::clone(&runtimes), refresh_tx.clone(), bind_address, port).await?;
+                    http_started = true;
+                }
+            }
+            Some(()) = refresh_rx.recv() => {
+                broadcast_refresh(Arc::clone(&runtimes)).await;
+            }
+            result = tokio::signal::ctrl_c() => {
+                result?;
+                tracing::info!("service_daemon outcome=stopping signal=ctrl_c");
+                abort_workflows(Arc::clone(&runtimes)).await;
+                return Ok(());
+            }
+        }
+    }
+}
+
+async fn reconcile_registered_workflows(
+    registry_path: &Path,
+    runtimes: Arc<Mutex<BTreeMap<PathBuf, WorkflowRuntime>>>,
+) -> Result<(), Box<dyn Error>> {
+    let registry = match read_registry(registry_path) {
+        Ok(registry) => registry,
+        Err(err) => {
+            tracing::warn!(
+                registry=%registry_path.display(),
+                error=%err,
+                "workflow_registry outcome=read_failed"
+            );
+            return Ok(());
+        }
+    };
+    for workflow in registry.workflows {
+        let already_running = runtimes.lock().await.contains_key(&workflow.workflow_path);
+        if already_running {
+            continue;
+        }
+        let runtime = match start_workflow_runtime(&workflow) {
+            Ok(runtime) => runtime,
+            Err(err) => {
+                tracing::error!(
+                    workflow=%workflow.workflow_path.display(),
+                    error=%err,
+                    "workflow_runtime outcome=start_failed"
+                );
+                continue;
+            }
+        };
+        tracing::info!(
+            workflow=%workflow.workflow_path.display(),
+            "workflow_runtime outcome=started"
+        );
+        runtimes
+            .lock()
+            .await
+            .insert(workflow.workflow_path.clone(), runtime);
+    }
+    Ok(())
+}
+
+fn start_workflow_runtime(
+    workflow: &RegisteredWorkflow,
+) -> Result<WorkflowRuntime, Box<dyn Error>> {
+    let runtime_env = workflow_env_from_dir(&workflow.cwd)?;
+    let reloader =
+        WorkflowReloader::start_with_env(Some(workflow.workflow_path.clone()), runtime_env)?;
+    let loaded = reloader.current().clone();
+    loaded.config.validate_for_dispatch()?;
+    let server_port = loaded.config.server.as_ref().map(|server| server.port);
+
+    let tracker_config = LinearClientConfig::new(
+        if loaded.config.tracker.endpoint.is_empty() {
+            DEFAULT_LINEAR_ENDPOINT
+        } else {
+            &loaded.config.tracker.endpoint
+        },
+        &loaded.config.tracker.api_key,
+        &loaded.config.tracker.project_slug,
+        loaded.config.tracker.active_states.clone(),
+    )
+    .with_filter(LinearIssueFilterConfig::new(
+        loaded.config.tracker.filter.assignees.clone(),
+        loaded.config.tracker.filter.tags.clone(),
+    ));
+    let tracker = Arc::new(LinearClient::new(tracker_config)?);
+    let worker = Arc::new(LocalAgentWorker::new(Arc::clone(&tracker)));
+    let orchestrator = Arc::new(Orchestrator::new(Arc::clone(&tracker), worker, reloader));
+    let run_orchestrator = Arc::clone(&orchestrator);
+    let workflow_path = workflow.workflow_path.clone();
+    let task = tokio::spawn(async move {
+        if let Err(err) = run_orchestrator.run_forever().await {
+            tracing::error!(
+                workflow=%workflow_path.display(),
+                error=%err,
+                "workflow_runtime outcome=failed"
+            );
+        }
+    });
+
+    Ok(WorkflowRuntime {
+        orchestrator,
+        task,
+        server_port,
+    })
+}
+
+async fn reap_finished_workflows(runtimes: Arc<Mutex<BTreeMap<PathBuf, WorkflowRuntime>>>) {
+    let mut runtimes = runtimes.lock().await;
+    runtimes.retain(|workflow_path, runtime| {
+        let keep = !runtime.task.is_finished();
+        if !keep {
+            tracing::warn!(
+                workflow=%workflow_path.display(),
+                "workflow_runtime outcome=exited"
+            );
+        }
+        keep
+    });
+}
+
+async fn preferred_runtime_port(
+    runtimes: Arc<Mutex<BTreeMap<PathBuf, WorkflowRuntime>>>,
+) -> Option<u16> {
+    let runtimes = runtimes.lock().await;
+    runtimes.values().find_map(|runtime| runtime.server_port)
+}
+
+async fn start_http_server(
+    runtimes: Arc<Mutex<BTreeMap<PathBuf, WorkflowRuntime>>>,
+    refresh_tx: mpsc::UnboundedSender<()>,
+    bind_address: Option<IpAddr>,
+    port: u16,
+) -> Result<(), Box<dyn Error>> {
+    let snapshot_runtimes = Arc::clone(&runtimes);
+    let issue_runtimes = Arc::clone(&runtimes);
+    let addr = SocketAddr::new(
+        bind_address.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+        port,
+    );
+    let bound = serve(
+        addr,
+        HttpState {
+            snapshot: Arc::new(move || {
+                let runtimes = Arc::clone(&snapshot_runtimes);
+                Box::pin(async move { aggregate_snapshot(runtimes).await })
+            }),
+            issue: Arc::new(move |identifier| {
+                let runtimes = Arc::clone(&issue_runtimes);
+                Box::pin(async move { aggregate_issue_debug(runtimes, identifier).await })
+            }),
+            refresh_tx,
+        },
+    )
+    .await?;
+    tracing::info!(addr=%bound, "http_server outcome=started");
+    Ok(())
+}
+
+async fn aggregate_snapshot(
+    runtimes: Arc<Mutex<BTreeMap<PathBuf, WorkflowRuntime>>>,
+) -> RuntimeSnapshot {
+    let orchestrators: Vec<_> = runtimes
+        .lock()
+        .await
+        .values()
+        .map(|runtime| Arc::clone(&runtime.orchestrator))
+        .collect();
+    let mut aggregate = RuntimeSnapshot {
+        generated_at: Utc::now(),
+        counts: BTreeMap::from([("running".to_string(), 0), ("retrying".to_string(), 0)]),
+        running: Vec::new(),
+        retrying: Vec::new(),
+        codex_totals: TokenTotals::default(),
+        rate_limits: None,
+    };
+    for orchestrator in orchestrators {
+        let snapshot = orchestrator.snapshot().await;
+        for (key, count) in snapshot.counts {
+            *aggregate.counts.entry(key).or_insert(0) += count;
+        }
+        aggregate.running.extend(snapshot.running);
+        aggregate.retrying.extend(snapshot.retrying);
+        aggregate.codex_totals.input_tokens += snapshot.codex_totals.input_tokens;
+        aggregate.codex_totals.output_tokens += snapshot.codex_totals.output_tokens;
+        aggregate.codex_totals.total_tokens += snapshot.codex_totals.total_tokens;
+        aggregate.codex_totals.seconds_running += snapshot.codex_totals.seconds_running;
+        if aggregate.rate_limits.is_none() {
+            aggregate.rate_limits = snapshot.rate_limits;
+        }
+    }
+    aggregate
+}
+
+async fn aggregate_issue_debug(
+    runtimes: Arc<Mutex<BTreeMap<PathBuf, WorkflowRuntime>>>,
+    issue_identifier: String,
+) -> Option<IssueDebugSnapshot> {
+    let orchestrators: Vec<_> = runtimes
+        .lock()
+        .await
+        .values()
+        .map(|runtime| Arc::clone(&runtime.orchestrator))
+        .collect();
+    for orchestrator in orchestrators {
+        if let Some(snapshot) = orchestrator.issue_debug(&issue_identifier).await {
+            return Some(snapshot);
+        }
+    }
+    None
+}
+
+async fn broadcast_refresh(runtimes: Arc<Mutex<BTreeMap<PathBuf, WorkflowRuntime>>>) {
+    let senders: Vec<_> = runtimes
+        .lock()
+        .await
+        .values()
+        .map(|runtime| runtime.orchestrator.refresh_sender())
+        .collect();
+    for sender in senders {
+        let _ = sender.send(());
+    }
+}
+
+async fn abort_workflows(runtimes: Arc<Mutex<BTreeMap<PathBuf, WorkflowRuntime>>>) {
+    for runtime in runtimes.lock().await.values() {
+        runtime.task.abort();
+    }
 }
 
 fn read_state(path: &Path) -> Result<Option<ServiceState>, Box<dyn Error>> {
@@ -402,6 +843,54 @@ fn write_state(path: &Path, state: &ServiceState) -> Result<(), Box<dyn Error>> 
     }
     fs::write(path, format!("{}\n", serde_json::to_string_pretty(state)?))?;
     Ok(())
+}
+
+fn read_registry(path: &Path) -> Result<WorkflowRegistry, Box<dyn Error>> {
+    match fs::read_to_string(path) {
+        Ok(body) => Ok(serde_json::from_str(&body)?),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(WorkflowRegistry::default()),
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn write_registry(path: &Path, registry: &WorkflowRegistry) -> Result<(), Box<dyn Error>> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+    let body = format!("{}\n", serde_json::to_string_pretty(registry)?);
+    let mut temp = NamedTempFile::new_in(parent)?;
+    temp.write_all(body.as_bytes())?;
+    temp.as_file_mut().sync_all()?;
+    temp.persist(path).map_err(|err| err.error)?;
+    Ok(())
+}
+
+fn lock_registry(path: &Path) -> io::Result<File> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let lock_path = registry_lock_path(path);
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path)?;
+    file.lock_exclusive()?;
+    Ok(file)
+}
+
+fn registry_lock_path(path: &Path) -> PathBuf {
+    let lock_file_name = path
+        .file_name()
+        .map(|name| format!("{}.lock", name.to_string_lossy()))
+        .unwrap_or_else(|| "workflows.json.lock".to_string());
+    path.with_file_name(lock_file_name)
+}
+
+fn print_registry_status(registry: &WorkflowRegistry) {
+    for workflow in &registry.workflows {
+        println!("workflow: {}", workflow.workflow_path.display());
+    }
 }
 
 fn remove_state_file(path: &Path) -> Result<(), Box<dyn Error>> {
@@ -426,47 +915,46 @@ fn stale_service_group_cleanup_allowed(pid: u32) -> bool {
     !process_alive(pid)
 }
 
-fn service_dir_for_workflow(workflow_path: &Path) -> PathBuf {
-    workflow_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(".vik")
-        .join("service")
-}
-
-fn service_name(workflow_path: &Path) -> String {
-    let stem = workflow_path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .map(sanitize_name_part)
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "workflow".to_string());
-    format!(
-        "{stem}-{:016x}",
-        fnv1a64(workflow_path.to_string_lossy().as_bytes())
-    )
-}
-
-fn sanitize_name_part(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' || ch == '-' {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
-fn fnv1a64(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf29ce484222325;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
+fn resolve_service_dir(service_dir: Option<PathBuf>) -> io::Result<PathBuf> {
+    let path = service_dir
+        .or_else(|| env::var_os("VIK_SERVICE_DIR").map(PathBuf::from))
+        .unwrap_or_else(|| home_dir().join(".vik").join("service"));
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(env::current_dir()?.join(path))
     }
-    hash
+}
+
+fn home_dir() -> PathBuf {
+    env::var_os("HOME")
+        .or_else(|| env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_else(env::temp_dir)
+}
+
+fn init_logging(log_dir: &Path) -> Result<WorkerGuard, Box<dyn Error>> {
+    fs::create_dir_all(log_dir)?;
+    let file_appender = tracing_appender::rolling::daily(log_dir, "vik.log");
+    let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+
+    let stdout_layer = tracing_subscriber::fmt::layer()
+        .json()
+        .with_current_span(false)
+        .with_span_list(false);
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(file_writer)
+        .json()
+        .with_current_span(false)
+        .with_span_list(false);
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(stdout_layer)
+        .with(file_layer)
+        .init();
+    Ok(guard)
 }
 
 fn print_recent_lines(path: &Path, lines: usize) -> io::Result<()> {
@@ -577,7 +1065,7 @@ fn process_matches_state(pid: u32, state: &ServiceState) -> bool {
     let Ok(command) = String::from_utf8(output.stdout) else {
         return true;
     };
-    command_mentions_workflow(&command, &state.workflow_path)
+    command_mentions_service_dir(&command, &state.service_dir)
 }
 
 #[cfg(windows)]
@@ -608,14 +1096,14 @@ fn process_matches_state(pid: u32, state: &ServiceState) -> bool {
     if !output.status.success() {
         return false;
     }
-    command_mentions_workflow(
+    command_mentions_service_dir(
         String::from_utf8_lossy(&output.stdout).as_ref(),
-        &state.workflow_path,
+        &state.service_dir,
     )
 }
 
-fn command_mentions_workflow(command: &str, workflow_path: &Path) -> bool {
-    command.contains(workflow_path.to_string_lossy().as_ref())
+fn command_mentions_service_dir(command: &str, service_dir: &Path) -> bool {
+    command.contains(service_dir.to_string_lossy().as_ref())
 }
 
 #[cfg(unix)]
@@ -704,40 +1192,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn service_name_is_ascii_and_stable() {
-        let path = PathBuf::from("/tmp/Vik Workflow/WORKFLOW.md");
+    fn service_paths_use_central_files() {
+        let paths = ServicePaths::from_dir(PathBuf::from("/tmp/vik-service"));
 
-        let name = service_name(&path);
-
-        assert_eq!(name, service_name(&path));
-        assert!(name.starts_with("WORKFLOW-"));
-        assert!(
-            name.chars()
-                .all(|ch| { ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' || ch == '-' })
+        assert_eq!(
+            paths.state_path,
+            PathBuf::from("/tmp/vik-service/service.json")
+        );
+        assert_eq!(
+            paths.log_path,
+            PathBuf::from("/tmp/vik-service/service.log")
+        );
+        assert_eq!(
+            paths.registry_path,
+            PathBuf::from("/tmp/vik-service/workflows.json")
         );
     }
 
     #[test]
-    fn daemon_args_include_workflow_and_optional_port() {
-        let target = ServiceTarget {
-            workflow_path: PathBuf::from("/tmp/vik/WORKFLOW.md"),
-            service_dir: PathBuf::from("/tmp/vik/.vik/service"),
-            state_path: PathBuf::from("/tmp/vik/.vik/service/state.json"),
-            log_path: PathBuf::from("/tmp/vik/.vik/service/service.log"),
-            cwd: PathBuf::from("/tmp/vik"),
-            port: Some(3000),
-        };
+    fn daemon_args_include_service_dir_and_optional_status_flags() {
+        let mut target = service_target();
+        target.port = Some(3000);
+        target.bind_address = Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
 
         assert_eq!(
-            target.daemon_args(target.port),
-            vec!["start", "/tmp/vik/WORKFLOW.md", "--port", "3000"]
+            target.daemon_args(target.port, target.bind_address),
+            vec![
+                "daemon",
+                "--service-dir",
+                "/tmp/vik/.vik/service",
+                "--port",
+                "3000",
+                "--bind-address",
+                "0.0.0.0"
+            ]
         );
     }
 
     #[test]
     fn effective_service_port_reuses_stored_port_without_override() {
         let state = service_state_with_port(Some(3000));
-        let target = service_target_with_cwd(PathBuf::from("/tmp/vik"));
+        let target = service_target();
 
         assert_eq!(target.effective_port(Some(&state)), Some(3000));
     }
@@ -745,92 +1240,159 @@ mod tests {
     #[test]
     fn effective_service_port_prefers_requested_override() {
         let state = service_state_with_port(Some(3000));
-        let mut target = service_target_with_cwd(PathBuf::from("/tmp/vik"));
+        let mut target = service_target();
         target.port = Some(4000);
 
         assert_eq!(target.effective_port(Some(&state)), Some(4000));
     }
 
     #[test]
-    fn effective_service_cwd_reuses_stored_cwd() {
-        let target = service_target_with_cwd(PathBuf::from("/tmp/new-cwd"));
-        let state = service_state_with_cwd(PathBuf::from("/tmp/installed-cwd"), None);
+    fn effective_bind_address_reuses_stored_address_without_override() {
+        let mut state = service_state_with_port(None);
+        state.bind_address = Some("0.0.0.0".to_string());
+        let target = service_target();
 
         assert_eq!(
-            target.effective_cwd(Some(&state)),
-            PathBuf::from("/tmp/installed-cwd")
+            target.effective_bind_address(Some(&state)),
+            Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
         );
     }
 
     #[test]
-    fn load_target_state_path_survives_workspace_root_change() {
+    fn register_workflow_writes_central_registry() {
         let dir = tempfile::tempdir().unwrap();
-        let workflow_path = dir.path().join("WORKFLOW.md");
-        write_workflow(&workflow_path, "work-a");
-        let first = ServiceTarget::load(Some(workflow_path.clone()), None, false).unwrap();
-
-        write_workflow(&workflow_path, "work-b");
-        let second = ServiceTarget::load(Some(workflow_path.clone()), None, false).unwrap();
-
-        assert_eq!(first.state_path, second.state_path);
-        let expected_root = fs::canonicalize(dir.path()).unwrap();
-        assert_eq!(
-            first.service_dir,
-            expected_root.join(".vik").join("service")
-        );
-    }
-
-    #[test]
-    fn management_target_does_not_parse_invalid_workflow() {
-        let dir = tempfile::tempdir().unwrap();
-        let workflow_path = dir.path().join("WORKFLOW.md");
-        fs::write(&workflow_path, "---\ntracker: [\n---\nBody").unwrap();
-
-        let target = ServiceTarget::load(Some(workflow_path.clone()), None, false).unwrap();
-
-        assert_eq!(
-            target.service_dir,
-            fs::canonicalize(dir.path())
-                .unwrap()
-                .join(".vik")
-                .join("service")
-        );
-    }
-
-    #[test]
-    fn management_target_survives_missing_workflow_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let workflow_path = dir.path().join("WORKFLOW.md");
-
-        let target = ServiceTarget::load(Some(workflow_path.clone()), None, false).unwrap();
-
-        assert_eq!(target.workflow_path, workflow_path);
-        assert_eq!(target.service_dir, dir.path().join(".vik").join("service"));
-    }
-
-    #[test]
-    fn explicit_workflow_target_uses_workflow_dir_as_cwd() {
-        let dir = tempfile::tempdir().unwrap();
+        let service_dir = dir.path().join("service");
         let workflow_path = dir.path().join("WORKFLOW.md");
         write_workflow(&workflow_path, "work");
+        let paths = ServicePaths::from_dir(service_dir);
 
-        let target = ServiceTarget::load(Some(workflow_path), None, false).unwrap();
+        register_workflow_in_registry(&paths, Some(workflow_path.clone())).unwrap();
 
-        assert_eq!(target.cwd, fs::canonicalize(dir.path()).unwrap());
+        let registry = read_registry(&paths.registry_path).unwrap();
+        assert_eq!(registry.workflows.len(), 1);
+        assert_eq!(
+            registry.workflows[0].workflow_path,
+            fs::canonicalize(workflow_path).unwrap()
+        );
+        assert_eq!(
+            registry.workflows[0].cwd,
+            fs::canonicalize(dir.path()).unwrap()
+        );
     }
 
     #[test]
-    fn command_match_requires_workflow_path() {
-        let workflow_path = PathBuf::from("/tmp/vik/WORKFLOW.md");
+    fn concurrent_workflow_registration_keeps_all_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = ServicePaths::from_dir(dir.path().join("service"));
+        let workflow_paths: Vec<_> = (0..4)
+            .map(|index| {
+                let workflow_path = dir.path().join(format!("WORKFLOW-{index}.md"));
+                write_workflow(&workflow_path, &format!("work-{index}"));
+                workflow_path
+            })
+            .collect();
 
-        assert!(command_mentions_workflow(
-            "vik /tmp/vik/WORKFLOW.md --port 3000",
-            &workflow_path
+        let handles: Vec<_> = workflow_paths
+            .iter()
+            .cloned()
+            .map(|workflow_path| {
+                let paths = paths.clone();
+                thread::spawn(move || {
+                    register_workflow_in_registry(&paths, Some(workflow_path)).unwrap();
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let registry = read_registry(&paths.registry_path).unwrap();
+        let actual: Vec<_> = registry
+            .workflows
+            .iter()
+            .map(|workflow| workflow.workflow_path.clone())
+            .collect();
+        let mut expected: Vec<_> = workflow_paths
+            .iter()
+            .map(|workflow_path| fs::canonicalize(workflow_path).unwrap())
+            .collect();
+        expected.sort();
+        assert_eq!(actual, expected);
+    }
+
+    #[tokio::test]
+    async fn reconcile_registry_read_failure_is_non_fatal() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry_path = dir.path().join("service").join("workflows.json");
+        fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
+        fs::write(&registry_path, "{not-json").unwrap();
+        let runtimes: Arc<Mutex<BTreeMap<PathBuf, WorkflowRuntime>>> =
+            Arc::new(Mutex::new(BTreeMap::new()));
+
+        reconcile_registered_workflows(&registry_path, Arc::clone(&runtimes))
+            .await
+            .unwrap();
+
+        assert!(runtimes.lock().await.is_empty());
+    }
+
+    #[test]
+    fn uninstall_removes_service_state_and_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = ServicePaths::from_dir(dir.path().join("service"));
+        let target = ServiceTarget {
+            paths: paths.clone(),
+            port: None,
+            bind_address: None,
+        };
+        let state = service_state_with_port(None);
+        write_state(&paths.state_path, &state).unwrap();
+        write_registry(
+            &paths.registry_path,
+            &WorkflowRegistry {
+                version: 1,
+                workflows: vec![RegisteredWorkflow {
+                    workflow_path: dir.path().join("WORKFLOW.md"),
+                    cwd: dir.path().to_path_buf(),
+                    registered_at_unix: 1,
+                }],
+            },
+        )
+        .unwrap();
+
+        target.uninstall().unwrap();
+
+        assert!(!paths.state_path.exists());
+        assert!(!paths.registry_path.exists());
+    }
+
+    #[test]
+    fn command_match_requires_service_dir() {
+        let service_dir = PathBuf::from("/tmp/vik/.vik/service");
+
+        assert!(command_mentions_service_dir(
+            "vik daemon --service-dir /tmp/vik/.vik/service --port 3000",
+            &service_dir
         ));
-        assert!(!command_mentions_workflow(
-            "vik /tmp/other/WORKFLOW.md",
-            &workflow_path
+        assert!(!command_mentions_service_dir(
+            "vik daemon --service-dir /tmp/other/.vik/service",
+            &service_dir
         ));
+    }
+
+    #[test]
+    fn workflow_env_from_dir_reads_dotenv_without_mutating_process_env() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        let key = unique_env_key("ISOLATED");
+        fs::write(dir.path().join(".env"), format!("{key}=from_dotenv\n")).unwrap();
+
+        let env_map = workflow_env_from_dir(&nested).unwrap();
+
+        assert_eq!(env_map.get(&key).map(String::as_str), Some("from_dotenv"));
+        assert!(env::var(key).is_err());
     }
 
     #[test]
@@ -849,8 +1411,9 @@ mod tests {
     #[test]
     fn stopped_state_classifies_as_stopped_without_pid_probe() {
         let state = ServiceState {
-            version: 1,
-            workflow_path: PathBuf::from("/tmp/vik/WORKFLOW.md"),
+            version: 2,
+            service_dir: PathBuf::from("/tmp/vik/.vik/service"),
+            registry_path: PathBuf::from("/tmp/vik/.vik/service/workflows.json"),
             cwd: PathBuf::from("/tmp/vik"),
             pid: Some(999_999),
             status: StoredStatus::Stopped,
@@ -858,6 +1421,7 @@ mod tests {
             stopped_at_unix: Some(2),
             log_path: PathBuf::from("/tmp/vik/service.log"),
             port: None,
+            bind_address: None,
             command: vec![],
         };
 
@@ -875,8 +1439,9 @@ mod tests {
 
     fn service_state_with_cwd(cwd: PathBuf, port: Option<u16>) -> ServiceState {
         ServiceState {
-            version: 1,
-            workflow_path: PathBuf::from("/tmp/vik/WORKFLOW.md"),
+            version: 2,
+            service_dir: PathBuf::from("/tmp/vik/.vik/service"),
+            registry_path: PathBuf::from("/tmp/vik/.vik/service/workflows.json"),
             cwd,
             pid: None,
             status: StoredStatus::Stopped,
@@ -884,18 +1449,16 @@ mod tests {
             stopped_at_unix: Some(2),
             log_path: PathBuf::from("/tmp/vik/service.log"),
             port,
+            bind_address: None,
             command: vec![],
         }
     }
 
-    fn service_target_with_cwd(cwd: PathBuf) -> ServiceTarget {
+    fn service_target() -> ServiceTarget {
         ServiceTarget {
-            workflow_path: PathBuf::from("/tmp/vik/WORKFLOW.md"),
-            service_dir: PathBuf::from("/tmp/vik/.vik/service"),
-            state_path: PathBuf::from("/tmp/vik/.vik/service/state.json"),
-            log_path: PathBuf::from("/tmp/vik/.vik/service/service.log"),
-            cwd,
+            paths: ServicePaths::from_dir(PathBuf::from("/tmp/vik/.vik/service")),
             port: None,
+            bind_address: None,
         }
     }
 

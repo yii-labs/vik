@@ -60,16 +60,18 @@ Validate config parsing after connections are configured:
 vik check ./WORKFLOW.md
 ```
 
-Start the daemon:
+Register the workflow with the local service. This starts the service when it
+is not already running:
 
 ```sh
-vik start ./WORKFLOW.md
+vik work --workflow ./WORKFLOW.md
 ```
 
-Start with the optional observation server:
+Start the service with the optional observation server:
 
 ```sh
-vik start ./WORKFLOW.md --port 3000
+vik service start --port 3000
+vik work --workflow ./WORKFLOW.md
 ```
 
 ## 3. Connections
@@ -229,10 +231,11 @@ Steps:
    vik check ./WORKFLOW.md
    ```
 
-2. Start Vik:
+2. Start Vik and register the workflow:
 
    ```sh
-   vik start ./WORKFLOW.md --port 3000
+   vik service start --port 3000
+   vik work --workflow ./WORKFLOW.md
    ```
 
 3. Inspect state:
@@ -241,7 +244,11 @@ Steps:
    curl -fsS http://127.0.0.1:3000/api/v1/state | jq .
    ```
 
-4. Stop with `Ctrl-C` for foreground runs.
+4. Stop the detached service when the run is complete:
+
+   ```sh
+   vik service stop
+   ```
 
 ## 5. Related Docs
 

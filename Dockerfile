@@ -14,6 +14,7 @@ ARG CODEX_PACKAGE=@openai/codex@0.128.0
 
 ENV HOME=/home/vik \
     VIK_WORKFLOW_PATH=/vik-workspace/WORKFLOW.md \
+    VIK_SERVICE_DIR=/vik-workspace/.vik/service \
     CODEX_HOME=/home/vik/.codex \
     GH_CONFIG_DIR=/home/vik/.config/gh \
     GH_PROMPT_DISABLED=1 \

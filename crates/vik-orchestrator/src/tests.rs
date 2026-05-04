@@ -52,6 +52,7 @@ fn config() -> ServiceConfig {
             ..CodexConfig::default()
         },
         server: None,
+        runtime_env: HashMap::new(),
     }
 }
 

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -6,11 +7,12 @@ use std::time::SystemTime;
 use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::watch;
 
-use crate::{LoadedWorkflow, WorkflowError, load_effective_workflow};
+use crate::{LoadedWorkflow, WorkflowError, load_effective_workflow_with_env};
 
 #[derive(Debug)]
 pub struct WorkflowReloader {
     workflow_path: PathBuf,
+    env: HashMap<String, String>,
     last_good: LoadedWorkflow,
     last_modified: Option<SystemTime>,
     change_rx: watch::Receiver<()>,
@@ -19,7 +21,14 @@ pub struct WorkflowReloader {
 
 impl WorkflowReloader {
     pub fn start(explicit: Option<PathBuf>) -> Result<Self, WorkflowError> {
-        let last_good = load_effective_workflow(explicit)?;
+        Self::start_with_env(explicit, std::env::vars().collect())
+    }
+
+    pub fn start_with_env(
+        explicit: Option<PathBuf>,
+        env: HashMap<String, String>,
+    ) -> Result<Self, WorkflowError> {
+        let last_good = load_effective_workflow_with_env(explicit, &env)?;
         let workflow_path = last_good.definition.path.clone();
         let last_modified = last_good.modified_at;
         let (change_tx, change_rx) = watch::channel(());
@@ -35,6 +44,7 @@ impl WorkflowReloader {
         });
         Ok(Self {
             workflow_path,
+            env,
             last_good,
             last_modified,
             change_rx,
@@ -58,7 +68,7 @@ impl WorkflowReloader {
         if !changed_by_watch && !changed_by_mtime {
             return Ok(false);
         }
-        match load_effective_workflow(Some(self.workflow_path.clone())) {
+        match load_effective_workflow_with_env(Some(self.workflow_path.clone()), &self.env) {
             Ok(loaded) => {
                 self.last_modified = loaded.modified_at;
                 self.last_good = loaded;

@@ -8,11 +8,14 @@ rust-version.workspace = true
 
 [dependencies]
 async-trait = "0.1.89"
+chrono = "0.4.44"
 clap = { version = "4.6.1", features = ["derive", "env"] }
 dotenvy = "0.15.7"
+fs2 = "0.4.3"
 libc = "0.2.186"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
+tempfile = "3.23.0"
 vik-agent = { version = "0.1.0", path = "../vik-agent" }
 vik-core = { version = "0.1.0", path = "../vik-core" }
 vik-http = { version = "0.1.0", path = "../vik-http" }
@@ -32,7 +35,3 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 [[bin]]
 name = "vik"
 path = "src/main.rs"
-
-[dev-dependencies]
-chrono = "0.4.44"
-tempfile = "3.23.0"

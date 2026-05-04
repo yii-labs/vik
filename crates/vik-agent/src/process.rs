@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
@@ -63,10 +64,12 @@ impl JsonlRpcProcess {
         command: &ProcessCommand,
         cwd: &Path,
         tools: DynamicTools,
+        env: &HashMap<String, String>,
     ) -> Result<Self, AgentError> {
         let mut process = Command::new(command.program());
         process
             .args(command.args())
+            .envs(env)
             .current_dir(cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

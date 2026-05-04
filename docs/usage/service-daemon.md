@@ -4,18 +4,23 @@ Use service commands when Vik should keep running after the terminal exits.
 This is a local detached process manager, not a system-wide launchd or systemd
 unit.
 
-## Install And Start
+## Start And Register
 
 Run from the directory that contains `WORKFLOW.md`:
 
 ```sh
-vik service install --port 3000
+vik service start --port 3000
 ```
 
-Use an explicit workflow path when managing another workflow:
+`service start` starts one local Vik service center. When the current directory
+contains `WORKFLOW.md`, it also registers that workflow for convenience.
+When you plan to register a different workflow path with `vik work --workflow`,
+start the service from a directory that does not contain `WORKFLOW.md`.
+
+Register another workflow with an explicit path:
 
 ```sh
-vik service install /path/to/WORKFLOW.md --port 3000
+vik work --workflow /path/to/WORKFLOW.md
 ```
 
 ## Status
@@ -29,20 +34,20 @@ Status values:
 - `running`: stored pid is alive.
 - `stopped`: service was stopped cleanly.
 - `stale`: state exists but the pid is no longer alive.
-- `not installed`: no service state file exists for this workflow.
+- `not installed`: no service state file exists.
+
+Status output also lists registered workflow paths.
 
 ## Logs
 
 Service stdout and stderr are written to:
 
 ```text
-<workflow-directory>/.vik/service/<workflow-stem>-<path-hash>.log
+<service-dir>/service.log
 ```
 
-The service state file uses the same name with `.json`. The CLI derives the
-name from the sanitized workflow file stem plus a stable hash of the full
-workflow path. Use `service status` or `service logs` when possible; both
-commands resolve the exact file path for the workflow.
+The default service directory is `$HOME/.vik/service`. Set `VIK_SERVICE_DIR`
+to place service state somewhere else, for example in a test workspace.
 
 Read recent logs:
 
@@ -56,7 +61,7 @@ Follow logs:
 vik service logs --follow
 ```
 
-Daemon JSON logs still use `logging.dir` from `WORKFLOW.md`.
+Daemon JSON logs are also written under `<service-dir>/logs/`.
 
 ## Restart And Stop
 
@@ -73,8 +78,9 @@ vik service uninstall
 
 ## Environment
 
-Service startup loads `.env` from the workflow working directory before config
-dispatch validation. Existing shell environment values win over `.env` values.
+Workflow registration loads `.env` from the workflow working directory before
+config dispatch validation. Existing shell environment values win over `.env`
+values.
 
 Required credentials:
 
@@ -87,8 +93,9 @@ Required credentials:
 Service state lives under:
 
 ```text
-<workflow-directory>/.vik/service/
+${VIK_SERVICE_DIR:-$HOME/.vik/service}/
 ```
 
-The state JSON records workflow path, cwd, pid, log path, port, and command.
+`service.json` records the service pid, cwd, log path, port, and command.
+`workflows.json` records every registered workflow path and working directory.
 Delete state only after confirming no matching Vik process is alive.

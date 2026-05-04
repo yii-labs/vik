@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::env;
 use std::path::{Path, PathBuf};
 
 use serde_yaml::{Mapping, Value as YamlValue};
@@ -74,28 +73,35 @@ pub(crate) fn concurrency_map(map: Option<&Mapping>, key: &str) -> HashMap<Strin
         .unwrap_or_default()
 }
 
-pub(crate) fn resolve_exact_env(raw: String) -> Result<String, WorkflowError> {
+pub(crate) fn resolve_exact_env_from(
+    raw: String,
+    env_map: &HashMap<String, String>,
+) -> Result<String, WorkflowError> {
     if let Some(var) = raw.strip_prefix('$') {
         if var.is_empty() || var.contains('/') || var.contains(' ') {
             return Ok(raw);
         }
-        Ok(env::var(var).unwrap_or_default())
+        Ok(env_map.get(var).cloned().unwrap_or_default())
     } else {
         Ok(raw)
     }
 }
 
-pub(crate) fn expand_path_value(raw: &str, base: &Path) -> Result<PathBuf, WorkflowError> {
+pub(crate) fn expand_path_value_from(
+    raw: &str,
+    base: &Path,
+    env_map: &HashMap<String, String>,
+) -> Result<PathBuf, WorkflowError> {
     let mut value = raw.to_string();
     if let Some(var) = value.strip_prefix('$')
         && !var.is_empty()
         && !var.contains('/')
         && !var.contains(' ')
     {
-        value = env::var(var).unwrap_or_default();
+        value = env_map.get(var).cloned().unwrap_or_default();
     }
     if let Some(rest) = value.strip_prefix("~/")
-        && let Some(home) = env::var_os("HOME")
+        && let Some(home) = env_map.get("HOME")
     {
         value = PathBuf::from(home).join(rest).to_string_lossy().to_string();
     }

@@ -17,25 +17,25 @@ pub(crate) struct Args {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Start Vik coding-agent orchestration.
-    Start(crate::start::StartArgs),
+    /// Register a workflow with the local Vik service.
+    Work(crate::work::WorkArgs),
     /// Validate workflow and exit.
     Check(crate::check::CheckArgs),
     /// Manage Vik as a detached local service.
     Service(crate::service::ServiceArgs),
+    #[command(hide = true)]
+    Daemon(crate::service::DaemonArgs),
 }
 
 pub(crate) async fn run(args: Args) -> Result<(), Box<dyn Error>> {
     match args.command {
-        Command::Start(args) => {
-            crate::env::load_dotenv()?;
-            crate::start::run(args).await
-        }
+        Command::Work(args) => crate::work::run(args),
         Command::Check(args) => {
             crate::env::load_dotenv()?;
             crate::check::run(args.workflow)
         }
         Command::Service(args) => crate::service::run(args).await,
+        Command::Daemon(args) => crate::service::run_daemon(args).await,
     }
 }
 
@@ -81,18 +81,33 @@ mod tests {
     fn root_help_shows_check_command_not_legacy_flag() {
         let help = Args::command().render_help().to_string();
 
-        assert!(help.contains("start"));
+        assert!(help.contains("work"));
         assert!(help.contains("check"));
-        assert!(help.contains("Start Vik coding-agent orchestration"));
+        assert!(help.contains("Register a workflow with the local Vik service"));
         assert!(help.contains("Validate workflow and exit"));
+        assert!(!help.contains("start"));
+        assert!(!help.contains("daemon"));
         assert!(!help.contains("--check"));
     }
 
     #[test]
-    fn start_command_accepts_workflow_and_daemon_flags() {
+    fn work_command_accepts_workflow_option() {
+        let args = Args::try_parse_from(["vik", "work", "--workflow", "WORKFLOW.md"]).unwrap();
+
+        match args.command {
+            Command::Work(args) => {
+                assert_eq!(args.workflow, Some(PathBuf::from("WORKFLOW.md")));
+            }
+            other => panic!("expected work command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn daemon_command_accepts_workflow_and_status_flags() {
         let args = Args::try_parse_from([
             "vik",
-            "start",
+            "daemon",
+            "--workflow",
             "WORKFLOW.md",
             "--port",
             "3000",
@@ -102,12 +117,12 @@ mod tests {
         .unwrap();
 
         match args.command {
-            Command::Start(args) => {
-                assert_eq!(args.workflow, Some(PathBuf::from("WORKFLOW.md")));
+            Command::Daemon(args) => {
+                assert_eq!(args.workflows, vec![PathBuf::from("WORKFLOW.md")]);
                 assert_eq!(args.port, Some(3000));
                 assert_eq!(args.bind_address, Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED)));
             }
-            other => panic!("expected start command, got {other:?}"),
+            other => panic!("expected daemon command, got {other:?}"),
         }
     }
 
@@ -119,7 +134,7 @@ mod tests {
     }
 
     #[test]
-    fn daemon_flags_are_scoped_to_start_command() {
+    fn daemon_flags_are_scoped_to_daemon_command() {
         let err = Args::try_parse_from(["vik", "--port", "3000", "service", "status"])
             .unwrap_err()
             .kind();

@@ -48,7 +48,11 @@ perl -0pi -e "s|root: .*|root: ~/code/vik-workspaces-local|" \
   .tests/WORKFLOW.local.md
 LINEAR_API_KEY=ci-placeholder cargo run --locked -p vik-cli -- \
   check .tests/WORKFLOW.local.md
-cargo run --locked -p vik-cli -- start .tests/WORKFLOW.local.md --port 3000
+service_dir="$PWD/.tests/service"
+(cd .tests && VIK_SERVICE_DIR="$service_dir" cargo run \
+  --manifest-path ../Cargo.toml --locked -p vik-cli -- service start --port 3000)
+VIK_SERVICE_DIR="$service_dir" cargo run --locked -p vik-cli -- \
+  work --workflow .tests/WORKFLOW.local.md
 ```
 
 Inspect:

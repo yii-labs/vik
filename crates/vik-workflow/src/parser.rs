@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -76,11 +77,18 @@ pub fn parse_workflow_content(
 }
 
 pub fn load_effective_workflow(explicit: Option<PathBuf>) -> Result<LoadedWorkflow, WorkflowError> {
+    load_effective_workflow_with_env(explicit, &std::env::vars().collect())
+}
+
+pub fn load_effective_workflow_with_env(
+    explicit: Option<PathBuf>,
+    env_map: &HashMap<String, String>,
+) -> Result<LoadedWorkflow, WorkflowError> {
     let definition = load_workflow(explicit)?;
     let modified_at = fs::metadata(&definition.path)
         .ok()
         .and_then(|metadata| metadata.modified().ok());
-    let config = ServiceConfig::from_definition(&definition)?;
+    let config = ServiceConfig::from_definition_with_env(&definition, env_map)?;
     Ok(LoadedWorkflow {
         definition,
         config,

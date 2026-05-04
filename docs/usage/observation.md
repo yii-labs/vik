@@ -4,7 +4,7 @@ Vik exposes runtime state through JSON logs and an optional HTTP server.
 
 ## Vik Logs
 
-Foreground runs write JSON logs to stdout and to `logging.dir`.
+The service daemon writes JSON logs to stdout and to its service log directory.
 
 Default log directory:
 
@@ -15,7 +15,7 @@ Default log directory:
 Service runs also write detached stdout and stderr to:
 
 ```text
-<workflow-directory>/.vik/service/<workflow-stem>-<path-hash>.log
+${VIK_SERVICE_DIR:-$HOME/.vik/service}/service.log
 ```
 
 Useful commands:
@@ -31,18 +31,20 @@ the checked-in `WORKFLOW.md`.
 
 ## HTTP Server
 
-Start the daemon with HTTP observation:
+Start the service with HTTP observation:
 
 ```sh
-vik start ./WORKFLOW.md --port 3000
+vik service start --port 3000
+vik work --workflow ./WORKFLOW.md
 ```
 
 Bind to another interface when needed:
 
 ```sh
-vik start ./WORKFLOW.md \
+vik service start \
   --bind-address 0.0.0.0 \
   --port 3000
+vik work --workflow ./WORKFLOW.md
 ```
 
 Endpoints:

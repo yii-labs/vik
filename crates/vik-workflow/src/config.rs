@@ -7,8 +7,8 @@ use vik_core::WorkflowDefinition;
 
 use crate::WorkflowError;
 use crate::yaml::{
-    concurrency_map, expand_path_value, get_map, i64_value, json_value, nested_map,
-    resolve_exact_env, string_value, string_vec, u32_value, u64_value, usize_value,
+    concurrency_map, expand_path_value_from, get_map, i64_value, json_value, nested_map,
+    resolve_exact_env_from, string_value, string_vec, u32_value, u64_value, usize_value,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -172,10 +172,19 @@ pub struct ServiceConfig {
     pub agent: AgentConfig,
     pub codex: CodexConfig,
     pub server: Option<ServerConfig>,
+    #[serde(skip)]
+    pub runtime_env: HashMap<String, String>,
 }
 
 impl ServiceConfig {
     pub fn from_definition(definition: &WorkflowDefinition) -> Result<Self, WorkflowError> {
+        Self::from_definition_with_env(definition, &env::vars().collect())
+    }
+
+    pub fn from_definition_with_env(
+        definition: &WorkflowDefinition,
+        env_map: &HashMap<String, String>,
+    ) -> Result<Self, WorkflowError> {
         let workflow_dir = definition
             .path
             .parent()
@@ -199,8 +208,8 @@ impl ServiceConfig {
             }
         });
         let api_key = string_value(tracker_map, "api_key")
-            .or_else(|| env::var("LINEAR_API_KEY").ok())
-            .map(resolve_exact_env)
+            .or_else(|| env_map.get("LINEAR_API_KEY").cloned())
+            .map(|raw| resolve_exact_env_from(raw, env_map))
             .transpose()?
             .unwrap_or_default();
         let project_slug = string_value(tracker_map, "project_slug").unwrap_or_default();
@@ -222,11 +231,11 @@ impl ServiceConfig {
         };
 
         let workspace_root = string_value(workspace_map, "root")
-            .map(|raw| expand_path_value(&raw, &workflow_dir))
+            .map(|raw| expand_path_value_from(&raw, &workflow_dir, env_map))
             .transpose()?
             .unwrap_or_else(|| env::temp_dir().join("vik_workspaces"));
         let logging_dir = string_value(logging_map, "dir")
-            .map(|raw| expand_path_value(&raw, &workflow_dir))
+            .map(|raw| expand_path_value_from(&raw, &workflow_dir, env_map))
             .transpose()?
             .unwrap_or_else(|| workspace_root.join(".vik").join("logs"));
 
@@ -299,6 +308,7 @@ impl ServiceConfig {
             },
             codex,
             server,
+            runtime_env: env_map.clone(),
         })
     }
 
