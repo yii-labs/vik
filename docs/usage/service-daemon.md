@@ -105,9 +105,9 @@ management commands check the legacy default state path when the configured
 state file does not exist. A later `service restart` writes the new service
 state under the configured directory.
 
-Service management reads `logging.service_dir` before full dispatch validation,
-so `status`, `logs`, and `stop` can still find configured state when unrelated
-workflow fields are invalid.
+Service management loads `.env` before reading `logging.service_dir` and before
+full dispatch validation, so `status`, `logs`, and `stop` can still find
+configured state when unrelated workflow fields are invalid.
 
 The state JSON records workflow path, cwd, pid, log path, port, and command.
 Delete state only after confirming no matching Vik process is alive.

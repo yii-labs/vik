@@ -85,6 +85,8 @@ impl ServiceTarget {
     ) -> Result<Self, Box<dyn Error>> {
         let explicit_workflow = workflow.is_some();
         let workflow_path = resolve_workflow_path(workflow)?;
+        let cwd = service_cwd_for_workflow(&workflow_path, explicit_workflow)?;
+        load_dotenv_from_dir(&cwd)?;
         if require_dispatch_config {
             let loaded = load_effective_workflow(Some(workflow_path))?;
             loaded.config.validate_for_dispatch()?;
@@ -92,23 +94,22 @@ impl ServiceTarget {
             return Self::from_workflow_path(
                 workflow_path,
                 loaded.config.logging.service_dir,
-                explicit_workflow,
+                cwd,
                 port,
             );
         }
 
         let service_dir = configured_service_dir(&workflow_path)
             .unwrap_or_else(|| service_dir_for_workflow(&workflow_path));
-        Self::from_workflow_path(workflow_path, service_dir, explicit_workflow, port)
+        Self::from_workflow_path(workflow_path, service_dir, cwd, port)
     }
 
     fn from_workflow_path(
         workflow_path: PathBuf,
         service_dir: PathBuf,
-        explicit_workflow: bool,
+        cwd: PathBuf,
         port: Option<u16>,
     ) -> Result<Self, Box<dyn Error>> {
-        let cwd = service_cwd_for_workflow(&workflow_path, explicit_workflow)?;
         let name = service_name(&workflow_path);
         let default_service_dir = service_dir_for_workflow(&workflow_path);
         let legacy_state_path = (service_dir != default_service_dir)
@@ -929,6 +930,20 @@ mod tests {
             target.state_path.parent(),
             Some(target.service_dir.as_path())
         );
+    }
+
+    #[test]
+    fn service_dir_uses_dotenv_for_management_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflow_path = dir.path().join("WORKFLOW.md");
+        let key = unique_env_key("SERVICE_DIR");
+        write_workflow_with_logging_service_dir(&workflow_path, &format!("${key}"));
+        fs::write(dir.path().join(".env"), format!("{key}=service-logs\n")).unwrap();
+
+        let target = ServiceTarget::load(Some(workflow_path), None, false).unwrap();
+        let expected_dir = fs::canonicalize(dir.path()).unwrap().join("service-logs");
+
+        assert_eq!(target.service_dir, expected_dir);
     }
 
     #[test]
