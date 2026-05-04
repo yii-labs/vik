@@ -230,10 +230,8 @@ impl ServiceConfig {
             .map(|raw| expand_path_value(&raw, &workflow_dir))
             .transpose()?
             .unwrap_or_else(|| workspace_root.join(".vik").join("logs"));
-        let service_logging_dir = string_value(logging_map, "service_dir")
-            .map(|raw| expand_path_value(&raw, &workflow_dir))
-            .transpose()?
-            .unwrap_or_else(|| workflow_dir.join(".vik").join("service"));
+        let service_logging_dir = service_logging_dir_from_definition(definition)?
+            .unwrap_or_else(|| default_service_logging_dir(&workflow_dir));
 
         let hooks = HooksConfig {
             after_create: string_value(hooks_map, "after_create"),
@@ -357,4 +355,21 @@ impl ServiceConfig {
         }
         Ok(())
     }
+}
+pub fn service_logging_dir_from_definition(
+    definition: &WorkflowDefinition,
+) -> Result<Option<PathBuf>, WorkflowError> {
+    let workflow_dir = definition
+        .path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let logging_map = get_map(&definition.config, "logging");
+    string_value(logging_map, "service_dir")
+        .map(|raw| expand_path_value(&raw, &workflow_dir))
+        .transpose()
+}
+
+fn default_service_logging_dir(workflow_dir: &Path) -> PathBuf {
+    workflow_dir.join(".vik").join("service")
 }

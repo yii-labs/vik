@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use clap::{Args as ClapArgs, Subcommand};
 use serde::{Deserialize, Serialize};
-use vik_workflow::load_effective_workflow;
+use vik_workflow::{load_effective_workflow, load_workflow, service_logging_dir_from_definition};
 
 #[derive(Debug, ClapArgs)]
 pub(crate) struct ServiceArgs {
@@ -478,9 +478,13 @@ fn service_dir_for_workflow(workflow_path: &Path) -> PathBuf {
 }
 
 fn configured_service_dir(workflow_path: &Path) -> Option<PathBuf> {
-    load_effective_workflow(Some(workflow_path.to_path_buf()))
+    load_workflow(Some(workflow_path.to_path_buf()))
         .ok()
-        .map(|loaded| loaded.config.logging.service_dir)
+        .and_then(|definition| {
+            service_logging_dir_from_definition(&definition)
+                .ok()
+                .flatten()
+        })
 }
 
 fn service_name(workflow_path: &Path) -> String {
@@ -912,6 +916,22 @@ mod tests {
     }
 
     #[test]
+    fn service_dir_survives_unrelated_invalid_config_for_management_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflow_path = dir.path().join("WORKFLOW.md");
+        write_workflow_with_logging_service_dir_and_invalid_repo(&workflow_path, "service-logs");
+
+        let target = ServiceTarget::load(Some(workflow_path), None, false).unwrap();
+        let expected_dir = fs::canonicalize(dir.path()).unwrap().join("service-logs");
+
+        assert_eq!(target.service_dir, expected_dir);
+        assert_eq!(
+            target.state_path.parent(),
+            Some(target.service_dir.as_path())
+        );
+    }
+
+    #[test]
     fn management_target_does_not_parse_invalid_workflow() {
         let dir = tempfile::tempdir().unwrap();
         let workflow_path = dir.path().join("WORKFLOW.md");
@@ -1046,6 +1066,16 @@ mod tests {
             path,
             format!(
                 "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\nworkspace:\n  root: work\nlogging:\n  service_dir: {service_dir}\n---\nBody"
+            ),
+        )
+        .unwrap();
+    }
+
+    fn write_workflow_with_logging_service_dir_and_invalid_repo(path: &Path, service_dir: &str) {
+        fs::write(
+            path,
+            format!(
+                "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\nworkspace:\n  root: work\nlogging:\n  service_dir: {service_dir}\nrepo:\n  origin: git@github.com:yii-labs/vik.git\n  clone:\n    depth: 0\n---\nBody"
             ),
         )
         .unwrap();
