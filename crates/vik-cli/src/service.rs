@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::env;
 use std::error::Error;
 use std::fs::{self, File, OpenOptions};
@@ -14,6 +14,7 @@ use chrono::Utc;
 use clap::{Args as ClapArgs, Subcommand};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
+use serde_yaml::Value as YamlValue;
 use tempfile::NamedTempFile;
 use tokio::sync::{Mutex, mpsc};
 use tokio::time;
@@ -27,6 +28,20 @@ use vik_tracker::{
     DEFAULT_LINEAR_ENDPOINT, LinearClient, LinearClientConfig, LinearIssueFilterConfig,
 };
 use vik_workflow::{WorkflowReloader, load_effective_workflow_with_env};
+
+const REGISTRATION_ENV_KEYS: &[&str] = &[
+    "CODEX_HOME",
+    "GH_CONFIG_DIR",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "GIT_SSH_COMMAND",
+    "HOME",
+    "LINEAR_API_KEY",
+    "OPENAI_API_KEY",
+    "PATH",
+    "SSH_AUTH_SOCK",
+    "USERPROFILE",
+];
 
 #[derive(Debug, ClapArgs)]
 pub(crate) struct ServiceArgs {
@@ -352,6 +367,8 @@ struct ServiceState {
 struct RegisteredWorkflow {
     workflow_path: PathBuf,
     cwd: PathBuf,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    registration_env: HashMap<String, String>,
     registered_at_unix: u64,
 }
 
@@ -457,12 +474,21 @@ fn register_workflow_in_registry(
     paths: &ServicePaths,
     workflow: Option<PathBuf>,
 ) -> Result<(), Box<dyn Error>> {
+    register_workflow_in_registry_with_env(paths, workflow, env::vars().collect())
+}
+
+fn register_workflow_in_registry_with_env(
+    paths: &ServicePaths,
+    workflow: Option<PathBuf>,
+    process_env: HashMap<String, String>,
+) -> Result<(), Box<dyn Error>> {
     let explicit_workflow = workflow.is_some();
     let management_path = resolve_workflow_path(workflow)?;
     let cwd = service_cwd_for_workflow(&management_path, explicit_workflow)?;
-    let runtime_env = workflow_env_from_dir(&cwd)?;
+    let runtime_env = workflow_env_from_dir_with_process_env(&cwd, process_env.clone())?;
     let loaded = load_effective_workflow_with_env(Some(management_path), &runtime_env)?;
     loaded.config.validate_for_dispatch()?;
+    let registration_env = capture_registration_env(&loaded.definition.config, &process_env);
     let workflow_path = fs::canonicalize(&loaded.definition.path)?;
     let cwd = if explicit_workflow {
         workflow_path
@@ -478,6 +504,7 @@ fn register_workflow_in_registry(
     let workflow_record = RegisteredWorkflow {
         workflow_path: workflow_path.clone(),
         cwd,
+        registration_env,
         registered_at_unix: now_unix(),
     };
     let already_registered = if let Some(existing) = registry
@@ -485,8 +512,7 @@ fn register_workflow_in_registry(
         .iter_mut()
         .find(|entry| entry.workflow_path == workflow_path)
     {
-        existing.cwd = workflow_record.cwd;
-        existing.registered_at_unix = workflow_record.registered_at_unix;
+        *existing = workflow_record;
         true
     } else {
         registry.workflows.push(workflow_record);
@@ -543,7 +569,13 @@ fn load_dotenv_from_dir(dir: &Path) -> Result<(), Box<dyn Error>> {
 }
 
 fn workflow_env_from_dir(dir: &Path) -> Result<HashMap<String, String>, Box<dyn Error>> {
-    let mut env_map: HashMap<String, String> = env::vars().collect();
+    workflow_env_from_dir_with_process_env(dir, env::vars().collect())
+}
+
+fn workflow_env_from_dir_with_process_env(
+    dir: &Path,
+    mut env_map: HashMap<String, String>,
+) -> Result<HashMap<String, String>, Box<dyn Error>> {
     for ancestor in dir.ancestors() {
         let path = ancestor.join(".env");
         match dotenvy::from_path_iter(&path) {
@@ -663,7 +695,7 @@ async fn reconcile_registered_workflows(
 fn start_workflow_runtime(
     workflow: &RegisteredWorkflow,
 ) -> Result<WorkflowRuntime, Box<dyn Error>> {
-    let runtime_env = workflow_env_from_dir(&workflow.cwd)?;
+    let runtime_env = workflow_runtime_env(workflow)?;
     let reloader =
         WorkflowReloader::start_with_env(Some(workflow.workflow_path.clone()), runtime_env)?;
     let loaded = reloader.current().clone();
@@ -704,6 +736,68 @@ fn start_workflow_runtime(
         task,
         server_port,
     })
+}
+
+fn workflow_runtime_env(
+    workflow: &RegisteredWorkflow,
+) -> Result<HashMap<String, String>, Box<dyn Error>> {
+    let mut runtime_env = workflow_env_from_dir(&workflow.cwd)?;
+    for (key, value) in &workflow.registration_env {
+        runtime_env.insert(key.clone(), value.clone());
+    }
+    Ok(runtime_env)
+}
+
+fn capture_registration_env(
+    config: &serde_yaml::Mapping,
+    process_env: &HashMap<String, String>,
+) -> HashMap<String, String> {
+    let mut keys: BTreeSet<String> = REGISTRATION_ENV_KEYS
+        .iter()
+        .map(|key| (*key).to_string())
+        .collect();
+    collect_config_env_refs_from_mapping(config, &mut keys);
+    keys.into_iter()
+        .filter_map(|key| process_env.get(&key).map(|value| (key, value.clone())))
+        .collect()
+}
+
+fn collect_config_env_refs_from_mapping(
+    mapping: &serde_yaml::Mapping,
+    keys: &mut BTreeSet<String>,
+) {
+    for value in mapping.values() {
+        collect_config_env_refs_from_value(value, keys);
+    }
+}
+
+fn collect_config_env_refs_from_value(value: &YamlValue, keys: &mut BTreeSet<String>) {
+    match value {
+        YamlValue::String(raw) => {
+            if let Some(var) = exact_env_ref(raw) {
+                keys.insert(var.to_string());
+            }
+            if raw.starts_with("~/") {
+                keys.insert("HOME".to_string());
+            }
+        }
+        YamlValue::Sequence(values) => {
+            for value in values {
+                collect_config_env_refs_from_value(value, keys);
+            }
+        }
+        YamlValue::Mapping(mapping) => collect_config_env_refs_from_mapping(mapping, keys),
+        _ => {}
+    }
+}
+
+fn exact_env_ref(raw: &str) -> Option<&str> {
+    let var = raw.strip_prefix('$')?;
+    if var.is_empty() || var.contains('/') || var.contains(' ') {
+        None
+    } else {
+        Some(var)
+    }
 }
 
 async fn reap_finished_workflows(runtimes: Arc<Mutex<BTreeMap<PathBuf, WorkflowRuntime>>>) {
@@ -1281,6 +1375,43 @@ mod tests {
     }
 
     #[test]
+    fn registered_workflow_persists_runtime_env_for_daemon() {
+        let dir = tempfile::tempdir().unwrap();
+        let service_dir = dir.path().join("service");
+        let workflow_path = dir.path().join("WORKFLOW.md");
+        let env_key = unique_env_key("REGISTRATION");
+        write_workflow_with_api_key(&workflow_path, "work", &format!("${env_key}"));
+        let paths = ServicePaths::from_dir(service_dir);
+        let registration_env = HashMap::from([
+            (env_key.clone(), "from_registration".to_string()),
+            ("UNRELATED_SECRET".to_string(), "do-not-persist".to_string()),
+        ]);
+
+        register_workflow_in_registry_with_env(
+            &paths,
+            Some(workflow_path.clone()),
+            registration_env,
+        )
+        .unwrap();
+        fs::write(dir.path().join(".env"), format!("{env_key}=from_dotenv\n")).unwrap();
+
+        let registry = read_registry(&paths.registry_path).unwrap();
+        let workflow = &registry.workflows[0];
+        assert_eq!(
+            workflow.registration_env.get(&env_key).map(String::as_str),
+            Some("from_registration")
+        );
+        assert!(!workflow.registration_env.contains_key("UNRELATED_SECRET"));
+        let runtime_env = workflow_runtime_env(workflow).unwrap();
+        assert_eq!(
+            runtime_env.get(&env_key).map(String::as_str),
+            Some("from_registration")
+        );
+        let loaded = load_effective_workflow_with_env(Some(workflow_path), &runtime_env).unwrap();
+        assert_eq!(loaded.config.tracker.api_key, "from_registration");
+    }
+
+    #[test]
     fn concurrent_workflow_registration_keeps_all_entries() {
         let dir = tempfile::tempdir().unwrap();
         let paths = ServicePaths::from_dir(dir.path().join("service"));
@@ -1355,6 +1486,7 @@ mod tests {
                 workflows: vec![RegisteredWorkflow {
                     workflow_path: dir.path().join("WORKFLOW.md"),
                     cwd: dir.path().to_path_buf(),
+                    registration_env: HashMap::new(),
                     registered_at_unix: 1,
                 }],
             },
@@ -1463,10 +1595,14 @@ mod tests {
     }
 
     fn write_workflow(path: &Path, workspace_root: &str) {
+        write_workflow_with_api_key(path, workspace_root, "token");
+    }
+
+    fn write_workflow_with_api_key(path: &Path, workspace_root: &str, api_key: &str) {
         fs::write(
             path,
             format!(
-                "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\nworkspace:\n  root: {workspace_root}\n---\nBody"
+                "---\ntracker:\n  kind: linear\n  api_key: {api_key}\n  project_slug: proj\nworkspace:\n  root: {workspace_root}\n---\nBody"
             ),
         )
         .unwrap();

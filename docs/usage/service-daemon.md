@@ -80,7 +80,16 @@ vik service uninstall
 
 Workflow registration loads `.env` from the workflow working directory before
 config dispatch validation. Existing shell environment values win over `.env`
-values.
+values. The service registry stores selected registration-time environment
+values for each workflow so an already-running daemon can start that workflow
+with the same env-backed configuration used by `vik work`. Captured values
+include runtime credential variables and any `$VAR` references found in
+workflow config.
+
+Re-run `vik work --workflow <path>` after changing the shell environment or
+`.env` values that a workflow should use. Because captured environment values
+can include credentials, keep the service directory private and run
+`vik service uninstall` when the local service state should be removed.
 
 Required credentials:
 
@@ -97,5 +106,6 @@ ${VIK_SERVICE_DIR:-$HOME/.vik/service}/
 ```
 
 `service.json` records the service pid, cwd, log path, port, and command.
-`workflows.json` records every registered workflow path and working directory.
+`workflows.json` records every registered workflow path, working directory, and
+captured registration environment overlay.
 Delete state only after confirming no matching Vik process is alive.
