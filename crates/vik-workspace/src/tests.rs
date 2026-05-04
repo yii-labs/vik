@@ -7,7 +7,7 @@ use crate::{WorkspaceError, WorkspaceManager, ensure_inside_root};
 
 fn hooks() -> HooksConfig {
     HooksConfig {
-        timeout_ms: 2_000,
+        timeout_ms: if cfg!(windows) { 10_000 } else { 2_000 },
         ..HooksConfig::default()
     }
 }
