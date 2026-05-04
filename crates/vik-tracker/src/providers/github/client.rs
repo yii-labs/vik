@@ -193,12 +193,21 @@ impl GitHubClient {
         Ok(payload)
     }
 
-    async fn search_issues(&self, state_names: &[String]) -> Result<Vec<Issue>, TrackerError> {
+    async fn search_issues(
+        &self,
+        state_names: &[String],
+        apply_filter: bool,
+    ) -> Result<Vec<Issue>, TrackerError> {
         let selectors = state_selectors(state_names);
         let mut issues = Vec::new();
         let mut seen = HashSet::new();
         for selector in selectors {
-            for query_text in self.search_queries(&selector) {
+            let queries = if apply_filter {
+                self.search_queries(&selector)
+            } else {
+                self.search_queries_for_selector(&selector, false)
+            };
+            for query_text in queries {
                 let mut page = 1_u64;
                 loop {
                     let payload = self
@@ -229,7 +238,9 @@ impl GitHubClient {
                             })?;
                     for item in items {
                         let issue = self.normalize_issue(item, state_names)?;
-                        if self.matches_filter(item, &issue) && seen.insert(issue.id.clone()) {
+                        if (!apply_filter || self.matches_filter(item, &issue))
+                            && seen.insert(issue.id.clone())
+                        {
                             issues.push(issue);
                         }
                     }
@@ -245,7 +256,15 @@ impl GitHubClient {
     }
 
     pub(crate) fn search_queries(&self, selector: &StateSelector) -> Vec<String> {
-        let assignees: Vec<Option<&str>> = if self.filter.assignees.is_empty() {
+        self.search_queries_for_selector(selector, true)
+    }
+
+    pub(crate) fn search_queries_for_selector(
+        &self,
+        selector: &StateSelector,
+        apply_filter: bool,
+    ) -> Vec<String> {
+        let assignees: Vec<Option<&str>> = if !apply_filter || self.filter.assignees.is_empty() {
             vec![None]
         } else {
             self.filter
@@ -254,7 +273,7 @@ impl GitHubClient {
                 .map(|assignee| Some(assignee.as_str()))
                 .collect()
         };
-        let tags: Vec<Option<&str>> = if self.filter.tags.is_empty() {
+        let tags: Vec<Option<&str>> = if !apply_filter || self.filter.tags.is_empty() {
             vec![None]
         } else {
             self.filter
@@ -369,6 +388,9 @@ impl GitHubClient {
                 .cloned()
                 .unwrap_or_else(|| "closed".to_string());
         }
+        if let Some(label_state) = matching_label_state(&self.terminal_states, labels) {
+            return label_state;
+        }
         if let Some(label_state) = matching_label_state(&states, labels) {
             return label_state;
         }
@@ -409,26 +431,45 @@ impl GitHubClient {
     async fn comments_for_issue(&self, issue_id: &str) -> Result<Vec<Value>, TrackerError> {
         let number = parse_issue_number(issue_id)?;
         let path = issue_comments_path(&self.repository.owner, &self.repository.name, number);
-        let payload = self
-            .request_json(Method::GET, &path, &[("per_page", "100".to_string())], None)
-            .await?;
-        payload.as_array().cloned().ok_or_else(|| {
-            TrackerError::GitHubUnknownPayload("comments was not an array".to_string())
-        })
+        let mut comments = Vec::new();
+        let mut page = 1_u64;
+        loop {
+            let payload = self
+                .request_json(
+                    Method::GET,
+                    &path,
+                    &[
+                        ("per_page", self.page_size.to_string()),
+                        ("page", page.to_string()),
+                    ],
+                    None,
+                )
+                .await?;
+            let items = payload.as_array().cloned().ok_or_else(|| {
+                TrackerError::GitHubUnknownPayload("comments was not an array".to_string())
+            })?;
+            let item_count = items.len();
+            comments.extend(items);
+            if item_count < self.page_size as usize {
+                break;
+            }
+            page += 1;
+        }
+        Ok(comments)
     }
 }
 
 #[async_trait]
 impl Tracker for GitHubClient {
     async fn fetch_candidates(&self) -> Result<Vec<Issue>, TrackerError> {
-        self.search_issues(&self.active_states).await
+        self.search_issues(&self.active_states, true).await
     }
 
     async fn fetch_by_states(&self, state_names: &[String]) -> Result<Vec<Issue>, TrackerError> {
         if state_names.is_empty() {
             return Ok(Vec::new());
         }
-        self.search_issues(state_names).await
+        self.search_issues(state_names, false).await
     }
 
     async fn fetch_states_by_ids(&self, issue_ids: &[String]) -> Result<Vec<Issue>, TrackerError> {
@@ -480,6 +521,8 @@ impl Tracker for GitHubClient {
                     remove_state_labels(&mut labels, &self.configured_state_label_names());
             } else if normalized == "open" {
                 body.insert("state".to_string(), json!("open"));
+                labels_changed |=
+                    remove_state_labels(&mut labels, &self.configured_state_label_names());
             } else {
                 body.insert("state".to_string(), json!("open"));
                 labels_changed |=

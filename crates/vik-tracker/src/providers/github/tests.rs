@@ -120,6 +120,34 @@ fn github_filter_or_semantics_use_separate_search_queries() {
 }
 
 #[test]
+fn state_scans_can_skip_github_candidate_filters() {
+    let client = GitHubClient::new(
+        GitHubClientConfig::new(
+            DEFAULT_GITHUB_ENDPOINT,
+            "gh_token",
+            "yii-labs/vik",
+            vec!["Todo".to_string()],
+            vec!["Duplicate".to_string()],
+        )
+        .with_filter(GitHubIssueFilterConfig::new(
+            vec!["forehalo".to_string()],
+            vec!["agent".to_string()],
+        )),
+    )
+    .unwrap();
+    let selector = state_selectors(&["Duplicate".to_string()])
+        .into_iter()
+        .next()
+        .unwrap();
+    let queries = client.search_queries_for_selector(&selector, false);
+
+    assert_eq!(queries.len(), 1);
+    assert!(queries[0].contains("label:\"Duplicate\""));
+    assert!(!queries[0].contains("assignee:"));
+    assert!(!queries[0].contains("label:\"agent\""));
+}
+
+#[test]
 fn state_selectors_map_github_state_aliases_and_label_states() {
     let selectors = state_selectors(&[
         "Todo".to_string(),
@@ -185,6 +213,36 @@ fn github_issue_state_prefers_configured_label_state() {
     assert_eq!(issue.identifier, "yii-labs-vik-42");
     assert_eq!(issue.state, "In Progress");
     assert_eq!(issue.labels, vec!["in progress"]);
+}
+
+#[test]
+fn github_issue_state_prefers_terminal_label_over_open_candidate_state() {
+    let client = GitHubClient::new(GitHubClientConfig::new(
+        DEFAULT_GITHUB_ENDPOINT,
+        "gh_token",
+        "yii-labs/vik",
+        vec!["open".to_string()],
+        vec!["Duplicate".to_string()],
+    ))
+    .unwrap();
+    let issue = client
+        .normalize_issue(
+            &json!({
+                "number": 42,
+                "title": "Work",
+                "body": "Body",
+                "state": "open",
+                "html_url": "https://github.com/yii-labs/vik/issues/42",
+                "labels": [{ "name": "Duplicate" }],
+                "assignees": [],
+                "created_at": "2026-05-04T00:00:00Z",
+                "updated_at": "2026-05-04T01:00:00Z"
+            }),
+            &["open".to_string()],
+        )
+        .unwrap();
+
+    assert_eq!(issue.state, "Duplicate");
 }
 
 #[tokio::test]
