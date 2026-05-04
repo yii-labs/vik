@@ -16,7 +16,7 @@ tracker:
 polling:
   interval_ms: 5000
 workspace:
-  root: ~/code/vik-workspaces
+  root: .
 hooks:
   after_create: |
     git clone --depth 1 git@github.com:yii-labs/vik .
