@@ -278,11 +278,15 @@ fn github_states(state_names: &[String]) -> Vec<String> {
 }
 
 pub(crate) fn github_issue_number(id: &str) -> Result<String, TrackerError> {
-    let candidate = id
-        .trim()
+    let raw = id.trim();
+    let after_hash = raw
         .rsplit_once('#')
         .map(|(_, number)| number)
-        .unwrap_or_else(|| id.trim().trim_start_matches('#'));
+        .unwrap_or_else(|| raw.trim_start_matches('#'));
+    let candidate = after_hash
+        .strip_prefix("GH-")
+        .or_else(|| after_hash.strip_prefix("gh-"))
+        .unwrap_or(after_hash);
     if candidate.parse::<u64>().is_ok() {
         Ok(candidate.to_string())
     } else {
@@ -292,10 +296,10 @@ pub(crate) fn github_issue_number(id: &str) -> Result<String, TrackerError> {
     }
 }
 
-pub(crate) fn normalize_github_issue(repository: &str, node: &GitHubIssueNode) -> Issue {
+pub(crate) fn normalize_github_issue(_repository: &str, node: &GitHubIssueNode) -> Issue {
     Issue {
         id: node.number.to_string(),
-        identifier: format!("{repository}#{}", node.number),
+        identifier: format!("GH-{}", node.number),
         title: node.title.clone(),
         description: node.body.clone(),
         priority: None,

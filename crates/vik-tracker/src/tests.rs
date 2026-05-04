@@ -165,7 +165,7 @@ fn normalizes_github_issue_shape() {
     let normalized = normalize_github_issue("yii-labs/vik", &issue);
 
     assert_eq!(normalized.id, "42");
-    assert_eq!(normalized.identifier, "yii-labs/vik#42");
+    assert_eq!(normalized.identifier, "GH-42");
     assert_eq!(normalized.state, "open");
     assert_eq!(normalized.labels, vec!["feature", "agent"]);
     assert!(normalized.blocked_by.is_empty());
@@ -176,5 +176,6 @@ fn github_issue_number_accepts_internal_and_display_ids() {
     assert_eq!(github_issue_number("42").unwrap(), "42");
     assert_eq!(github_issue_number("#42").unwrap(), "42");
     assert_eq!(github_issue_number("yii-labs/vik#42").unwrap(), "42");
+    assert_eq!(github_issue_number("GH-42").unwrap(), "42");
     assert!(github_issue_number("bad").is_err());
 }

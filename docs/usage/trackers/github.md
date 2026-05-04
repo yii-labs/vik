@@ -2,6 +2,8 @@
 
 Use the GitHub tracker when Vik should claim GitHub issues from one repository.
 Pull requests returned by the GitHub issues API are ignored.
+Vik renders GitHub issue identifiers as `GH-<number>` so observation routes
+such as `/api/v1/GH-42` stay path-safe.
 
 ## Configuration
 
