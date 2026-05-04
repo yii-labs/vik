@@ -116,7 +116,8 @@ where
             drop(state);
             if cleanup_workspace {
                 let manager =
-                    WorkspaceManager::new(config.workspace.root.clone(), config.hooks.clone());
+                    WorkspaceManager::new(config.workspace.root.clone(), config.hooks.clone())
+                        .with_env(config.runtime_env.clone());
                 if let Err(err) = manager.remove_for_issue(&identifier).await {
                     tracing::warn!(
                         issue_id=%issue_id,

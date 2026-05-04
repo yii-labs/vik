@@ -21,7 +21,8 @@ where
         match self.tracker.fetch_issues_by_states(&terminal_states).await {
             Ok(issues) => {
                 let manager =
-                    WorkspaceManager::new(loaded.config.workspace.root, loaded.config.hooks);
+                    WorkspaceManager::new(loaded.config.workspace.root, loaded.config.hooks)
+                        .with_env(loaded.config.runtime_env);
                 for issue in issues {
                     if let Err(err) = manager.remove_for_issue(&issue.identifier).await {
                         tracing::warn!(

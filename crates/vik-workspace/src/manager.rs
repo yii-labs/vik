@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -15,6 +16,7 @@ use crate::path::{absolute_existing_or_join, ensure_inside_root};
 pub struct WorkspaceManager {
     root: PathBuf,
     hooks: HooksConfig,
+    env: HashMap<String, String>,
 }
 
 impl WorkspaceManager {
@@ -22,7 +24,13 @@ impl WorkspaceManager {
         Self {
             root: root.into(),
             hooks,
+            env: HashMap::new(),
         }
+    }
+
+    pub fn with_env(mut self, env: HashMap<String, String>) -> Self {
+        self.env = env;
+        self
     }
 
     pub fn root(&self) -> &Path {
@@ -140,6 +148,7 @@ impl WorkspaceManager {
             .args(shell.args())
             .arg(shell.command())
             .current_dir(cwd)
+            .envs(&self.env)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

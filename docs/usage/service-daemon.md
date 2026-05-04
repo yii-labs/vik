@@ -62,6 +62,9 @@ vik service logs --follow
 ```
 
 Daemon JSON logs are also written under `<service-dir>/logs/`.
+When at least one workflow is registered before the daemon starts, the daemon
+uses the first registered workflow's configured `logging.dir` for JSON logs
+instead. Restart the service after changing a workflow log directory.
 
 ## Restart And Stop
 

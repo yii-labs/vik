@@ -484,8 +484,13 @@ pub(crate) async fn run_daemon(args: DaemonArgs) -> Result<(), Box<dyn Error>> {
         register_workflow_in_registry(&paths, Some(workflow))?;
     }
 
-    let _log_guard = init_logging(&paths.service_dir.join("logs"))?;
-    tracing::info!(service_dir=%paths.service_dir.display(), "service_daemon outcome=started");
+    let log_dir = daemon_log_dir(&paths);
+    let _log_guard = init_logging(&log_dir)?;
+    tracing::info!(
+        service_dir=%paths.service_dir.display(),
+        log_dir=%log_dir.display(),
+        "service_daemon outcome=started"
+    );
 
     run_workflow_center(paths, args.port, args.bind_address).await
 }
@@ -780,6 +785,24 @@ fn start_workflow_runtime(
         task,
         server_port,
     })
+}
+
+fn daemon_log_dir(paths: &ServicePaths) -> PathBuf {
+    let Ok(registry) = read_registry(&paths.registry_path) else {
+        return paths.service_dir.join("logs");
+    };
+    for workflow in registry.workflows {
+        let Ok(runtime_env) = workflow_runtime_env(&workflow) else {
+            continue;
+        };
+        let Ok(loaded) =
+            load_effective_workflow_with_env(Some(workflow.workflow_path.clone()), &runtime_env)
+        else {
+            continue;
+        };
+        return loaded.config.logging.dir;
+    }
+    paths.service_dir.join("logs")
 }
 
 fn workflow_runtime_env(
@@ -1610,6 +1633,30 @@ mod tests {
     }
 
     #[test]
+    fn daemon_log_dir_uses_registered_workflow_logging_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let service_dir = dir.path().join("service");
+        let workflow_path = dir.path().join("WORKFLOW.md");
+        write_workflow_with_logging_dir(&workflow_path, "work", "workflow-logs");
+        let paths = ServicePaths::from_dir(service_dir);
+
+        register_workflow_in_registry(&paths, Some(workflow_path)).unwrap();
+
+        assert_eq!(
+            daemon_log_dir(&paths),
+            fs::canonicalize(dir.path()).unwrap().join("workflow-logs")
+        );
+    }
+
+    #[test]
+    fn daemon_log_dir_falls_back_to_service_logs_without_registered_workflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = ServicePaths::from_dir(dir.path().join("service"));
+
+        assert_eq!(daemon_log_dir(&paths), paths.service_dir.join("logs"));
+    }
+
+    #[test]
     fn registered_workflow_persists_runtime_env_for_daemon() {
         let dir = tempfile::tempdir().unwrap();
         let service_dir = dir.path().join("service");
@@ -1986,6 +2033,16 @@ mod tests {
             path,
             format!(
                 "---\ntracker:\n  kind: linear\n  api_key: {api_key}\n  project_slug: proj\nworkspace:\n  root: {workspace_root}\n---\nBody"
+            ),
+        )
+        .unwrap();
+    }
+
+    fn write_workflow_with_logging_dir(path: &Path, workspace_root: &str, logging_dir: &str) {
+        fs::write(
+            path,
+            format!(
+                "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\nworkspace:\n  root: {workspace_root}\nlogging:\n  dir: {logging_dir}\n---\nBody"
             ),
         )
         .unwrap();

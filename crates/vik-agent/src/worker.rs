@@ -56,7 +56,8 @@ where
         let manager = WorkspaceManager::new(
             request.config.workspace.root.clone(),
             request.config.hooks.clone(),
-        );
+        )
+        .with_env(request.config.runtime_env.clone());
         let workspace = manager.create_for_issue(&request.issue.identifier).await?;
         manager.validate_agent_cwd(&workspace.path, &workspace.path)?;
         manager.before_run(&workspace.path).await?;

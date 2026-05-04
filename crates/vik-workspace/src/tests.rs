@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use tempfile::tempdir;
@@ -20,6 +21,17 @@ fn append_marker_command(marker: &Path) -> String {
     } else {
         let marker = marker.replace('\'', "'\\''");
         format!("printf 'run\\n' >> '{marker}'")
+    }
+}
+
+fn append_env_marker_command(marker: &Path, label: &str, key: &str) -> String {
+    let marker = marker.display().to_string();
+    if cfg!(windows) {
+        let marker = marker.replace('\'', "''");
+        format!("'{label}=' + $env:{key} | Out-File -FilePath '{marker}' -Append -Encoding utf8")
+    } else {
+        let marker = marker.replace('\'', "'\\''");
+        format!("printf '{label}=%s\\n' \"${key}\" >> '{marker}'")
     }
 }
 
@@ -63,6 +75,36 @@ async fn before_run_failure_aborts() {
             status: 7
         }
     ));
+}
+
+#[tokio::test]
+async fn hooks_receive_configured_environment() {
+    let dir = tempdir().unwrap();
+    let marker = dir.path().join("marker");
+    let key = "VIK_WORKSPACE_HOOK_ENV";
+    let mut config = hooks();
+    config.after_create = Some(append_env_marker_command(&marker, "after_create", key));
+    config.before_run = Some(append_env_marker_command(&marker, "before_run", key));
+    config.after_run = Some(append_env_marker_command(&marker, "after_run", key));
+    config.before_remove = Some(append_env_marker_command(&marker, "before_remove", key));
+    let manager = WorkspaceManager::new(dir.path().join("root"), config)
+        .with_env(HashMap::from([(key.to_string(), "hook-value".to_string())]));
+
+    let workspace = manager.create_for_issue("ABC-1").await.unwrap();
+    manager.before_run(&workspace.path).await.unwrap();
+    manager.after_run_best_effort(&workspace.path).await;
+    manager.remove_for_issue("ABC-1").await.unwrap();
+
+    let marker_text = tokio::fs::read_to_string(marker).await.unwrap();
+    assert_eq!(
+        marker_text.lines().collect::<Vec<_>>(),
+        [
+            "after_create=hook-value",
+            "before_run=hook-value",
+            "after_run=hook-value",
+            "before_remove=hook-value",
+        ]
+    );
 }
 
 #[test]
