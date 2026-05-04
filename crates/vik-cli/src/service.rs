@@ -394,11 +394,38 @@ pub(crate) async fn start(options: StartOptions, detached: bool) -> Result<(), B
         port,
         bind_address,
     } = options;
-    let target = ServiceTarget::load_for_dispatch(workflow, port)?;
     if detached {
+        let target = ServiceTarget::load_for_dispatch(workflow, port)?;
         target.start_detached("started")
     } else {
+        let target = ServiceTarget::load_for_foreground(workflow, port)?;
         target.start_foreground(bind_address).await
+    }
+}
+
+impl ServiceTarget {
+    fn load_for_foreground(
+        workflow: Option<PathBuf>,
+        port: Option<u16>,
+    ) -> Result<Self, Box<dyn Error>> {
+        let explicit_workflow = workflow.is_some();
+        let workflow_path = resolve_workflow_path(workflow)?;
+        let cwd = service_cwd_for_workflow(&workflow_path, explicit_workflow)?;
+        load_dotenv_from_dir(&cwd)?;
+
+        let loaded = load_effective_workflow(Some(workflow_path))?;
+        loaded.config.validate_for_dispatch()?;
+        let workflow_path = fs::canonicalize(&loaded.definition.path)?;
+        let service_dir = service_dir_for_workflow(&workflow_path);
+        let name = service_name(&workflow_path);
+        Ok(Self {
+            workflow_path,
+            service_dir: service_dir.clone(),
+            state_path: service_dir.join(format!("{name}.json")),
+            log_path: service_dir.join(format!("{name}.log")),
+            cwd,
+            port,
+        })
     }
 }
 
@@ -856,6 +883,26 @@ mod tests {
             first.service_dir,
             expected_root.join(".vik").join("service")
         );
+    }
+
+    #[test]
+    fn foreground_target_does_not_read_service_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflow_path = dir.path().join("WORKFLOW.md");
+        write_workflow(&workflow_path, "work");
+        let canonical_workflow = fs::canonicalize(&workflow_path).unwrap();
+        let service_dir = service_dir_for_workflow(&canonical_workflow);
+        fs::create_dir_all(&service_dir).unwrap();
+        fs::write(
+            service_dir.join(format!("{}.json", service_name(&canonical_workflow))),
+            "{",
+        )
+        .unwrap();
+
+        let target = ServiceTarget::load_for_foreground(Some(workflow_path), Some(3000)).unwrap();
+
+        assert_eq!(target.workflow_path, canonical_workflow);
+        assert_eq!(target.port, Some(3000));
     }
 
     #[test]
