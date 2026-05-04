@@ -237,7 +237,13 @@ impl ClaudeCodeClient {
             };
             let wait = remaining.min(heartbeat_interval());
             time::sleep(wait).await;
-            if remaining <= heartbeat_interval() {
+            if let Some(status) = child
+                .try_wait()
+                .map_err(|err| AgentError::ResponseError(err.to_string()))?
+            {
+                break status;
+            }
+            if remaining_time(deadline).is_none() {
                 let _ = child.kill().await;
                 return Err(AgentError::TurnTimeout);
             }
@@ -560,11 +566,36 @@ mod tests {
     use vik_workflow::ClaudeCodeConfig;
 
     use super::{
-        ClaudeUsageAccumulator, claude_code_spawn_command,
+        ClaudeCodeClient, ClaudeUsageAccumulator, claude_code_spawn_command,
         claude_code_spawn_process_command_for_platform, write_prompt_with_deadline,
     };
     use crate::agent::EventSink;
     use crate::error::AgentError;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn claude_code_accepts_success_after_stdout_eof_near_deadline() {
+        let workspace = tempfile::TempDir::new().unwrap();
+        let client = ClaudeCodeClient::new(ClaudeCodeConfig {
+            command: "sh -c 'exec 1>&-; cat >/dev/null; sleep 0.02; exit 0'".to_string(),
+            turn_timeout_ms: 100,
+            ..ClaudeCodeConfig::default()
+        });
+
+        let result = client
+            .run_request(crate::agent::CodingAgentRun {
+                workspace_path: workspace.path().to_path_buf(),
+                issue_id: "issue-id".to_string(),
+                issue_title: "VIK-37: multiple agents".to_string(),
+                prompt: "test prompt".to_string(),
+                max_turns: 1,
+                should_continue: Box::new(|| Box::pin(async { Ok(false) })),
+                on_event: Box::new(|_| {}),
+            })
+            .await;
+
+        assert!(result.is_ok(), "{result:?}");
+    }
 
     #[test]
     fn claude_code_spawn_command_adds_runtime_options() {
