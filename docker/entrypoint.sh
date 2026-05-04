@@ -53,6 +53,9 @@ elif [[ "$1" == "vik" && "${2:-}" == "start" && ( $# -eq 2 || "${3:-}" == -* ) ]
     shift 2
     set -- vik daemon --workflow "$VIK_WORKFLOW_PATH" "$@"
     uses_default_workflow=1
+elif [[ "$1" == "vik" && "${2:-}" == "start" ]]; then
+    shift 2
+    set -- vik daemon --workflow "$@"
 elif [[ "$1" == "vik" && "${2:-}" == "check" && $# -eq 2 ]]; then
     set -- vik check "$VIK_WORKFLOW_PATH"
     uses_default_workflow=1
