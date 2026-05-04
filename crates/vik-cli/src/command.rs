@@ -18,7 +18,7 @@ pub(crate) struct Args {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Start Vik coding-agent orchestration.
-    Start(crate::start::StartArgs),
+    Start(crate::service::StartArgs),
     /// Validate workflow and exit.
     Check(crate::check::CheckArgs),
     /// Manage Vik as a detached local service.
