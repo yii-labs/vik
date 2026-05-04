@@ -8,9 +8,11 @@ use crate::providers::Tracker;
 use super::{
     client::{
         DEFAULT_GITHUB_ENDPOINT, GitHubClient, GitHubClientConfig, GitHubIssueFilterConfig,
-        GitHubRepository, state_selectors, state_selectors_for_scan,
+        GitHubPullRequest, GitHubRepository, append_closing_reference,
+        body_contains_closing_reference, closing_reference, state_selectors,
+        state_selectors_for_scan,
     },
-    queries::SEARCH_ISSUES_PATH,
+    queries::{SEARCH_ISSUES_PATH, pull_path},
 };
 
 #[test]
@@ -51,6 +53,100 @@ fn issue_identifier_is_url_safe() {
     let repo = GitHubRepository::parse("Yii-Labs/vik.service").unwrap();
 
     assert_eq!(repo.issue_identifier(42), "yii-labs-vik.service-42");
+}
+
+#[test]
+fn pull_request_path_targets_pull_api() {
+    assert_eq!(
+        pull_path("yii-labs", "vik", 48),
+        "/repos/yii-labs/vik/pulls/48"
+    );
+}
+
+#[test]
+fn pull_request_url_parses_owner_repo_and_number() {
+    let pull_request =
+        GitHubPullRequest::parse_url("https://github.com/yii-labs/vik/pull/48").unwrap();
+
+    assert_eq!(
+        pull_request.repository,
+        GitHubRepository {
+            owner: "yii-labs".to_string(),
+            name: "vik".to_string(),
+        }
+    );
+    assert_eq!(pull_request.number, 48);
+}
+
+#[test]
+fn pull_request_url_rejects_non_pull_urls() {
+    assert!(matches!(
+        GitHubPullRequest::parse_url("https://github.com/yii-labs/vik/issues/48"),
+        Err(TrackerError::UnsupportedTrackerOperation(_))
+    ));
+}
+
+#[test]
+fn closing_reference_uses_full_issue_repository_reference() {
+    let repository = GitHubRepository::parse("yii-labs/vik").unwrap();
+
+    assert_eq!(closing_reference(&repository, 42), "Closes yii-labs/vik#42");
+}
+
+#[test]
+fn closing_reference_is_appended_to_pr_body() {
+    assert_eq!(
+        append_closing_reference("Existing body\n", "Closes yii-labs/vik#42"),
+        "Existing body\n\nCloses yii-labs/vik#42"
+    );
+    assert_eq!(
+        append_closing_reference("", "Closes yii-labs/vik#42"),
+        "Closes yii-labs/vik#42"
+    );
+}
+
+#[test]
+fn closing_reference_detection_handles_full_and_same_repo_refs() {
+    let issue_repository = GitHubRepository::parse("yii-labs/vik").unwrap();
+    let same_pull_repository = GitHubRepository::parse("yii-labs/vik").unwrap();
+    let fork_pull_repository = GitHubRepository::parse("forehalo/vik").unwrap();
+
+    assert!(body_contains_closing_reference(
+        "Fixes #42",
+        &issue_repository,
+        &same_pull_repository,
+        42
+    ));
+    assert!(body_contains_closing_reference(
+        "Resolves: yii-labs/vik#42",
+        &issue_repository,
+        &fork_pull_repository,
+        42
+    ));
+    assert!(!body_contains_closing_reference(
+        "Related #42",
+        &issue_repository,
+        &same_pull_repository,
+        42
+    ));
+    assert!(!body_contains_closing_reference(
+        "Fixes #420",
+        &issue_repository,
+        &same_pull_repository,
+        42
+    ));
+    assert!(!body_contains_closing_reference(
+        "discloses #42",
+        &issue_repository,
+        &same_pull_repository,
+        42
+    ));
+    assert!(!body_contains_closing_reference(
+        "Fixes #42",
+        &issue_repository,
+        &fork_pull_repository,
+        42
+    ));
 }
 
 #[test]

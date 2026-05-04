@@ -4,7 +4,7 @@ use std::path::Path;
 use async_trait::async_trait;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::{Map, Value, json};
-use vik_core::{Issue, IssueTracker, TrackerError};
+use vik_core::{Issue, TrackerError};
 
 use crate::providers::{IssueAttachment, IssueComment, IssueUpdate, Tracker};
 
@@ -584,27 +584,6 @@ impl Tracker for LinearClient {
 
     async fn link_pr(&self, issue_id: &str, title: &str, url: &str) -> Result<(), TrackerError> {
         self.attach_link_to_issue(issue_id, title, url).await
-    }
-}
-
-#[async_trait]
-impl IssueTracker for LinearClient {
-    async fn fetch_candidate_issues(&self) -> Result<Vec<Issue>, TrackerError> {
-        self.fetch_candidates().await
-    }
-
-    async fn fetch_issues_by_states(
-        &self,
-        state_names: &[String],
-    ) -> Result<Vec<Issue>, TrackerError> {
-        self.fetch_by_states(state_names).await
-    }
-
-    async fn fetch_issue_states_by_ids(
-        &self,
-        issue_ids: &[String],
-    ) -> Result<Vec<Issue>, TrackerError> {
-        self.fetch_states_by_ids(issue_ids).await
     }
 }
 

@@ -4,18 +4,21 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use reqwest::Method;
+use reqwest::{Method, Url};
 use serde_json::{Map, Value, json};
-use vik_core::{Issue, IssueTracker, TrackerError, normalize_state};
+use vik_core::{Issue, TrackerError, normalize_state};
 
 use crate::providers::{IssueAttachment, IssueComment, IssueUpdate, Tracker};
 
-use super::queries::{SEARCH_ISSUES_PATH, issue_comment_path, issue_comments_path, issue_path};
+use super::queries::{
+    SEARCH_ISSUES_PATH, issue_comment_path, issue_comments_path, issue_path, pull_path,
+};
 
 pub const DEFAULT_GITHUB_ENDPOINT: &str = "https://api.github.com";
 const GITHUB_USER_AGENT: &str = "vik-tracker/0.1";
-const DEFAULT_PAGE_SIZE: u64 = 100;
+const GITHUB_PAGE_SIZE: u64 = 100;
 const STATE_REFRESH_CONCURRENCY: usize = 8;
+const CLOSING_KEYWORD: &str = "Closes";
 
 #[derive(Debug, Clone)]
 pub struct GitHubClientConfig {
@@ -25,7 +28,6 @@ pub struct GitHubClientConfig {
     pub active_states: Vec<String>,
     pub terminal_states: Vec<String>,
     pub filter: GitHubIssueFilterConfig,
-    pub page_size: u64,
 }
 
 impl GitHubClientConfig {
@@ -43,7 +45,6 @@ impl GitHubClientConfig {
             active_states,
             terminal_states,
             filter: GitHubIssueFilterConfig::default(),
-            page_size: DEFAULT_PAGE_SIZE,
         }
     }
 
@@ -129,7 +130,6 @@ pub struct GitHubClient {
     active_states: Vec<String>,
     terminal_states: Vec<String>,
     filter: GitHubIssueFilterConfig,
-    page_size: u64,
 }
 
 impl GitHubClient {
@@ -150,7 +150,6 @@ impl GitHubClient {
             active_states: config.active_states,
             terminal_states: config.terminal_states,
             filter: config.filter,
-            page_size: config.page_size,
         })
     }
 
@@ -161,10 +160,15 @@ impl GitHubClient {
         query: &[(&str, String)],
         body: Option<Value>,
     ) -> Result<Value, TrackerError> {
-        let url = append_query(format!("{}{}", self.endpoint, path), query);
+        let mut url = Url::parse(&format!("{}{}", self.endpoint, path))
+            .map_err(|err| TrackerError::GitHubApiRequest(err.to_string()))?;
+        if !query.is_empty() {
+            url.query_pairs_mut()
+                .extend_pairs(query.iter().map(|(key, value)| (*key, value.as_str())));
+        }
         let mut request = self
             .http
-            .request(method, &url)
+            .request(method, url)
             .bearer_auth(&self.api_key)
             .header("User-Agent", GITHUB_USER_AGENT)
             .header("Accept", "application/vnd.github+json")
@@ -220,7 +224,7 @@ impl GitHubClient {
                             SEARCH_ISSUES_PATH,
                             &[
                                 ("q", query_text.clone()),
-                                ("per_page", self.page_size.to_string()),
+                                ("per_page", GITHUB_PAGE_SIZE.to_string()),
                                 ("page", page.to_string()),
                             ],
                             None,
@@ -248,7 +252,8 @@ impl GitHubClient {
                             issues.push(issue);
                         }
                     }
-                    if items.len() < self.page_size as usize || page * self.page_size >= total_count
+                    if items.len() < GITHUB_PAGE_SIZE as usize
+                        || page * GITHUB_PAGE_SIZE >= total_count
                     {
                         break;
                     }
@@ -431,36 +436,6 @@ impl GitHubClient {
             .filter(|state| !is_github_api_state(state))
             .collect()
     }
-
-    async fn comments_for_issue(&self, issue_id: &str) -> Result<Vec<Value>, TrackerError> {
-        let number = parse_issue_number(issue_id)?;
-        let path = issue_comments_path(&self.repository.owner, &self.repository.name, number);
-        let mut comments = Vec::new();
-        let mut page = 1_u64;
-        loop {
-            let payload = self
-                .request_json(
-                    Method::GET,
-                    &path,
-                    &[
-                        ("per_page", self.page_size.to_string()),
-                        ("page", page.to_string()),
-                    ],
-                    None,
-                )
-                .await?;
-            let items = payload.as_array().cloned().ok_or_else(|| {
-                TrackerError::GitHubUnknownPayload("comments was not an array".to_string())
-            })?;
-            let item_count = items.len();
-            comments.extend(items);
-            if item_count < self.page_size as usize {
-                break;
-            }
-            page += 1;
-        }
-        Ok(comments)
-    }
 }
 
 #[async_trait]
@@ -589,45 +564,134 @@ impl Tracker for GitHubClient {
         ))
     }
 
-    async fn link_pr(&self, issue_id: &str, title: &str, url: &str) -> Result<(), TrackerError> {
-        let comments = self.comments_for_issue(issue_id).await?;
-        if comments.iter().any(|comment| {
-            comment
-                .get("body")
-                .and_then(Value::as_str)
-                .is_some_and(|body| body.contains(url))
-        }) {
+    async fn link_pr(&self, issue_id: &str, _title: &str, url: &str) -> Result<(), TrackerError> {
+        let issue_number = parse_issue_number(issue_id)?;
+        let pull_request = GitHubPullRequest::parse_url(url)?;
+        let path = pull_path(
+            &pull_request.repository.owner,
+            &pull_request.repository.name,
+            pull_request.number,
+        );
+        let payload = self.request_json(Method::GET, &path, &[], None).await?;
+        let body = string_field(&payload, "body").unwrap_or_default();
+        if body_contains_closing_reference(
+            &body,
+            &self.repository,
+            &pull_request.repository,
+            issue_number,
+        ) {
             return Ok(());
         }
-        let body = if title.trim().is_empty() {
-            format!("Linked pull request: {url}")
-        } else {
-            format!("Linked pull request: [{title}]({url})")
-        };
-        self.create_comment(issue_id, &body).await?;
+
+        let closing_reference = closing_reference(&self.repository, issue_number);
+        let body = append_closing_reference(&body, &closing_reference);
+        self.request_json(Method::PATCH, &path, &[], Some(json!({ "body": body })))
+            .await?;
         Ok(())
     }
 }
 
-#[async_trait]
-impl IssueTracker for GitHubClient {
-    async fn fetch_candidate_issues(&self) -> Result<Vec<Issue>, TrackerError> {
-        self.fetch_candidates().await
-    }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GitHubPullRequest {
+    pub(crate) repository: GitHubRepository,
+    pub(crate) number: u64,
+}
 
-    async fn fetch_issues_by_states(
-        &self,
-        state_names: &[String],
-    ) -> Result<Vec<Issue>, TrackerError> {
-        self.fetch_by_states(state_names).await
+impl GitHubPullRequest {
+    pub(crate) fn parse_url(raw: &str) -> Result<Self, TrackerError> {
+        let value = raw.trim();
+        let url = Url::parse(value).map_err(|_| {
+            TrackerError::UnsupportedTrackerOperation(format!(
+                "GitHub pull request URL is not supported: {raw}"
+            ))
+        })?;
+        let segments: Vec<_> = url
+            .path_segments()
+            .map(|segments| segments.collect())
+            .unwrap_or_default();
+        let [owner, repo, "pull", number, ..] = segments.as_slice() else {
+            return Err(TrackerError::UnsupportedTrackerOperation(format!(
+                "GitHub pull request URL is not supported: {raw}"
+            )));
+        };
+        let number = number.parse::<u64>().map_err(|_| {
+            TrackerError::UnsupportedTrackerOperation(format!(
+                "GitHub pull request URL is not supported: {raw}"
+            ))
+        })?;
+        Ok(Self {
+            repository: GitHubRepository::parse(&format!("{owner}/{repo}"))?,
+            number,
+        })
     }
+}
 
-    async fn fetch_issue_states_by_ids(
-        &self,
-        issue_ids: &[String],
-    ) -> Result<Vec<Issue>, TrackerError> {
-        self.fetch_states_by_ids(issue_ids).await
+pub(crate) fn closing_reference(repository: &GitHubRepository, issue_number: u64) -> String {
+    format!(
+        "{CLOSING_KEYWORD} {}#{issue_number}",
+        repository.name_with_owner()
+    )
+}
+
+pub(crate) fn append_closing_reference(body: &str, closing_reference: &str) -> String {
+    let body = body.trim_end();
+    if body.is_empty() {
+        closing_reference.to_string()
+    } else {
+        format!("{body}\n\n{closing_reference}")
     }
+}
+
+pub(crate) fn body_contains_closing_reference(
+    body: &str,
+    issue_repository: &GitHubRepository,
+    pull_request_repository: &GitHubRepository,
+    issue_number: u64,
+) -> bool {
+    let mut references = vec![format!(
+        "{}#{issue_number}",
+        issue_repository.name_with_owner()
+    )];
+    if issue_repository == pull_request_repository {
+        references.push(format!("#{issue_number}"));
+    }
+    let body = body.to_ascii_lowercase();
+    references.iter().any(|reference| {
+        let reference = reference.to_ascii_lowercase();
+        CLOSING_KEYWORDS.iter().any(|keyword| {
+            contains_closing_phrase(&body, &format!("{keyword} {reference}"))
+                || contains_closing_phrase(&body, &format!("{keyword}: {reference}"))
+        })
+    })
+}
+
+const CLOSING_KEYWORDS: &[&str] = &[
+    "close", "closes", "closed", "fix", "fixes", "fixed", "resolve", "resolves", "resolved",
+];
+
+fn contains_closing_phrase(body: &str, phrase: &str) -> bool {
+    let mut offset = 0;
+    while let Some(index) = body[offset..].find(phrase) {
+        let start = offset + index;
+        let end = start + phrase.len();
+        let before_ok = body[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|ch| !ch.is_ascii_alphanumeric());
+        let after_ok = body[end..]
+            .chars()
+            .next()
+            .is_none_or(|ch| !is_reference_char(ch));
+        if before_ok && after_ok {
+            return true;
+        }
+        offset = end;
+    }
+    false
+}
+
+fn is_reference_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '/' | '#')
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -807,32 +871,4 @@ fn push_label_qualifier(parts: &mut Vec<String>, label: &str) {
 
 fn quote_search_value(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\\\""))
-}
-
-fn append_query(mut url: String, query: &[(&str, String)]) -> String {
-    if query.is_empty() {
-        return url;
-    }
-    url.push('?');
-    for (index, (key, value)) in query.iter().enumerate() {
-        if index > 0 {
-            url.push('&');
-        }
-        url.push_str(&percent_encode(key));
-        url.push('=');
-        url.push_str(&percent_encode(value));
-    }
-    url
-}
-
-fn percent_encode(value: &str) -> String {
-    let mut encoded = String::new();
-    for byte in value.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
-            encoded.push(byte as char);
-        } else {
-            encoded.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    encoded
 }

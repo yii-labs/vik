@@ -40,8 +40,10 @@ vik check ./WORKFLOW.md
 ```
 
 For private repositories, grant at least repository metadata read access and
-issues read/write access. Agents still need normal GitHub access for branch,
-push, PR, review, and check operations.
+issues read/write access. GitHub PR linking updates pull request bodies, so the
+token also needs pull request write access for repositories that will receive
+linked PRs. Agents still need normal GitHub access for branch, push, PR, review,
+and check operations.
 
 ## Behavior
 
@@ -53,5 +55,8 @@ Vik returns an unsupported-operation error for tracker attachment upload with
 `tracker.kind: github`; attach files to PRs or comments through another
 workflow when needed.
 
-PR linking for GitHub issues is represented by an issue comment that links to
-the pull request.
+PR linking for GitHub issues updates the pull request body with a GitHub closing
+keyword such as `Closes owner/repo#123`. GitHub interprets closing keywords only
+for pull requests that target the repository default branch; for other PR bases,
+the body still records the issue relationship but GitHub will not auto-close the
+issue on merge.

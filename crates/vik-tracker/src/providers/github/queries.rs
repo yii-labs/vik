@@ -11,3 +11,7 @@ pub fn issue_comments_path(owner: &str, repo: &str, number: u64) -> String {
 pub fn issue_comment_path(owner: &str, repo: &str, comment_id: u64) -> String {
     format!("/repos/{owner}/{repo}/issues/comments/{comment_id}")
 }
+
+pub fn pull_path(owner: &str, repo: &str, number: u64) -> String {
+    format!("/repos/{owner}/{repo}/pulls/{number}")
+}
