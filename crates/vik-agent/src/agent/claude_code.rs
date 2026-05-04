@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -14,14 +15,19 @@ use super::{CodingAgentAdapter, CodingAgentRun, EventSink};
 use crate::error::AgentError;
 use crate::event::{agent_event, truncate};
 use crate::process::ProcessCommand;
+use crate::tools::{DynamicTools, LinearGraphqlToolEnv};
 
 const CONTINUATION_PROMPT: &str = "Continue working on this Linear issue. Check current issue state and proceed only if it is still active.";
 const DEFAULT_HEARTBEAT_INTERVAL_MS: u64 = 30_000;
+const VIK_LINEAR_GRAPHQL_MCP_TOOL: &str = "mcp__vik__linear_graphql";
+const VIK_LINEAR_GRAPHQL_ENDPOINT_ENV: &str = "VIK_LINEAR_GRAPHQL_ENDPOINT";
+const VIK_LINEAR_GRAPHQL_API_KEY_ENV: &str = "VIK_LINEAR_GRAPHQL_API_KEY";
 
 #[derive(Debug, Clone)]
 pub(crate) struct ClaudeCodeClient {
     config: ClaudeCodeConfig,
     heartbeat_interval: Duration,
+    tools: DynamicTools,
 }
 
 impl ClaudeCodeClient {
@@ -29,7 +35,13 @@ impl ClaudeCodeClient {
         Self {
             config,
             heartbeat_interval: heartbeat_interval_for_stall_timeout(stall_timeout_ms),
+            tools: DynamicTools::default(),
         }
+    }
+
+    pub(crate) fn with_dynamic_tools(mut self, tools: DynamicTools) -> Self {
+        self.tools = tools;
+        self
     }
 
     async fn run_request(&self, request: CodingAgentRun) -> Result<(), AgentError> {
@@ -51,6 +63,7 @@ impl ClaudeCodeClient {
         let original_prompt = first_prompt.clone();
         let mut prompt = first_prompt;
         let mut usage = ClaudeUsageAccumulator::default();
+        let mcp_runtime = ClaudeMcpRuntime::prepare(&self.tools).await?;
 
         for turn_count in 1..=max_turns {
             self.run_turn(
@@ -63,6 +76,7 @@ impl ClaudeCodeClient {
                 },
                 &mut on_event,
                 &mut usage,
+                mcp_runtime.as_ref(),
             )
             .await?;
             usage.finish_turn();
@@ -87,7 +101,7 @@ impl CodingAgentAdapter for ClaudeCodeClient {
 }
 
 struct ClaudeCodeTurn<'a> {
-    workspace_path: &'a std::path::Path,
+    workspace_path: &'a Path,
     issue_id: &'a str,
     issue_title: &'a str,
     prompt: String,
@@ -100,9 +114,11 @@ impl ClaudeCodeClient {
         turn: ClaudeCodeTurn<'_>,
         on_event: &mut EventSink,
         usage: &mut ClaudeUsageAccumulator,
+        mcp_runtime: Option<&ClaudeMcpRuntime>,
     ) -> Result<(), AgentError> {
-        let command_display = claude_code_spawn_command(&self.config, 1);
-        let command = claude_code_spawn_process_command(&self.config, 1);
+        let mcp_config_path = mcp_runtime.map(|runtime| runtime.config_path.as_path());
+        let command_display = claude_code_spawn_command_with_mcp(&self.config, 1, mcp_config_path);
+        let command = claude_code_spawn_process_command_with_mcp(&self.config, 1, mcp_config_path);
 
         emit_lifecycle_event(
             on_event,
@@ -118,6 +134,9 @@ impl ClaudeCodeClient {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if let Some(runtime) = mcp_runtime {
+            runtime.apply_env(&mut process);
+        }
         process.kill_on_drop(true);
         let mut child = process.spawn().map_err(|err| AgentError::ProcessSpawn {
             program: command.program().to_string(),
@@ -285,6 +304,66 @@ impl ClaudeCodeClient {
     }
 }
 
+struct ClaudeMcpRuntime {
+    config_path: PathBuf,
+    linear_graphql: LinearGraphqlToolEnv,
+}
+
+impl ClaudeMcpRuntime {
+    async fn prepare(tools: &DynamicTools) -> Result<Option<Self>, AgentError> {
+        let Some(linear_graphql) = tools.linear_graphql_env() else {
+            return Ok(None);
+        };
+        let current_exe =
+            std::env::current_exe().map_err(|err| AgentError::ResponseError(err.to_string()))?;
+        let config_path = std::env::temp_dir().join(format!(
+            "vik-claude-mcp-{}-{}.json",
+            std::process::id(),
+            Utc::now().timestamp_millis()
+        ));
+        let body = claude_mcp_config_body(&current_exe);
+        let bytes =
+            serde_json::to_vec(&body).map_err(|err| AgentError::ResponseError(err.to_string()))?;
+        tokio::fs::write(&config_path, bytes)
+            .await
+            .map_err(|err| AgentError::ResponseError(err.to_string()))?;
+        Ok(Some(Self {
+            config_path,
+            linear_graphql,
+        }))
+    }
+
+    fn apply_env(&self, process: &mut Command) {
+        process.env(
+            VIK_LINEAR_GRAPHQL_ENDPOINT_ENV,
+            &self.linear_graphql.endpoint,
+        );
+        process.env(VIK_LINEAR_GRAPHQL_API_KEY_ENV, &self.linear_graphql.api_key);
+    }
+}
+
+impl Drop for ClaudeMcpRuntime {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.config_path);
+    }
+}
+
+fn claude_mcp_config_body(current_exe: &Path) -> Value {
+    json!({
+        "mcpServers": {
+            "vik": {
+                "type": "stdio",
+                "command": current_exe.display().to_string(),
+                "args": ["mcp", "linear-graphql"],
+                "env": {
+                    "VIK_LINEAR_GRAPHQL_ENDPOINT": format!("${{{VIK_LINEAR_GRAPHQL_ENDPOINT_ENV}}}"),
+                    "VIK_LINEAR_GRAPHQL_API_KEY": format!("${{{VIK_LINEAR_GRAPHQL_API_KEY_ENV}}}"),
+                }
+            }
+        }
+    })
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct ClaudeUsageAccumulator {
     completed: TokenUsage,
@@ -367,7 +446,16 @@ pub(crate) struct PromptWriteContext<'a> {
     heartbeat_interval: Duration,
 }
 
+#[cfg(test)]
 pub(crate) fn claude_code_spawn_command(config: &ClaudeCodeConfig, max_turns: u32) -> String {
+    claude_code_spawn_command_with_mcp(config, max_turns, None)
+}
+
+fn claude_code_spawn_command_with_mcp(
+    config: &ClaudeCodeConfig,
+    max_turns: u32,
+    mcp_config_path: Option<&Path>,
+) -> String {
     let mut command = config.command.trim().to_string();
     if let Some(model) = config.model.as_deref().map(str::trim)
         && !model.is_empty()
@@ -381,6 +469,12 @@ pub(crate) fn claude_code_spawn_command(config: &ClaudeCodeConfig, max_turns: u3
         append_raw_arg(&mut command, "--permission-mode");
         append_shell_arg(&mut command, mode);
     }
+    if let Some(path) = mcp_config_path {
+        append_raw_arg(&mut command, "--mcp-config");
+        append_shell_arg(&mut command, &path.display().to_string());
+        append_raw_arg(&mut command, "--allowedTools");
+        append_shell_arg(&mut command, VIK_LINEAR_GRAPHQL_MCP_TOOL);
+    }
     if max_turns > 0 {
         append_raw_arg(&mut command, "--max-turns");
         append_shell_arg(&mut command, &max_turns.to_string());
@@ -388,21 +482,37 @@ pub(crate) fn claude_code_spawn_command(config: &ClaudeCodeConfig, max_turns: u3
     command
 }
 
-pub(crate) fn claude_code_spawn_process_command(
+fn claude_code_spawn_process_command_with_mcp(
     config: &ClaudeCodeConfig,
     max_turns: u32,
+    mcp_config_path: Option<&Path>,
 ) -> ProcessCommand {
-    claude_code_spawn_process_command_for_platform(config, max_turns, HostPlatform::current())
+    claude_code_spawn_process_command_for_platform_with_mcp(
+        config,
+        max_turns,
+        HostPlatform::current(),
+        mcp_config_path,
+    )
 }
 
+#[cfg(test)]
 pub(crate) fn claude_code_spawn_process_command_for_platform(
     config: &ClaudeCodeConfig,
     max_turns: u32,
     platform: HostPlatform,
 ) -> ProcessCommand {
+    claude_code_spawn_process_command_for_platform_with_mcp(config, max_turns, platform, None)
+}
+
+fn claude_code_spawn_process_command_for_platform_with_mcp(
+    config: &ClaudeCodeConfig,
+    max_turns: u32,
+    platform: HostPlatform,
+    mcp_config_path: Option<&Path>,
+) -> ProcessCommand {
     match platform {
         HostPlatform::Posix => {
-            let command = claude_code_spawn_command(config, max_turns);
+            let command = claude_code_spawn_command_with_mcp(config, max_turns, mcp_config_path);
             let shell = ShellInvocation::for_platform(&command, platform, PosixShell::Bash);
             ProcessCommand::new(
                 shell.program(),
@@ -413,16 +523,22 @@ pub(crate) fn claude_code_spawn_process_command_for_platform(
                     .chain(std::iter::once(shell.command())),
             )
         }
-        HostPlatform::Windows => claude_code_spawn_direct_command(config, max_turns),
+        HostPlatform::Windows => {
+            claude_code_spawn_direct_command(config, max_turns, mcp_config_path)
+        }
     }
 }
 
-fn claude_code_spawn_direct_command(config: &ClaudeCodeConfig, max_turns: u32) -> ProcessCommand {
+fn claude_code_spawn_direct_command(
+    config: &ClaudeCodeConfig,
+    max_turns: u32,
+    mcp_config_path: Option<&Path>,
+) -> ProcessCommand {
     let mut argv = split_windows_command_line(&config.command);
     if argv.is_empty() {
         return ProcessCommand::new(config.command.trim(), std::iter::empty::<String>());
     }
-    argv.extend(claude_code_runtime_args(config, max_turns));
+    argv.extend(claude_code_runtime_args(config, max_turns, mcp_config_path));
     let program = argv.remove(0);
     ProcessCommand::new(program, argv)
 }
@@ -442,7 +558,11 @@ fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-fn claude_code_runtime_args(config: &ClaudeCodeConfig, max_turns: u32) -> Vec<String> {
+fn claude_code_runtime_args(
+    config: &ClaudeCodeConfig,
+    max_turns: u32,
+    mcp_config_path: Option<&Path>,
+) -> Vec<String> {
     let mut args = Vec::new();
     if let Some(model) = config.model.as_deref().map(str::trim)
         && !model.is_empty()
@@ -455,6 +575,12 @@ fn claude_code_runtime_args(config: &ClaudeCodeConfig, max_turns: u32) -> Vec<St
     {
         args.push("--permission-mode".to_string());
         args.push(mode.to_string());
+    }
+    if let Some(path) = mcp_config_path {
+        args.push("--mcp-config".to_string());
+        args.push(path.display().to_string());
+        args.push("--allowedTools".to_string());
+        args.push(VIK_LINEAR_GRAPHQL_MCP_TOOL.to_string());
     }
     if max_turns > 0 {
         args.push("--max-turns".to_string());
@@ -580,15 +706,18 @@ fn first_u64(value: &Value, keys: &[&str]) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
     use std::time::Duration;
 
+    use serde_json::json;
     use tokio::time;
     use vik_core::{HostPlatform, LiveSession, TokenUsage};
     use vik_workflow::ClaudeCodeConfig;
 
     use super::{
         ClaudeUsageAccumulator, PromptWriteContext, claude_code_spawn_command,
-        claude_code_spawn_process_command_for_platform, write_prompt_with_deadline,
+        claude_code_spawn_command_with_mcp, claude_code_spawn_process_command_for_platform,
+        claude_code_spawn_process_command_for_platform_with_mcp, write_prompt_with_deadline,
     };
     use crate::agent::EventSink;
     use crate::error::AgentError;
@@ -633,6 +762,19 @@ mod tests {
         assert_eq!(
             claude_code_spawn_command(&config, 7),
             "claude -p --output-format stream-json --input-format text --model 'sonnet' --permission-mode 'acceptEdits' --max-turns '7'"
+        );
+    }
+
+    #[test]
+    fn claude_code_spawn_command_adds_vik_mcp_bridge() {
+        let config = ClaudeCodeConfig {
+            command: "claude -p --output-format stream-json --input-format text".to_string(),
+            ..ClaudeCodeConfig::default()
+        };
+
+        assert_eq!(
+            claude_code_spawn_command_with_mcp(&config, 7, Some(Path::new("/tmp/vik mcp.json"))),
+            "claude -p --output-format stream-json --input-format text --mcp-config '/tmp/vik mcp.json' --allowedTools 'mcp__vik__linear_graphql' --max-turns '7'"
         );
     }
 
@@ -698,6 +840,52 @@ mod tests {
                 "--max-turns".to_string(),
                 "1".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn claude_code_spawn_process_command_adds_vik_mcp_bridge_on_windows() {
+        let config = ClaudeCodeConfig {
+            command: r#""C:\Program Files\Claude\claude.exe" -p"#.to_string(),
+            ..ClaudeCodeConfig::default()
+        };
+        let command = claude_code_spawn_process_command_for_platform_with_mcp(
+            &config,
+            1,
+            HostPlatform::Windows,
+            Some(Path::new(r#"C:\Temp\vik-mcp.json"#)),
+        );
+
+        assert_eq!(command.program(), r#"C:\Program Files\Claude\claude.exe"#);
+        assert_eq!(
+            command.args(),
+            &[
+                "-p".to_string(),
+                "--mcp-config".to_string(),
+                r#"C:\Temp\vik-mcp.json"#.to_string(),
+                "--allowedTools".to_string(),
+                "mcp__vik__linear_graphql".to_string(),
+                "--max-turns".to_string(),
+                "1".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn claude_mcp_config_points_to_vik_linear_graphql_server_without_secret() {
+        let config = super::claude_mcp_config_body(Path::new("/bin/vik"));
+
+        assert_eq!(
+            config.pointer("/mcpServers/vik/command"),
+            Some(&json!("/bin/vik"))
+        );
+        assert_eq!(
+            config.pointer("/mcpServers/vik/args"),
+            Some(&json!(["mcp", "linear-graphql"]))
+        );
+        assert_eq!(
+            config.pointer("/mcpServers/vik/env/VIK_LINEAR_GRAPHQL_API_KEY"),
+            Some(&json!("${VIK_LINEAR_GRAPHQL_API_KEY}"))
         );
     }
 

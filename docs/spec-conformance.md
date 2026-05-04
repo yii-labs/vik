@@ -14,10 +14,12 @@ This document maps Vik draft v1 required behavior to this workspace.
 - Linear candidate, terminal, and state refresh reads: `vik-tracker::LinearClient`.
 - Sanitized per-issue workspaces: `vik-workspace::WorkspaceManager`.
 - Workspace hooks and timeout: `vik-workspace::WorkspaceManager`.
-- Coding-agent adapter selection: `vik-agent::adapter::CodingAgentAdapter`.
+- Coding-agent adapter selection: `vik-agent::agent::CodingAgentAdapter`.
 - Codex JSONL app-server client: `vik-agent::CodexAppServerClient`.
-- Claude Code headless process adapter: `vik-agent::claude_code::ClaudeCodeClient`.
-- `linear_graphql` client-side dynamic tool extension.
+- Claude Code headless process adapter:
+  `vik-agent::agent::claude_code::ClaudeCodeClient`.
+- `linear_graphql` client-side dynamic tool extension for Codex and Vik MCP
+  bridge for Claude Code.
 - Strict prompt rendering: `vik-workflow::render_prompt`.
 - Retry queue and backoff: `vik-orchestrator::failure_backoff_ms`.
 - Terminal/non-active reconciliation: `vik-orchestrator::Orchestrator`.

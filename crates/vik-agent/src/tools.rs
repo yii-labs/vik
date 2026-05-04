@@ -11,6 +11,12 @@ pub(crate) struct DynamicTools {
     linear_graphql: Option<LinearGraphqlTool>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LinearGraphqlToolEnv {
+    pub(crate) endpoint: String,
+    pub(crate) api_key: String,
+}
+
 impl fmt::Debug for DynamicTools {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DynamicTools")
@@ -64,6 +70,15 @@ impl DynamicTools {
             }));
         }
         definitions
+    }
+
+    pub(crate) fn linear_graphql_env(&self) -> Option<LinearGraphqlToolEnv> {
+        self.linear_graphql
+            .as_ref()
+            .map(|tool| LinearGraphqlToolEnv {
+                endpoint: tool.endpoint.clone(),
+                api_key: tool.api_key.clone(),
+            })
     }
 
     pub(crate) async fn handle_call(&self, params: &Value) -> Value {

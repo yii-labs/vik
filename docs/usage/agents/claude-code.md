@@ -47,8 +47,21 @@ Vik writes the rendered issue prompt to command stdin. Vik appends
 `--max-turns 1` for each headless process and repeats that process up to
 `agent.max_turns`, checking issue state between turns.
 
-If the agent needs Linear or GitHub access through MCP, include the required
-Claude Code MCP flags in `command` and validate them before daemon startup.
+When the workflow uses the Linear tracker and has a Linear API key, Vik also
+writes a temporary MCP config and appends:
+
+```sh
+--mcp-config <temp-file> --allowedTools mcp__vik__linear_graphql
+```
+
+Claude Code then receives the tool as `mcp__vik__linear_graphql`, backed by
+Vik's configured Linear credentials. The temp config contains no secret values;
+Vik passes the Linear endpoint and API key through child-process environment
+variables.
+
+If the agent needs additional Linear or GitHub access through MCP, include those
+extra Claude Code MCP flags in `command` and validate them before daemon
+startup.
 
 ## Setup
 

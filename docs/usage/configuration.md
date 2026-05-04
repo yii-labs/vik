@@ -191,6 +191,10 @@ Vik writes the rendered issue prompt to stdin. Vik appends `--max-turns 1` for
 each headless process and repeats that process up to `agent.max_turns`, checking
 issue state between turns.
 
+When Linear tracker credentials are configured, Vik also exposes its
+`linear_graphql` capability to Claude Code as the MCP tool
+`mcp__vik__linear_graphql`.
+
 See [Claude Code Agent](agents/claude-code.md) for setup and validation.
 
 ## Server

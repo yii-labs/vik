@@ -21,6 +21,8 @@ enum Command {
     Start(crate::start::StartArgs),
     /// Validate workflow and exit.
     Check(crate::check::CheckArgs),
+    /// Run Vik MCP servers.
+    Mcp(crate::mcp::McpArgs),
     /// Manage Vik as a detached local service.
     Service(crate::service::ServiceArgs),
 }
@@ -35,6 +37,7 @@ pub(crate) async fn run(args: Args) -> Result<(), Box<dyn Error>> {
             crate::env::load_dotenv()?;
             crate::check::run(args.workflow)
         }
+        Command::Mcp(args) => crate::mcp::run(args).await,
         Command::Service(args) => crate::service::run(args).await,
     }
 }
@@ -83,6 +86,7 @@ mod tests {
 
         assert!(help.contains("start"));
         assert!(help.contains("check"));
+        assert!(help.contains("mcp"));
         assert!(help.contains("Start Vik coding-agent orchestration"));
         assert!(help.contains("Validate workflow and exit"));
         assert!(!help.contains("--check"));
@@ -125,5 +129,15 @@ mod tests {
             .kind();
 
         assert_eq!(err, clap::error::ErrorKind::UnknownArgument);
+    }
+
+    #[test]
+    fn mcp_linear_graphql_subcommand_is_supported() {
+        let args = Args::try_parse_from(["vik", "mcp", "linear-graphql"]).unwrap();
+
+        match args.command {
+            Command::Mcp(_) => {}
+            other => panic!("expected mcp command, got {other:?}"),
+        }
     }
 }

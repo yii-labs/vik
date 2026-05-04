@@ -166,7 +166,8 @@ Steps:
 ### Linear
 
 Why: Vik reads candidate issues from Linear, updates issue metadata during
-workflow execution, and exposes a `linear_graphql` tool to Codex sessions.
+workflow execution, and exposes Linear GraphQL tooling to Codex and Claude Code
+sessions.
 
 Official links:
 

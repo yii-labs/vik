@@ -3,6 +3,7 @@ use clap::Parser;
 mod check;
 mod command;
 mod env;
+mod mcp;
 mod service;
 mod start;
 
