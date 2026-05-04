@@ -191,16 +191,17 @@ impl ServiceConfig {
         let codex_map = get_map(&definition.config, "codex");
         let server_map = get_map(&definition.config, "server");
 
-        let tracker_kind = string_value(tracker_map, "kind").unwrap_or_default();
-        let endpoint = string_value(tracker_map, "endpoint")
+        let tracker_kind = trimmed_string_value(tracker_map, "kind").unwrap_or_default();
+        let endpoint = trimmed_string_value(tracker_map, "endpoint")
             .unwrap_or_else(|| default_tracker_endpoint(&tracker_kind).to_string());
         let api_key = string_value(tracker_map, "api_key")
             .or_else(|| tracker_api_key_from_env(&tracker_kind))
             .map(resolve_exact_env)
             .transpose()?
+            .map(|value| value.trim().to_string())
             .unwrap_or_default();
-        let project_slug = string_value(tracker_map, "project_slug").unwrap_or_default();
-        let repository = string_value(tracker_map, "repository").unwrap_or_default();
+        let project_slug = trimmed_string_value(tracker_map, "project_slug").unwrap_or_default();
+        let repository = trimmed_string_value(tracker_map, "repository").unwrap_or_default();
         let active_states = string_vec(tracker_map, "active_states")
             .unwrap_or_else(|| default_active_states(&tracker_kind));
         let terminal_states = string_vec(tracker_map, "terminal_states")
@@ -370,12 +371,21 @@ fn default_tracker_endpoint(kind: &str) -> &'static str {
 
 fn tracker_api_key_from_env(kind: &str) -> Option<String> {
     match kind {
-        "linear" => env::var("LINEAR_API_KEY").ok(),
-        "github" => env::var("GH_TOKEN")
-            .ok()
-            .or_else(|| env::var("GITHUB_TOKEN").ok()),
+        "linear" => non_empty_env("LINEAR_API_KEY"),
+        "github" => non_empty_env("GH_TOKEN").or_else(|| non_empty_env("GITHUB_TOKEN")),
         _ => None,
     }
+}
+
+pub(crate) fn non_empty_env(name: &str) -> Option<String> {
+    env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn trimmed_string_value(map: Option<&Mapping>, key: &str) -> Option<String> {
+    string_value(map, key).map(|value| value.trim().to_string())
 }
 
 fn default_active_states(kind: &str) -> Vec<String> {

@@ -37,7 +37,8 @@ LINEAR_API_KEY=ci-placeholder cargo run --locked -p vik-cli -- check ./WORKFLOW.
 
 Use an isolated tracker project or repository and workspace root for real daemon
 testing. Do not point a smoke run at the shared project unless that is the test
-target.
+target. This smoke-run example uses the Linear tracker; for GitHub tracker
+configuration, use [GitHub Tracker](../usage/trackers/github.md).
 
 ```sh
 : "${VIK_LINEAR_PROJECT_SLUG:?set isolated Linear project slug}"

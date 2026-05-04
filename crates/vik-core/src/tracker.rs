@@ -25,8 +25,8 @@ pub enum TrackerError {
     LinearMissingEndCursor,
     #[error("github_api_request: {0}")]
     GithubApiRequest(String),
-    #[error("github_api_status: {0}")]
-    GithubApiStatus(u16),
+    #[error("github_api_status: {0}: {1}")]
+    GithubApiStatus(u16, String),
     #[error("github_unknown_payload: {0}")]
     GithubUnknownPayload(String),
 }

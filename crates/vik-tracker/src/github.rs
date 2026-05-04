@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use futures_util::{StreamExt, TryStreamExt, stream};
 use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, USER_AGENT};
 use serde::Deserialize;
 use vik_core::{BlockerRef, Issue, IssueTracker, TrackerError, normalize_state};
@@ -205,12 +206,14 @@ impl IssueTracker for GitHubClient {
         &self,
         issue_ids: &[String],
     ) -> Result<Vec<Issue>, TrackerError> {
-        let mut issues = Vec::new();
-        for id in issue_ids {
-            let number = github_issue_number(id)?;
-            issues.push(self.fetch_issue_number(&number).await?);
-        }
-        Ok(issues)
+        stream::iter(issue_ids.iter().cloned())
+            .map(|id| async move {
+                let number = github_issue_number(&id)?;
+                self.fetch_issue_number(&number).await
+            })
+            .buffer_unordered(8)
+            .try_collect()
+            .await
     }
 }
 
@@ -249,7 +252,7 @@ async fn read_json<T: for<'de> Deserialize<'de>>(
         .await
         .map_err(|err| TrackerError::GithubUnknownPayload(err.to_string()))?;
     if !status.is_success() {
-        return Err(TrackerError::GithubApiStatus(status.as_u16()));
+        return Err(TrackerError::GithubApiStatus(status.as_u16(), text));
     }
     serde_json::from_str(&text).map_err(|err| TrackerError::GithubUnknownPayload(err.to_string()))
 }

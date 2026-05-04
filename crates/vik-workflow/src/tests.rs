@@ -117,6 +117,33 @@ fn parses_github_tracker_defaults() {
 }
 
 #[test]
+fn trims_github_tracker_endpoint_repository_and_token() {
+    let def = parse_workflow_content(
+        PathBuf::from("WORKFLOW.md"),
+        "---\ntracker:\n  kind: \" github \"\n  endpoint: \" https://api.github.test \"\n  api_key: \" token \"\n  repository: \" yii-labs/vik \"\n---\nBody",
+    )
+    .unwrap();
+    let config = ServiceConfig::from_definition(&def).unwrap();
+
+    assert_eq!(config.tracker.kind, "github");
+    assert_eq!(config.tracker.endpoint, "https://api.github.test");
+    assert_eq!(config.tracker.api_key, "token");
+    assert_eq!(config.tracker.repository, "yii-labs/vik");
+    config.validate_for_dispatch().unwrap();
+}
+
+#[test]
+fn empty_environment_values_are_not_tracker_tokens() {
+    unsafe {
+        std::env::set_var("VIK_TEST_EMPTY_TOKEN", " ");
+    }
+    assert_eq!(super::config::non_empty_env("VIK_TEST_EMPTY_TOKEN"), None);
+    unsafe {
+        std::env::remove_var("VIK_TEST_EMPTY_TOKEN");
+    }
+}
+
+#[test]
 fn rejects_github_tracker_without_repository() {
     let def = parse_workflow_content(
         PathBuf::from("WORKFLOW.md"),
