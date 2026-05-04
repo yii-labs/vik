@@ -577,8 +577,8 @@ mod tests {
     async fn claude_code_accepts_success_after_stdout_eof_near_deadline() {
         let workspace = tempfile::TempDir::new().unwrap();
         let client = super::ClaudeCodeClient::new(ClaudeCodeConfig {
-            command: "sh -c 'exec 1>&-; cat >/dev/null; sleep 0.02; exit 0'".to_string(),
-            turn_timeout_ms: 100,
+            command: "sh -c 'exec 1>&-; cat >/dev/null; sleep 0.01; exit 0'".to_string(),
+            turn_timeout_ms: 1000,
             ..ClaudeCodeConfig::default()
         });
 
