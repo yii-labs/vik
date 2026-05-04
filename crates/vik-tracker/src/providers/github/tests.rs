@@ -8,7 +8,7 @@ use crate::providers::Tracker;
 use super::{
     client::{
         DEFAULT_GITHUB_ENDPOINT, GitHubClient, GitHubClientConfig, GitHubIssueFilterConfig,
-        GitHubRepository, state_selectors,
+        GitHubRepository, state_selectors, state_selectors_for_scan,
     },
     queries::SEARCH_ISSUES_PATH,
 };
@@ -148,6 +148,18 @@ fn state_scans_can_skip_github_candidate_filters() {
 }
 
 #[test]
+fn terminal_label_state_scans_include_open_and_closed_issues() {
+    let selectors = state_selectors_for_scan(&["Duplicate".to_string()], true);
+
+    assert!(selectors.iter().any(|selector| {
+        selector.github_state == "open" && selector.label.as_deref() == Some("Duplicate")
+    }));
+    assert!(selectors.iter().any(|selector| {
+        selector.github_state == "closed" && selector.label.as_deref() == Some("Duplicate")
+    }));
+}
+
+#[test]
 fn state_selectors_map_github_state_aliases_and_label_states() {
     let selectors = state_selectors(&[
         "Todo".to_string(),
@@ -239,6 +251,36 @@ fn github_issue_state_prefers_terminal_label_over_open_candidate_state() {
                 "updated_at": "2026-05-04T01:00:00Z"
             }),
             &["open".to_string()],
+        )
+        .unwrap();
+
+    assert_eq!(issue.state, "Duplicate");
+}
+
+#[test]
+fn github_issue_state_preserves_terminal_label_on_closed_issue() {
+    let client = GitHubClient::new(GitHubClientConfig::new(
+        DEFAULT_GITHUB_ENDPOINT,
+        "gh_token",
+        "yii-labs/vik",
+        vec!["Todo".to_string()],
+        vec!["Duplicate".to_string()],
+    ))
+    .unwrap();
+    let issue = client
+        .normalize_issue(
+            &json!({
+                "number": 42,
+                "title": "Work",
+                "body": "Body",
+                "state": "closed",
+                "html_url": "https://github.com/yii-labs/vik/issues/42",
+                "labels": [{ "name": "Duplicate" }],
+                "assignees": [],
+                "created_at": "2026-05-04T00:00:00Z",
+                "updated_at": "2026-05-04T01:00:00Z"
+            }),
+            &["Duplicate".to_string()],
         )
         .unwrap();
 

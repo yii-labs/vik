@@ -198,7 +198,11 @@ impl GitHubClient {
         state_names: &[String],
         apply_filter: bool,
     ) -> Result<Vec<Issue>, TrackerError> {
-        let selectors = state_selectors(state_names);
+        let selectors = if apply_filter {
+            state_selectors(state_names)
+        } else {
+            state_selectors_for_scan(state_names, true)
+        };
         let mut issues = Vec::new();
         let mut seen = HashSet::new();
         for selector in selectors {
@@ -381,15 +385,15 @@ impl GitHubClient {
             preferred_states.to_vec()
         };
         let normalized_api = normalize_state(api_state);
+        if let Some(label_state) = matching_label_state(&self.terminal_states, labels) {
+            return label_state;
+        }
         if is_closed_state(&normalized_api) {
             return states
                 .iter()
                 .find(|state| is_closed_state(&normalize_state(state)))
                 .cloned()
                 .unwrap_or_else(|| "closed".to_string());
-        }
-        if let Some(label_state) = matching_label_state(&self.terminal_states, labels) {
-            return label_state;
         }
         if let Some(label_state) = matching_label_state(&states, labels) {
             return label_state;
@@ -633,6 +637,13 @@ pub(crate) struct StateSelector {
 }
 
 pub(crate) fn state_selectors(states: &[String]) -> Vec<StateSelector> {
+    state_selectors_for_scan(states, false)
+}
+
+pub(crate) fn state_selectors_for_scan(
+    states: &[String],
+    include_closed_label_states: bool,
+) -> Vec<StateSelector> {
     let mut selectors = Vec::new();
     let mut seen = HashSet::new();
     for state in states {
@@ -659,6 +670,15 @@ pub(crate) fn state_selectors(states: &[String]) -> Vec<StateSelector> {
         };
         if seen.insert(selector.clone()) {
             selectors.push(selector);
+        }
+        if include_closed_label_states && !is_github_api_state(&normalized) {
+            let closed_label_selector = StateSelector {
+                github_state: "closed",
+                label: Some(trimmed.to_string()),
+            };
+            if seen.insert(closed_label_selector.clone()) {
+                selectors.push(closed_label_selector);
+            }
         }
     }
     selectors
