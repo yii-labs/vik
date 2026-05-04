@@ -53,10 +53,9 @@ where
         request: &AgentRunRequest<ServiceConfig>,
         events: mpsc::UnboundedSender<AgentEvent>,
     ) -> Result<(), AgentError> {
-        let manager = WorkspaceManager::with_repo(
+        let manager = WorkspaceManager::new(
             request.config.workspace.root.clone(),
             request.config.hooks.clone(),
-            request.config.repo.clone(),
         );
         let workspace = manager.create_for_issue(&request.issue.identifier).await?;
         manager.validate_agent_cwd(&workspace.path, &workspace.path)?;

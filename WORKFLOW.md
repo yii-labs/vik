@@ -17,11 +17,9 @@ polling:
   interval_ms: 5000
 workspace:
   root: ~/code/vik-workspaces
-repo:
-  origin: git@github.com:yii-labs/vik
-  clone:
-    depth: 1
 hooks:
+  after_create: |
+    git clone --depth 1 git@github.com:yii-labs/vik .
   before_run: |
     git status .
 agent:

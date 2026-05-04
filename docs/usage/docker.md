@@ -91,14 +91,13 @@ docker run --rm \
   vik:local vik check
 ```
 
-If `WORKFLOW.md` uses an SSH `repo.origin`, also mount SSH credentials or
-change the origin to HTTPS:
+If `WORKFLOW.md` uses an SSH clone hook, also mount SSH credentials or change
+the hook to HTTPS:
 
 ```yaml
-repo:
-  origin: https://github.com/yii-labs/vik
-  clone:
-    depth: 1
+hooks:
+  after_create: |
+    git clone --depth 1 https://github.com/yii-labs/vik .
 ```
 
 ## User And Permissions

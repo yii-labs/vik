@@ -12,7 +12,6 @@ vik-workflow = { version = "0.1.0", path = "../vik-workflow" }
 thiserror = "2.0.18"
 tokio = { version = "1.52.1", features = [
   "fs",
-  "io-util",
   "process",
   "time",
   "macros",

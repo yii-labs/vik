@@ -15,10 +15,9 @@ tracker:
   project_slug: "vik-08c9cf588aa7"
 workspace:
   root: ~/code/vik-workspaces
-repo:
-  origin: git@github.com:yii-labs/vik
-  clone:
-    depth: 1
+hooks:
+  after_create: |
+    git clone --depth 1 git@github.com:yii-labs/vik .
 codex:
   command: codex --config shell_environment_policy.inherit=all app-server
 ---
@@ -77,38 +76,6 @@ resolved from the workflow directory. `~` is expanded.
 
 Vik sanitizes workspace names and prevents paths from escaping the root.
 
-## Repo
-
-`repo` is optional. When configured, Vik clones the Git remote into a newly
-created issue workspace before `hooks.after_create` runs.
-
-Fields:
-
-- `origin`: SSH or HTTP(S) Git remote URL.
-- `clone.depth`: optional shallow clone depth. Must be a positive integer.
-
-Example:
-
-```yaml
-repo:
-  origin: git@github.com:yii-labs/vik
-  clone:
-    depth: 1
-```
-
-Use HTTPS when the runtime has token auth but no SSH key:
-
-```yaml
-repo:
-  origin: https://github.com/yii-labs/vik
-  clone:
-    depth: 1
-```
-
-With `repo` configured, do not duplicate the same clone operation in
-`hooks.after_create`; reserve that hook for setup that must run after the
-working copy exists.
-
 ## Logging
 
 `logging.dir` controls daemon JSON log files. Default:
@@ -125,12 +92,27 @@ Hooks are trusted shell snippets from `WORKFLOW.md`.
 
 Fields:
 
-- `after_create`: run once after a new issue workspace is created and after any
-  configured `repo` clone completes.
+- `after_create`: run once after a new issue workspace is created.
 - `before_run`: run before Codex starts.
 - `after_run`: run after Codex exits.
 - `before_remove`: run before terminal cleanup.
 - `timeout_ms`: hook timeout. Default: `60000`.
+
+Default clone hook:
+
+```yaml
+hooks:
+  after_create: |
+    git clone --depth 1 git@github.com:yii-labs/vik .
+```
+
+Use HTTPS when the runtime has token auth but no SSH key:
+
+```yaml
+hooks:
+  after_create: |
+    git clone --depth 1 https://github.com/yii-labs/vik .
+```
 
 ## Agent
 

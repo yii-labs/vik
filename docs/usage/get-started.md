@@ -50,10 +50,9 @@ workspaces, how to clone the repo, and how to launch Codex.
 4. Confirm `tracker.terminal_states` contains terminal states that should stop
    tracking and trigger cleanup.
 5. Confirm `workspace.root` points to the directory created above.
-6. Confirm `repo.origin` points to the Git remote Vik should clone into new
-   issue workspaces.
-7. Confirm `repo.clone.depth` matches the intended shallow clone depth.
-8. Confirm `codex.command` launches `codex app-server`.
+6. Confirm `hooks.after_create` clones this repo into the empty issue
+   workspace.
+7. Confirm `codex.command` launches `codex app-server`.
 
 Validate config parsing after connections are configured:
 
@@ -170,10 +169,10 @@ Steps:
    gh auth setup-git --hostname github.com
    ```
 
-6. The default `WORKFLOW.md` repo config uses SSH:
+6. The default `WORKFLOW.md` clone hook uses SSH:
 
    ```sh
-   git ls-remote git@github.com:yii-labs/vik HEAD
+   git clone --depth 1 git@github.com:yii-labs/vik .
    ```
 
    Therefore SSH auth must work:
@@ -184,13 +183,12 @@ Steps:
    ```
 
 7. If token auth works but SSH auth is unavailable, change
-   `repo.origin` in `WORKFLOW.md` to HTTPS before starting Vik:
+   `hooks.after_create` in `WORKFLOW.md` to HTTPS before starting Vik:
 
    ```yaml
-   repo:
-     origin: https://github.com/yii-labs/vik
-     clone:
-       depth: 1
+   hooks:
+     after_create: |
+       git clone --depth 1 https://github.com/yii-labs/vik .
    ```
 
 8. Stop with a GitHub auth blocker only after both CLI/browser and token paths
