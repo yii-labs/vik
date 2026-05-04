@@ -86,6 +86,22 @@ Vik sanitizes workspace names and prevents paths from escaping the root.
 
 Each run logs to stdout and to a daily file named `vik.log.<date>`.
 
+`logging.service_dir` controls service daemon stdout/stderr logs and service
+state files. Default:
+
+```text
+<workflow-directory>/.vik/service
+```
+
+Relative logging paths are resolved from the directory that contains
+`WORKFLOW.md`:
+
+```yaml
+logging:
+  dir: .vik/logs
+  service_dir: .vik/service
+```
+
 ## Hooks
 
 Hooks are trusted shell snippets from `WORKFLOW.md`.

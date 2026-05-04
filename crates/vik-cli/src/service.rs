@@ -83,15 +83,31 @@ impl ServiceTarget {
         require_dispatch_config: bool,
     ) -> Result<Self, Box<dyn Error>> {
         let explicit_workflow = workflow.is_some();
-        let workflow_path = if require_dispatch_config {
-            let loaded = load_effective_workflow(workflow)?;
+        let workflow_path = resolve_workflow_path(workflow)?;
+        if require_dispatch_config {
+            let loaded = load_effective_workflow(Some(workflow_path))?;
             loaded.config.validate_for_dispatch()?;
-            fs::canonicalize(&loaded.definition.path)?
-        } else {
-            resolve_workflow_path(workflow)?
-        };
+            let workflow_path = fs::canonicalize(&loaded.definition.path)?;
+            return Self::from_workflow_path(
+                workflow_path,
+                loaded.config.logging.service_dir,
+                explicit_workflow,
+                port,
+            );
+        }
+
+        let service_dir = configured_service_dir(&workflow_path)
+            .unwrap_or_else(|| service_dir_for_workflow(&workflow_path));
+        Self::from_workflow_path(workflow_path, service_dir, explicit_workflow, port)
+    }
+
+    fn from_workflow_path(
+        workflow_path: PathBuf,
+        service_dir: PathBuf,
+        explicit_workflow: bool,
+        port: Option<u16>,
+    ) -> Result<Self, Box<dyn Error>> {
         let cwd = service_cwd_for_workflow(&workflow_path, explicit_workflow)?;
-        let service_dir = service_dir_for_workflow(&workflow_path);
         let name = service_name(&workflow_path);
         Ok(Self {
             workflow_path,
@@ -432,6 +448,12 @@ fn service_dir_for_workflow(workflow_path: &Path) -> PathBuf {
         .unwrap_or_else(|| Path::new("."))
         .join(".vik")
         .join("service")
+}
+
+fn configured_service_dir(workflow_path: &Path) -> Option<PathBuf> {
+    load_effective_workflow(Some(workflow_path.to_path_buf()))
+        .ok()
+        .map(|loaded| loaded.config.logging.service_dir)
 }
 
 fn service_name(workflow_path: &Path) -> String {
@@ -781,6 +803,40 @@ mod tests {
     }
 
     #[test]
+    fn service_dir_uses_logging_service_dir_for_management_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflow_path = dir.path().join("WORKFLOW.md");
+        write_workflow_with_logging_service_dir(&workflow_path, "service-logs");
+
+        let target = ServiceTarget::load(Some(workflow_path), None, false).unwrap();
+        let expected_dir = fs::canonicalize(dir.path()).unwrap().join("service-logs");
+
+        assert_eq!(target.service_dir, expected_dir);
+        assert_eq!(
+            target.state_path.parent(),
+            Some(target.service_dir.as_path())
+        );
+        assert_eq!(target.log_path.parent(), Some(target.service_dir.as_path()));
+    }
+
+    #[test]
+    fn service_dir_uses_logging_service_dir_for_dispatch_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflow_path = dir.path().join("WORKFLOW.md");
+        write_workflow_with_logging_service_dir(&workflow_path, "service-logs");
+
+        let target = ServiceTarget::load_for_dispatch(Some(workflow_path), None).unwrap();
+        let expected_dir = fs::canonicalize(dir.path()).unwrap().join("service-logs");
+
+        assert_eq!(target.service_dir, expected_dir);
+        assert_eq!(
+            target.state_path.parent(),
+            Some(target.service_dir.as_path())
+        );
+        assert_eq!(target.log_path.parent(), Some(target.service_dir.as_path()));
+    }
+
+    #[test]
     fn management_target_does_not_parse_invalid_workflow() {
         let dir = tempfile::tempdir().unwrap();
         let workflow_path = dir.path().join("WORKFLOW.md");
@@ -904,6 +960,16 @@ mod tests {
             path,
             format!(
                 "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\nworkspace:\n  root: {workspace_root}\n---\nBody"
+            ),
+        )
+        .unwrap();
+    }
+
+    fn write_workflow_with_logging_service_dir(path: &Path, service_dir: &str) {
+        fs::write(
+            path,
+            format!(
+                "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\nworkspace:\n  root: work\nlogging:\n  service_dir: {service_dir}\n---\nBody"
             ),
         )
         .unwrap();

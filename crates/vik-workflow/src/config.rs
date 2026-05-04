@@ -44,6 +44,7 @@ pub struct WorkspaceConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoggingConfig {
     pub dir: PathBuf,
+    pub service_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -229,6 +230,10 @@ impl ServiceConfig {
             .map(|raw| expand_path_value(&raw, &workflow_dir))
             .transpose()?
             .unwrap_or_else(|| workspace_root.join(".vik").join("logs"));
+        let service_logging_dir = string_value(logging_map, "service_dir")
+            .map(|raw| expand_path_value(&raw, &workflow_dir))
+            .transpose()?
+            .unwrap_or_else(|| workflow_dir.join(".vik").join("service"));
 
         let hooks = HooksConfig {
             after_create: string_value(hooks_map, "after_create"),
@@ -289,7 +294,10 @@ impl ServiceConfig {
             workspace: WorkspaceConfig {
                 root: workspace_root,
             },
-            logging: LoggingConfig { dir: logging_dir },
+            logging: LoggingConfig {
+                dir: logging_dir,
+                service_dir: service_logging_dir,
+            },
             hooks,
             agent: AgentConfig {
                 max_concurrent_agents,

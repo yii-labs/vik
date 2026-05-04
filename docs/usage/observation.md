@@ -18,6 +18,8 @@ Service runs also write detached stdout and stderr to:
 <workflow-directory>/.vik/service/<workflow-stem>-<path-hash>.log
 ```
 
+Set `logging.service_dir` to move service logs and state files together.
+
 Useful commands:
 
 ```sh

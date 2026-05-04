@@ -39,6 +39,13 @@ Service stdout and stderr are written to:
 <workflow-directory>/.vik/service/<workflow-stem>-<path-hash>.log
 ```
 
+Set `logging.service_dir` in `WORKFLOW.md` to use a different directory:
+
+```yaml
+logging:
+  service_dir: service
+```
+
 The service state file uses the same name with `.json`. The CLI derives the
 name from the sanitized workflow file stem plus a stable hash of the full
 workflow path. Use `service status` or `service logs` when possible; both
@@ -89,6 +96,9 @@ Service state lives under:
 ```text
 <workflow-directory>/.vik/service/
 ```
+
+When `logging.service_dir` is set, state files live in that configured
+directory instead.
 
 The state JSON records workflow path, cwd, pid, log path, port, and command.
 Delete state only after confirming no matching Vik process is alive.
