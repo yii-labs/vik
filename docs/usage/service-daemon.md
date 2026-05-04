@@ -100,5 +100,10 @@ Service state lives under:
 When `logging.service_dir` is set, state files live in that configured
 directory instead.
 
+If an existing service was installed before `logging.service_dir` changed,
+management commands check the legacy default state path when the configured
+state file does not exist. A later `service restart` writes the new service
+state under the configured directory.
+
 The state JSON records workflow path, cwd, pid, log path, port, and command.
 Delete state only after confirming no matching Vik process is alive.
