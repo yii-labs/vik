@@ -36,6 +36,29 @@ async fn creates_sanitized_workspace_once() {
 }
 
 #[tokio::test]
+async fn rejects_reserved_support_workspace_names() {
+    let dir = tempdir().unwrap();
+    let manager = WorkspaceManager::new(dir.path(), hooks());
+
+    for identifier in ["logs", "sessions", ".vik", "Logs"] {
+        let err = manager.create_for_issue(identifier).await.unwrap_err();
+        assert!(matches!(err, WorkspaceError::ReservedWorkspaceKey { .. }));
+    }
+}
+
+#[tokio::test]
+async fn reserved_workspace_names_are_not_removed() {
+    let dir = tempdir().unwrap();
+    let manager = WorkspaceManager::new(dir.path(), hooks());
+    let logs = dir.path().join("logs");
+    tokio::fs::create_dir_all(&logs).await.unwrap();
+
+    let err = manager.remove_for_issue("logs").await.unwrap_err();
+    assert!(matches!(err, WorkspaceError::ReservedWorkspaceKey { .. }));
+    assert!(tokio::fs::metadata(&logs).await.unwrap().is_dir());
+}
+
+#[tokio::test]
 async fn after_create_runs_only_for_new_workspace() {
     let dir = tempdir().unwrap();
     let marker = dir.path().join("marker");

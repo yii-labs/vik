@@ -75,6 +75,8 @@ polling:
 resolved from the workflow directory. `~` is expanded.
 
 Vik sanitizes workspace names and prevents paths from escaping the root.
+The direct-child support directory names `.vik`, `logs`, and `sessions` are
+reserved and cannot be used as issue workspace names.
 
 ## Logging
 
