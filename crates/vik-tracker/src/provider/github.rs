@@ -2,13 +2,34 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use futures_util::{StreamExt, TryStreamExt, stream};
 use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, USER_AGENT};
 use serde::Deserialize;
+use serde_json::{Value, json};
 use vik_core::{BlockerRef, Issue, IssueTracker, TrackerError, normalize_state};
 
 pub const DEFAULT_GITHUB_ENDPOINT: &str = "https://api.github.com";
 pub const DEFAULT_GITHUB_PAGE_SIZE: usize = 100;
+pub(crate) const GITHUB_ISSUES_BY_IDS_QUERY: &str = r#"
+query VikGitHubIssuesByIds($ids: [ID!]!) {
+  nodes(ids: $ids) {
+    ... on Issue {
+      id
+      number
+      title
+      body
+      state
+      url
+      createdAt
+      updatedAt
+      labels(first: 100) {
+        nodes {
+          name
+        }
+      }
+    }
+  }
+}
+"#;
 
 #[derive(Debug, Clone)]
 pub struct GitHubClientConfig {
@@ -188,6 +209,41 @@ impl GitHubClient {
         let node = read_json(response).await?;
         Ok(normalize_github_issue(&self.config.repository, &node))
     }
+
+    async fn fetch_issues_by_graphql_ids(
+        &self,
+        issue_ids: &[String],
+    ) -> Result<Vec<Issue>, TrackerError> {
+        let body = json!({
+            "query": GITHUB_ISSUES_BY_IDS_QUERY,
+            "variables": {
+                "ids": issue_ids,
+            },
+        });
+        let response = self
+            .http
+            .post(github_graphql_endpoint(&self.config.endpoint))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|err| TrackerError::GithubApiRequest(err.to_string()))?;
+        let payload: GitHubGraphqlResponse = read_json(response).await?;
+        if let Some(errors) = payload.errors {
+            return Err(TrackerError::GithubUnknownPayload(format!(
+                "github_graphql_errors: {}",
+                compact_json(&errors)
+            )));
+        }
+        let data = payload.data.ok_or_else(|| {
+            TrackerError::GithubUnknownPayload("missing github graphql data".to_string())
+        })?;
+        Ok(data
+            .nodes
+            .into_iter()
+            .flatten()
+            .map(|node| normalize_github_graphql_issue(&node))
+            .collect())
+    }
 }
 
 #[async_trait]
@@ -210,19 +266,32 @@ impl IssueTracker for GitHubClient {
         &self,
         issue_ids: &[String],
     ) -> Result<Vec<Issue>, TrackerError> {
-        stream::iter(issue_ids.iter().cloned())
-            .map(|id| async move {
-                let number = github_issue_number(&id)?;
-                self.fetch_issue_number(&number).await
-            })
-            .buffer_unordered(8)
-            .try_collect()
-            .await
+        if issue_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let (graphql_ids, numeric_ids): (Vec<_>, Vec<_>) = issue_ids
+            .iter()
+            .cloned()
+            .partition(|id| !is_numeric_github_issue_ref(id));
+
+        let mut issues = if graphql_ids.is_empty() {
+            Vec::new()
+        } else {
+            self.fetch_issues_by_graphql_ids(&graphql_ids).await?
+        };
+        for id in numeric_ids {
+            let number = github_issue_number(&id)?;
+            let mut issue = self.fetch_issue_number(&number).await?;
+            issue.id = id;
+            issues.push(issue);
+        }
+        Ok(issues)
     }
 }
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct GitHubIssueNode {
+    node_id: Option<String>,
     number: u64,
     title: String,
     body: Option<String>,
@@ -235,6 +304,39 @@ pub(crate) struct GitHubIssueNode {
     #[serde(default)]
     assignees: Vec<GitHubUserNode>,
     pull_request: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubGraphqlResponse {
+    data: Option<GitHubGraphqlData>,
+    errors: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubGraphqlData {
+    nodes: Vec<Option<GitHubGraphqlIssueNode>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubGraphqlIssueNode {
+    id: String,
+    number: u64,
+    title: String,
+    body: Option<String>,
+    state: String,
+    url: Option<String>,
+    #[serde(rename = "createdAt")]
+    created_at: Option<String>,
+    #[serde(rename = "updatedAt")]
+    updated_at: Option<String>,
+    #[serde(default)]
+    labels: GitHubGraphqlLabelConnection,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GitHubGraphqlLabelConnection {
+    #[serde(default)]
+    nodes: Vec<GitHubLabelNode>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -271,6 +373,15 @@ fn parse_repository(repository: &str) -> Result<(String, String), TrackerError> 
     Ok((owner.to_string(), repo.to_string()))
 }
 
+pub(crate) fn github_graphql_endpoint(rest_endpoint: &str) -> String {
+    let endpoint = rest_endpoint.trim_end_matches('/');
+    if let Some(base) = endpoint.strip_suffix("/api/v3") {
+        format!("{base}/api/graphql")
+    } else {
+        format!("{endpoint}/graphql")
+    }
+}
+
 fn github_states(state_names: &[String]) -> Vec<String> {
     state_names
         .iter()
@@ -303,9 +414,16 @@ pub(crate) fn github_issue_number(id: &str) -> Result<String, TrackerError> {
     }
 }
 
+fn is_numeric_github_issue_ref(id: &str) -> bool {
+    github_issue_number(id).is_ok()
+}
+
 pub(crate) fn normalize_github_issue(_repository: &str, node: &GitHubIssueNode) -> Issue {
     Issue {
-        id: node.number.to_string(),
+        id: node
+            .node_id
+            .clone()
+            .unwrap_or_else(|| node.number.to_string()),
         identifier: format!("GH-{}", node.number),
         title: node.title.clone(),
         description: node.body.clone(),
@@ -324,7 +442,33 @@ pub(crate) fn normalize_github_issue(_repository: &str, node: &GitHubIssueNode) 
     }
 }
 
+fn normalize_github_graphql_issue(node: &GitHubGraphqlIssueNode) -> Issue {
+    Issue {
+        id: node.id.clone(),
+        identifier: format!("GH-{}", node.number),
+        title: node.title.clone(),
+        description: node.body.clone(),
+        priority: None,
+        state: node.state.to_lowercase(),
+        branch_name: None,
+        url: node.url.clone(),
+        labels: node
+            .labels
+            .nodes
+            .iter()
+            .map(|label| normalize_state(&label.name))
+            .collect(),
+        blocked_by: Vec::<BlockerRef>::new(),
+        created_at: opt_datetime(node.created_at.as_deref()),
+        updated_at: opt_datetime(node.updated_at.as_deref()),
+    }
+}
+
 fn opt_datetime(raw: Option<&str>) -> Option<DateTime<Utc>> {
     raw.and_then(|value| DateTime::parse_from_rfc3339(value).ok())
         .map(|value| value.with_timezone(&Utc))
+}
+
+fn compact_json(value: &Value) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
 }

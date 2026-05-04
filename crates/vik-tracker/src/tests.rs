@@ -1,13 +1,15 @@
 use serde_json::json;
 
 use crate::{
-    ATTACHMENT_CREATE_MUTATION, CANDIDATE_QUERY, ISSUE_BY_IDENTIFIER_QUERY,
-    ISSUE_STATES_BY_IDS_QUERY,
-    client::{LinearIssueFilterConfig, issue_has_attachment_url},
-    github::{
-        GitHubIssueFilterConfig, GitHubIssueNode, github_issue_number, normalize_github_issue,
+    ATTACHMENT_CREATE_MUTATION, CANDIDATE_QUERY, GitHubIssueFilterConfig,
+    ISSUE_BY_IDENTIFIER_QUERY, ISSUE_STATES_BY_IDS_QUERY, LinearIssueFilterConfig, normalize_issue,
+    provider::{
+        github::{
+            GITHUB_ISSUES_BY_IDS_QUERY, GitHubIssueNode, github_graphql_endpoint,
+            github_issue_number, normalize_github_issue,
+        },
+        linear::issue_has_attachment_url,
     },
-    normalize_issue,
 };
 
 #[test]
@@ -65,6 +67,11 @@ fn delegable_filters_match_assignees_and_tags_case_insensitively() {
 #[test]
 fn state_refresh_uses_graphql_id_list_type() {
     assert!(ISSUE_STATES_BY_IDS_QUERY.contains("$ids: [ID!]!"));
+}
+
+#[test]
+fn github_state_refresh_uses_graphql_nodes_batch_query() {
+    assert!(GITHUB_ISSUES_BY_IDS_QUERY.contains("nodes(ids: $ids)"));
 }
 
 #[test]
@@ -152,6 +159,7 @@ fn github_filters_match_assignees_and_labels_case_insensitively() {
 fn normalizes_github_issue_shape() {
     let issue: GitHubIssueNode = serde_json::from_value(json!({
         "number": 42,
+        "node_id": "I_kwDOExample42",
         "title": "Add tracker support",
         "body": "Details",
         "state": "open",
@@ -164,7 +172,7 @@ fn normalizes_github_issue_shape() {
 
     let normalized = normalize_github_issue("yii-labs/vik", &issue);
 
-    assert_eq!(normalized.id, "42");
+    assert_eq!(normalized.id, "I_kwDOExample42");
     assert_eq!(normalized.identifier, "GH-42");
     assert_eq!(normalized.state, "open");
     assert_eq!(normalized.labels, vec!["feature", "agent"]);
@@ -178,4 +186,16 @@ fn github_issue_number_accepts_internal_and_display_ids() {
     assert_eq!(github_issue_number("yii-labs/vik#42").unwrap(), "42");
     assert_eq!(github_issue_number("GH-42").unwrap(), "42");
     assert!(github_issue_number("bad").is_err());
+}
+
+#[test]
+fn github_graphql_endpoint_uses_public_and_enterprise_shapes() {
+    assert_eq!(
+        github_graphql_endpoint("https://api.github.com"),
+        "https://api.github.com/graphql"
+    );
+    assert_eq!(
+        github_graphql_endpoint("https://github.example.com/api/v3"),
+        "https://github.example.com/api/graphql"
+    );
 }

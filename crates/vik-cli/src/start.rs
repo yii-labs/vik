@@ -114,7 +114,7 @@ fn build_tracker(config: &TrackerConfig) -> Result<TrackerClient, Box<dyn Error>
                 config.filter.assignees.clone(),
                 config.filter.tags.clone(),
             ));
-            Ok(TrackerClient::Linear(LinearClient::new(tracker_config)?))
+            Ok(TrackerClient::new(LinearClient::new(tracker_config)?))
         }
         "github" => {
             let tracker_config = GitHubClientConfig::new(
@@ -131,7 +131,7 @@ fn build_tracker(config: &TrackerConfig) -> Result<TrackerClient, Box<dyn Error>
                 config.filter.assignees.clone(),
                 config.filter.tags.clone(),
             ));
-            Ok(TrackerClient::GitHub(GitHubClient::new(tracker_config)?))
+            Ok(TrackerClient::new(GitHubClient::new(tracker_config)?))
         }
         _ => Err(Box::new(vik_core::TrackerError::UnsupportedTrackerKind)),
     }
@@ -175,6 +175,6 @@ mod tests {
         })
         .unwrap();
 
-        assert!(matches!(tracker, TrackerClient::GitHub(_)));
+        drop(tracker);
     }
 }

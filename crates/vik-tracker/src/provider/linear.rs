@@ -2,10 +2,12 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 use vik_core::{Issue, IssueTracker, TrackerError};
 
-use crate::normalize::normalize_issue;
-use crate::queries::{
-    ATTACHMENT_CREATE_MUTATION, CANDIDATE_QUERY, ISSUE_BY_IDENTIFIER_QUERY,
-    ISSUE_STATES_BY_IDS_QUERY, ISSUES_BY_STATES_QUERY,
+use crate::{
+    normalize::normalize_issue,
+    queries::{
+        ATTACHMENT_CREATE_MUTATION, CANDIDATE_QUERY, ISSUE_BY_IDENTIFIER_QUERY,
+        ISSUE_STATES_BY_IDS_QUERY, ISSUES_BY_STATES_QUERY,
+    },
 };
 
 pub const DEFAULT_LINEAR_ENDPOINT: &str = "https://api.linear.app/graphql";
