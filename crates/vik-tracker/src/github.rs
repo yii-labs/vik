@@ -122,7 +122,11 @@ impl GitHubClient {
         })
     }
 
-    async fn fetch_paginated(&self, state_names: &[String]) -> Result<Vec<Issue>, TrackerError> {
+    async fn fetch_paginated(
+        &self,
+        state_names: &[String],
+        apply_filter: bool,
+    ) -> Result<Vec<Issue>, TrackerError> {
         let states = github_states(state_names);
         let mut issues = Vec::new();
         for state in states {
@@ -134,7 +138,7 @@ impl GitHubClient {
                     nodes
                         .iter()
                         .filter(|node| node.pull_request.is_none())
-                        .filter(|node| self.config.filter.matches(node))
+                        .filter(|node| !apply_filter || self.config.filter.matches(node))
                         .map(|node| normalize_github_issue(&self.config.repository, node)),
                 );
                 if count < self.config.page_size {
@@ -189,7 +193,7 @@ impl GitHubClient {
 #[async_trait]
 impl IssueTracker for GitHubClient {
     async fn fetch_candidate_issues(&self) -> Result<Vec<Issue>, TrackerError> {
-        self.fetch_paginated(&self.config.active_states).await
+        self.fetch_paginated(&self.config.active_states, true).await
     }
 
     async fn fetch_issues_by_states(
@@ -199,7 +203,7 @@ impl IssueTracker for GitHubClient {
         if state_names.is_empty() {
             return Ok(Vec::new());
         }
-        self.fetch_paginated(state_names).await
+        self.fetch_paginated(state_names, false).await
     }
 
     async fn fetch_issue_states_by_ids(
