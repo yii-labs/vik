@@ -24,11 +24,11 @@ description:
 - Runtime JSON logs:
   - Vik logs through `tracing_subscriber::fmt().json()`.
   - The daemon writes logs to stdout and to daily files in `logging.dir`.
-  - If `logging.dir` is omitted, search `<workspace.root>/.vik/logs`.
+  - If `logging.dir` is omitted, search `<workspace.root>/logs`.
   - Daily file names use `vik.log.<date>`.
 - Codex app-server session logs:
   - Builds with VIK-11 append raw Codex app-server JSONL messages under
-    `<workspace.root>/.vik/sessions`.
+    `<workspace.root>/sessions`.
   - Session file names use
     `<issue-identifier>-<session-id>.jsonl`.
   - Filename components are sanitized to ASCII letters, numbers, `.`, `_`, and
@@ -67,7 +67,7 @@ runs can emit similar Codex events.
 3. Search runtime logs by `issue_identifier`, then by `issue_id`.
 4. Extract `workspace.root`, `workspace_path`, `session_id`, and last
    `codex_event`.
-5. Find the matching session log in `<workspace.root>/.vik/sessions`.
+5. Find the matching session log in `<workspace.root>/sessions`.
 6. Trace that `session_id` from process start to terminal outcome across
    daemon logs and the session JSONL file.
 7. Classify the failure.
@@ -101,10 +101,10 @@ rg -n '"issue_id":"<linear-uuid>"|issue_id=<linear-uuid>' <log-dir>
 rg -o '"session_id":"[^"]+"|session_id=[^ ,}]+' <log-dir> | sort -u
 
 # Find session logs for one issue.
-find "<workspace.root>/.vik/sessions" -type f -name 'VIK-9-*.jsonl' -print
+find "<workspace.root>/sessions" -type f -name 'VIK-9-*.jsonl' -print
 
 # Inspect one session log as JSONL.
-jq . "<workspace.root>/.vik/sessions/<issue-identifier>-<session-id>.jsonl" | less
+jq . "<workspace.root>/sessions/<issue-identifier>-<session-id>.jsonl" | less
 
 # Trace one session end to end.
 rg -n '<session-id>' <log-dir>
@@ -115,7 +115,7 @@ rg -n 'stalled_run|retry_dispatch|worker_exit|turn_timeout|turn_failed|turn_canc
 ```
 
 Use the configured `logging.dir` from `WORKFLOW.md`. If it is omitted, use
-`<workspace.root>/.vik/logs`. Do not create committed log artifacts.
+`<workspace.root>/logs`. Do not create committed log artifacts.
 
 ## Investigation Flow
 
@@ -142,7 +142,7 @@ Use the configured `logging.dir` from `WORKFLOW.md`. If it is omitted, use
    - `worker_exit outcome=received`
 4. Inspect session JSONL:
    - Derive session log directory from `workspace.root`:
-     `<workspace.root>/.vik/sessions`.
+     `<workspace.root>/sessions`.
    - Prefer the exact `session_id` from HTTP state or daemon logs.
    - If the exact ID is unavailable, list files matching
      `<issue_identifier>-*.jsonl` and sort by modified time.
