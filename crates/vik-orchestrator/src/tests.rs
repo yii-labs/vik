@@ -32,7 +32,7 @@ fn config() -> ServiceConfig {
             root: "/tmp/vik".into(),
         },
         logging: LoggingConfig {
-            dir: "/tmp/vik/.vik/logs".into(),
+            dir: "/tmp/vik/logs".into(),
         },
         hooks: HooksConfig {
             timeout_ms: 60_000,

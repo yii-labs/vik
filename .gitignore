@@ -2,3 +2,5 @@
 /target
 /.tests
 /.vik
+/logs
+/sessions

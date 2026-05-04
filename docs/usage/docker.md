@@ -13,11 +13,14 @@ docker build -t vik:local .
 ## Workspace Mount
 
 Mount one directory that contains `WORKFLOW.md`. Keep `workspace.root` inside
-that mount so issue clones, `.vik` state, and logs survive container restarts.
+that mount so issue clones, `.vik` state, logs, and sessions survive container
+restarts.
 
 ```text
 /vik-workspace
   .vik/
+  logs/
+  sessions/
   WORKFLOW.md
   VIK-1/
   VIK-2/

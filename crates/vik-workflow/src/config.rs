@@ -228,7 +228,7 @@ impl ServiceConfig {
         let logging_dir = string_value(logging_map, "dir")
             .map(|raw| expand_path_value(&raw, &workflow_dir))
             .transpose()?
-            .unwrap_or_else(|| workspace_root.join(".vik").join("logs"));
+            .unwrap_or_else(|| workspace_root.join("logs"));
 
         let hooks = HooksConfig {
             after_create: string_value(hooks_map, "after_create"),

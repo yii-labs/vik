@@ -11,6 +11,8 @@ use vik_workflow::HooksConfig;
 use crate::error::WorkspaceError;
 use crate::path::{absolute_existing_or_join, ensure_inside_root};
 
+const RESERVED_WORKSPACE_KEYS: &[&str] = &[".vik", "logs", "sessions"];
+
 #[derive(Debug, Clone)]
 pub struct WorkspaceManager {
     root: PathBuf,
@@ -35,6 +37,7 @@ impl WorkspaceManager {
             .await
             .map_err(|err| WorkspaceError::Io(err.to_string()))?;
         let workspace_key = sanitize_workspace_key(identifier);
+        ensure_not_reserved_workspace_key(&workspace_key)?;
         let path = root.join(&workspace_key);
         ensure_inside_root(&root, &path)?;
         let created_now = match fs::metadata(&path).await {
@@ -75,7 +78,9 @@ impl WorkspaceManager {
 
     pub async fn remove_for_issue(&self, identifier: &str) -> Result<(), WorkspaceError> {
         let root = absolute_existing_or_join(&self.root)?;
-        let path = root.join(sanitize_workspace_key(identifier));
+        let workspace_key = sanitize_workspace_key(identifier);
+        ensure_not_reserved_workspace_key(&workspace_key)?;
+        let path = root.join(workspace_key);
         ensure_inside_root(&root, &path)?;
         if fs::metadata(&path).await.is_err() {
             return Ok(());
@@ -160,4 +165,16 @@ impl WorkspaceManager {
         tracing::warn!(hook = name, status, "hook outcome=failed ignored=true");
         Ok(())
     }
+}
+
+fn ensure_not_reserved_workspace_key(workspace_key: &str) -> Result<(), WorkspaceError> {
+    if RESERVED_WORKSPACE_KEYS
+        .iter()
+        .any(|reserved| reserved.eq_ignore_ascii_case(workspace_key))
+    {
+        return Err(WorkspaceError::ReservedWorkspaceKey {
+            key: workspace_key.to_string(),
+        });
+    }
+    Ok(())
 }
