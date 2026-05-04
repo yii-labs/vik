@@ -96,6 +96,7 @@ async fn hooks_receive_configured_environment() {
     manager.remove_for_issue("ABC-1").await.unwrap();
 
     let marker_text = tokio::fs::read_to_string(marker).await.unwrap();
+    let marker_text = marker_text.trim_start_matches('\u{feff}');
     assert_eq!(
         marker_text.lines().collect::<Vec<_>>(),
         [
