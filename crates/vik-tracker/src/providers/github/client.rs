@@ -691,7 +691,7 @@ fn contains_closing_phrase(body: &str, phrase: &str) -> bool {
 }
 
 fn is_reference_char(ch: char) -> bool {
-    ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '/' | '#')
+    ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '/' | '#')
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

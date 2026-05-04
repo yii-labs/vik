@@ -123,6 +123,12 @@ fn closing_reference_detection_handles_full_and_same_repo_refs() {
         &fork_pull_repository,
         42
     ));
+    assert!(body_contains_closing_reference(
+        "Closes yii-labs/vik#42.",
+        &issue_repository,
+        &fork_pull_repository,
+        42
+    ));
     assert!(!body_contains_closing_reference(
         "Related #42",
         &issue_repository,
