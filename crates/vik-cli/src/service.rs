@@ -597,6 +597,7 @@ fn workflow_env_from_dir_with_process_env(
 type WorkflowOrchestrator = Orchestrator<LinearClient, LocalAgentWorker<LinearClient>>;
 
 struct WorkflowRuntime {
+    registration: RegisteredWorkflow,
     orchestrator: Arc<WorkflowOrchestrator>,
     task: tokio::task::JoinHandle<()>,
     server_port: Option<u16>,
@@ -665,8 +666,12 @@ async fn reconcile_registered_workflows(
         }
     };
     for workflow in registry.workflows {
-        let already_running = runtimes.lock().await.contains_key(&workflow.workflow_path);
-        if already_running {
+        let runtime_is_current = runtimes
+            .lock()
+            .await
+            .get(&workflow.workflow_path)
+            .is_some_and(|runtime| runtime.registration == workflow);
+        if runtime_is_current {
             continue;
         }
         let runtime = match start_workflow_runtime(&workflow) {
@@ -680,14 +685,22 @@ async fn reconcile_registered_workflows(
                 continue;
             }
         };
-        tracing::info!(
-            workflow=%workflow.workflow_path.display(),
-            "workflow_runtime outcome=started"
-        );
-        runtimes
+        let previous = runtimes
             .lock()
             .await
             .insert(workflow.workflow_path.clone(), runtime);
+        if let Some(previous) = previous {
+            previous.task.abort();
+            tracing::info!(
+                workflow=%workflow.workflow_path.display(),
+                "workflow_runtime outcome=restarted reason=registration_changed"
+            );
+        } else {
+            tracing::info!(
+                workflow=%workflow.workflow_path.display(),
+                "workflow_runtime outcome=started"
+            );
+        }
     }
     Ok(())
 }
@@ -732,6 +745,7 @@ fn start_workflow_runtime(
     });
 
     Ok(WorkflowRuntime {
+        registration: workflow.clone(),
         orchestrator,
         task,
         server_port,
@@ -1409,6 +1423,39 @@ mod tests {
         );
         let loaded = load_effective_workflow_with_env(Some(workflow_path), &runtime_env).unwrap();
         assert_eq!(loaded.config.tracker.api_key, "from_registration");
+    }
+
+    #[test]
+    fn re_registering_workflow_updates_registration_env_overlay() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflow_path = dir.path().join("WORKFLOW.md");
+        let env_key = unique_env_key("REREGISTRATION");
+        write_workflow_with_api_key(&workflow_path, "work", &format!("${env_key}"));
+        let paths = ServicePaths::from_dir(dir.path().join("service"));
+
+        register_workflow_in_registry_with_env(
+            &paths,
+            Some(workflow_path.clone()),
+            HashMap::from([(env_key.clone(), "old".to_string())]),
+        )
+        .unwrap();
+        let first = read_registry(&paths.registry_path).unwrap().workflows[0].clone();
+
+        register_workflow_in_registry_with_env(
+            &paths,
+            Some(workflow_path),
+            HashMap::from([(env_key.clone(), "new".to_string())]),
+        )
+        .unwrap();
+
+        let registry = read_registry(&paths.registry_path).unwrap();
+        assert_eq!(registry.workflows.len(), 1);
+        let refreshed = &registry.workflows[0];
+        assert_eq!(
+            refreshed.registration_env.get(&env_key).map(String::as_str),
+            Some("new")
+        );
+        assert_ne!(first, *refreshed);
     }
 
     #[test]
