@@ -303,7 +303,6 @@ async fn session_log_appends_raw_codex_jsonl_under_workspace_sessions() {
         path,
         workspace_root
             .path()
-            .join(".vik")
             .join("sessions")
             .join("VIK-11-thread_one_turn_two.jsonl")
     );

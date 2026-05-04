@@ -60,10 +60,7 @@ fn applies_defaults_and_path_resolution() {
     assert_eq!(config.polling.interval_ms, 30_000);
     assert_eq!(config.codex.read_timeout_ms, 30_000);
     assert_eq!(config.workspace.root, dir.path().join("work"));
-    assert_eq!(
-        config.logging.dir,
-        dir.path().join("work").join(".vik").join("logs")
-    );
+    assert_eq!(config.logging.dir, dir.path().join("work").join("logs"));
     assert_eq!(
         config.agent.max_concurrent_agents_by_state.get("todo"),
         Some(&2)

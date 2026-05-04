@@ -7,7 +7,7 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use vik_core::sanitize_workspace_key;
 
 pub(crate) fn session_log_dir(workspace_root: &Path) -> PathBuf {
-    workspace_root.join(".vik").join("sessions")
+    workspace_root.join("sessions")
 }
 
 pub(crate) fn session_log_path(

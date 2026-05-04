@@ -9,7 +9,7 @@ Foreground runs write JSON logs to stdout and to `logging.dir`.
 Default log directory:
 
 ```text
-<workspace.root>/.vik/logs
+<workspace.root>/logs
 ```
 
 Service runs also write detached stdout and stderr to:
@@ -21,7 +21,7 @@ Service runs also write detached stdout and stderr to:
 Useful commands:
 
 ```sh
-tail -f "$HOME/code/vik-workspaces/.vik/logs"/vik.log.*
+tail -f "$HOME/code/vik-workspaces/logs"/vik.log.*
 vik service logs --lines 100
 vik service logs --follow
 ```
@@ -80,7 +80,7 @@ Persisted Codex app-server session logs require VIK-11. Builds that include
 VIK-11 append raw Codex app-server JSONL messages under:
 
 ```text
-<workspace.root>/.vik/sessions/<issue-identifier>-<codex-session-id>.jsonl
+<workspace.root>/sessions/<issue-identifier>-<codex-session-id>.jsonl
 ```
 
 The issue identifier is the human-facing key such as `VIK-16`. Filename
@@ -90,7 +90,7 @@ characters become `_`.
 Find logs for one issue:
 
 ```sh
-find "$HOME/code/vik-workspaces/.vik/sessions" \
+find "$HOME/code/vik-workspaces/sessions" \
   -type f \
   -name 'VIK-16-*.jsonl' \
   -print
@@ -99,7 +99,7 @@ find "$HOME/code/vik-workspaces/.vik/sessions" \
 Inspect one session:
 
 ```sh
-jq . "$HOME/code/vik-workspaces/.vik/sessions/<file>.jsonl" | less
+jq . "$HOME/code/vik-workspaces/sessions/<file>.jsonl" | less
 ```
 
 Session files contain raw Codex app-server messages for the session. They do
