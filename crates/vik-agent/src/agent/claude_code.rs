@@ -550,3 +550,149 @@ fn first_u64(value: &Value, keys: &[&str]) -> Option<u64> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use tokio::time;
+    use vik_core::{HostPlatform, LiveSession, TokenUsage};
+    use vik_workflow::ClaudeCodeConfig;
+
+    use super::{
+        ClaudeUsageAccumulator, claude_code_spawn_command,
+        claude_code_spawn_process_command_for_platform, write_prompt_with_deadline,
+    };
+    use crate::agent::EventSink;
+    use crate::error::AgentError;
+
+    #[test]
+    fn claude_code_spawn_command_adds_runtime_options() {
+        let config = ClaudeCodeConfig {
+            command: "claude -p --output-format stream-json --input-format text".to_string(),
+            model: Some("sonnet".to_string()),
+            permission_mode: Some("acceptEdits".to_string()),
+            ..ClaudeCodeConfig::default()
+        };
+
+        assert_eq!(
+            claude_code_spawn_command(&config, 7),
+            "claude -p --output-format stream-json --input-format text --model 'sonnet' --permission-mode 'acceptEdits' --max-turns '7'"
+        );
+    }
+
+    #[test]
+    fn claude_code_spawn_process_command_uses_shell() {
+        let config = ClaudeCodeConfig {
+            command: "claude -p --output-format stream-json --input-format text".to_string(),
+            ..ClaudeCodeConfig::default()
+        };
+        let command =
+            claude_code_spawn_process_command_for_platform(&config, 3, HostPlatform::Posix);
+
+        assert_eq!(command.program(), "bash");
+        assert_eq!(
+            command.args(),
+            &[
+                "-lc".to_string(),
+                "claude -p --output-format stream-json --input-format text --max-turns '3'"
+                    .to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn claude_code_spawn_process_command_uses_direct_windows_argv() {
+        let config = ClaudeCodeConfig {
+            command: r#""C:\Program Files\Claude\claude.exe" -p --output-format stream-json"#
+                .to_string(),
+            model: Some("o'hara".to_string()),
+            permission_mode: Some("acceptEdits".to_string()),
+            ..ClaudeCodeConfig::default()
+        };
+        let command =
+            claude_code_spawn_process_command_for_platform(&config, 1, HostPlatform::Windows);
+
+        assert_eq!(command.program(), r#"C:\Program Files\Claude\claude.exe"#);
+        assert_eq!(
+            command.args(),
+            &[
+                "-p".to_string(),
+                "--output-format".to_string(),
+                "stream-json".to_string(),
+                "--model".to_string(),
+                "o'hara".to_string(),
+                "--permission-mode".to_string(),
+                "acceptEdits".to_string(),
+                "--max-turns".to_string(),
+                "1".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn claude_code_prompt_write_obeys_turn_deadline() {
+        let (writer, _reader) = tokio::io::duplex(1);
+        let deadline = time::Instant::now() + Duration::from_millis(10);
+        let live = LiveSession::new("claude-code", "process-test");
+        let mut on_event: EventSink = Box::new(|_| {});
+
+        let result = write_prompt_with_deadline(
+            writer,
+            &"x".repeat(8 * 1024),
+            deadline,
+            "VIK-37",
+            1,
+            &live,
+            &mut on_event,
+        )
+        .await;
+
+        assert!(matches!(result, Err(AgentError::TurnTimeout)));
+    }
+
+    #[test]
+    fn claude_code_usage_accumulator_reports_run_totals_across_turns() {
+        let mut usage = ClaudeUsageAccumulator::default();
+
+        assert_eq!(
+            usage.update(TokenUsage {
+                input_tokens: 10,
+                output_tokens: 4,
+                total_tokens: 14,
+            }),
+            TokenUsage {
+                input_tokens: 10,
+                output_tokens: 4,
+                total_tokens: 14,
+            }
+        );
+        assert_eq!(
+            usage.update(TokenUsage {
+                input_tokens: 8,
+                output_tokens: 6,
+                total_tokens: 14,
+            }),
+            TokenUsage {
+                input_tokens: 10,
+                output_tokens: 6,
+                total_tokens: 14,
+            }
+        );
+
+        usage.finish_turn();
+
+        assert_eq!(
+            usage.update(TokenUsage {
+                input_tokens: 3,
+                output_tokens: 2,
+                total_tokens: 5,
+            }),
+            TokenUsage {
+                input_tokens: 13,
+                output_tokens: 8,
+                total_tokens: 19,
+            }
+        );
+    }
+}

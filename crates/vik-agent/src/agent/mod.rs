@@ -7,11 +7,10 @@ use vik_core::AgentEvent;
 use vik_workflow::{CodingAgentKind, ServiceConfig};
 
 pub(crate) mod claude_code;
-mod codex;
+pub(crate) mod codex;
 
 use self::claude_code::ClaudeCodeClient;
-use self::codex::CodexAdapter;
-use crate::client::CodexAppServerClient;
+use self::codex::{CodexAdapter, CodexAppServerClient};
 use crate::error::AgentError;
 use crate::tools::DynamicTools;
 
