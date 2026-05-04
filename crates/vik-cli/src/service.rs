@@ -136,6 +136,7 @@ struct ServiceTarget {
     paths: ServicePaths,
     port: Option<u16>,
     bind_address: Option<IpAddr>,
+    legacy_workdir: PathBuf,
 }
 
 impl ServiceTarget {
@@ -144,6 +145,7 @@ impl ServiceTarget {
             paths: ServicePaths::load(None)?,
             port,
             bind_address,
+            legacy_workdir: env::current_dir()?,
         })
     }
 
@@ -213,6 +215,9 @@ impl ServiceTarget {
 
     fn stop(&self, remove_state: bool) -> Result<bool, Box<dyn Error>> {
         let Some(mut state) = read_state(&self.paths.state_path)? else {
+            if stop_legacy_services_in_workdir(&self.legacy_workdir, remove_state)? > 0 {
+                return Ok(true);
+            }
             println!("service not installed: {}", self.paths.state_path.display());
             return Ok(false);
         };
@@ -251,16 +256,20 @@ impl ServiceTarget {
     }
 
     fn uninstall(&self) -> Result<(), Box<dyn Error>> {
-        if self.stop(true)? {
-            remove_state_file(&self.paths.registry_path)?;
-            println!("service uninstalled: {}", self.paths.state_path.display());
-        }
+        let _ = self.stop(true)?;
+        let _ = stop_legacy_services_in_workdir(&self.legacy_workdir, true)?;
+        remove_state_file(&self.paths.registry_path)?;
+        println!("service uninstalled: {}", self.paths.state_path.display());
         Ok(())
     }
 
     fn print_status(&self) -> Result<(), Box<dyn Error>> {
         let registry = read_registry(&self.paths.registry_path)?;
         let Some(state) = read_state(&self.paths.state_path)? else {
+            if print_legacy_status_in_workdir(&self.legacy_workdir)? {
+                print_registry_status(&registry);
+                return Ok(());
+            }
             println!("not installed: {}", self.paths.state_path.display());
             print_registry_status(&registry);
             return Ok(());
@@ -361,6 +370,26 @@ struct ServiceState {
     port: Option<u16>,
     bind_address: Option<String>,
     command: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LegacyServiceState {
+    version: u32,
+    workflow_path: PathBuf,
+    cwd: PathBuf,
+    pid: Option<u32>,
+    status: StoredStatus,
+    started_at_unix: Option<u64>,
+    stopped_at_unix: Option<u64>,
+    log_path: PathBuf,
+    port: Option<u16>,
+    command: Vec<String>,
+}
+
+#[derive(Debug)]
+struct LegacyServiceEntry {
+    path: PathBuf,
+    state: LegacyServiceState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -488,7 +517,7 @@ fn register_workflow_in_registry_with_env(
     let runtime_env = workflow_env_from_dir_with_process_env(&cwd, process_env.clone())?;
     let loaded = load_effective_workflow_with_env(Some(management_path), &runtime_env)?;
     loaded.config.validate_for_dispatch()?;
-    let registration_env = capture_registration_env(&loaded.definition.config, &process_env);
+    let registration_env = capture_registration_env(&loaded.definition.config, &runtime_env);
     let workflow_path = fs::canonicalize(&loaded.definition.path)?;
     let cwd = if explicit_workflow {
         workflow_path
@@ -568,6 +597,7 @@ fn load_dotenv_from_dir(dir: &Path) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[cfg(test)]
 fn workflow_env_from_dir(dir: &Path) -> Result<HashMap<String, String>, Box<dyn Error>> {
     workflow_env_from_dir_with_process_env(dir, env::vars().collect())
 }
@@ -755,7 +785,14 @@ fn start_workflow_runtime(
 fn workflow_runtime_env(
     workflow: &RegisteredWorkflow,
 ) -> Result<HashMap<String, String>, Box<dyn Error>> {
-    let mut runtime_env = workflow_env_from_dir(&workflow.cwd)?;
+    workflow_runtime_env_with_process_env(workflow, env::vars().collect())
+}
+
+fn workflow_runtime_env_with_process_env(
+    workflow: &RegisteredWorkflow,
+    process_env: HashMap<String, String>,
+) -> Result<HashMap<String, String>, Box<dyn Error>> {
+    let mut runtime_env = workflow_env_from_dir_with_process_env(&workflow.cwd, process_env)?;
     for (key, value) in &workflow.registration_env {
         runtime_env.insert(key.clone(), value.clone());
     }
@@ -1001,6 +1038,130 @@ fn print_registry_status(registry: &WorkflowRegistry) {
     }
 }
 
+fn print_legacy_status_in_workdir(workdir: &Path) -> Result<bool, Box<dyn Error>> {
+    let entries = legacy_service_entries_in_workdir(workdir)?;
+    if entries.is_empty() {
+        return Ok(false);
+    }
+
+    for entry in entries {
+        match classify_legacy_state(&entry.state) {
+            RuntimeStatus::Running => println!(
+                "legacy running: pid={} workflow={} log={}",
+                entry.state.pid.unwrap_or_default(),
+                entry.state.workflow_path.display(),
+                entry.state.log_path.display()
+            ),
+            RuntimeStatus::Stopped => println!(
+                "legacy stopped: workflow={} log={}",
+                entry.state.workflow_path.display(),
+                entry.state.log_path.display()
+            ),
+            RuntimeStatus::Stale => println!(
+                "legacy stale: pid={} workflow={} log={}",
+                entry.state.pid.unwrap_or_default(),
+                entry.state.workflow_path.display(),
+                entry.state.log_path.display()
+            ),
+        }
+    }
+    Ok(true)
+}
+
+fn stop_legacy_services_in_workdir(
+    workdir: &Path,
+    remove_state: bool,
+) -> Result<usize, Box<dyn Error>> {
+    let entries = legacy_service_entries_in_workdir(workdir)?;
+    let count = entries.len();
+    for mut entry in entries {
+        match classify_legacy_state(&entry.state) {
+            RuntimeStatus::Running => {
+                let pid = entry.state.pid.unwrap_or_default();
+                terminate_pid(pid)?;
+                entry.state.status = StoredStatus::Stopped;
+                entry.state.stopped_at_unix = Some(now_unix());
+                println!("legacy service stopped: pid={pid}");
+            }
+            RuntimeStatus::Stopped => {
+                println!("legacy service already stopped: {}", entry.path.display());
+            }
+            RuntimeStatus::Stale => {
+                let pid = entry.state.pid.unwrap_or_default();
+                if pid != 0 && stale_service_group_cleanup_allowed(pid) {
+                    terminate_stale_service_processes(pid)?;
+                }
+                entry.state.status = StoredStatus::Stopped;
+                entry.state.stopped_at_unix = Some(now_unix());
+                println!("legacy service stale: pid={pid} is not running");
+            }
+        }
+
+        if remove_state {
+            remove_state_file(&entry.path)?;
+        } else {
+            write_legacy_state(&entry.path, &entry.state)?;
+        }
+    }
+    Ok(count)
+}
+
+fn legacy_service_entries_in_workdir(
+    workdir: &Path,
+) -> Result<Vec<LegacyServiceEntry>, Box<dyn Error>> {
+    let mut entries = Vec::new();
+    for path in legacy_service_state_paths_in_workdir(workdir)? {
+        if let Some(state) = read_legacy_state(&path)? {
+            entries.push(LegacyServiceEntry { path, state });
+        }
+    }
+    Ok(entries)
+}
+
+fn legacy_service_state_paths_in_workdir(workdir: &Path) -> io::Result<Vec<PathBuf>> {
+    let service_dir = workdir.join(".vik").join("service");
+    let mut paths = Vec::new();
+    let entries = match fs::read_dir(&service_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(paths),
+        Err(err) => return Err(err),
+    };
+    for entry in entries {
+        let path = entry?.path();
+        if !path.is_file() || path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        if matches!(
+            path.file_name().and_then(|value| value.to_str()),
+            Some("service.json" | "workflows.json")
+        ) {
+            continue;
+        }
+        paths.push(path);
+    }
+    paths.sort();
+    Ok(paths)
+}
+
+fn read_legacy_state(path: &Path) -> Result<Option<LegacyServiceState>, Box<dyn Error>> {
+    match fs::read_to_string(path) {
+        Ok(body) => match serde_json::from_str(&body) {
+            Ok(state) => Ok(Some(state)),
+            Err(_) => Ok(None),
+        },
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn write_legacy_state(path: &Path, state: &LegacyServiceState) -> Result<(), Box<dyn Error>> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, format!("{}\n", serde_json::to_string_pretty(state)?))?;
+    Ok(())
+}
+
 fn remove_state_file(path: &Path) -> Result<(), Box<dyn Error>> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
@@ -1012,6 +1173,16 @@ fn remove_state_file(path: &Path) -> Result<(), Box<dyn Error>> {
 fn classify_state(state: &ServiceState) -> RuntimeStatus {
     match (state.status, state.pid) {
         (StoredStatus::Running, Some(pid)) if process_matches_state(pid, state) => {
+            RuntimeStatus::Running
+        }
+        (StoredStatus::Running, Some(_)) => RuntimeStatus::Stale,
+        _ => RuntimeStatus::Stopped,
+    }
+}
+
+fn classify_legacy_state(state: &LegacyServiceState) -> RuntimeStatus {
+    match (state.status, state.pid) {
+        (StoredStatus::Running, Some(pid)) if process_matches_legacy_state(pid, state) => {
             RuntimeStatus::Running
         }
         (StoredStatus::Running, Some(_)) => RuntimeStatus::Stale,
@@ -1176,6 +1347,27 @@ fn process_matches_state(pid: u32, state: &ServiceState) -> bool {
     command_mentions_service_dir(&command, &state.service_dir)
 }
 
+#[cfg(unix)]
+fn process_matches_legacy_state(pid: u32, state: &LegacyServiceState) -> bool {
+    if !process_alive(pid) {
+        return false;
+    }
+
+    let Ok(output) = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "command="])
+        .output()
+    else {
+        return true;
+    };
+    if !output.status.success() {
+        return true;
+    }
+    let Ok(command) = String::from_utf8(output.stdout) else {
+        return true;
+    };
+    command_mentions_workflow(&command, &state.workflow_path)
+}
+
 #[cfg(windows)]
 fn process_alive(pid: u32) -> bool {
     Command::new("tasklist")
@@ -1210,8 +1402,37 @@ fn process_matches_state(pid: u32, state: &ServiceState) -> bool {
     )
 }
 
+#[cfg(windows)]
+fn process_matches_legacy_state(pid: u32, state: &LegacyServiceState) -> bool {
+    if !process_alive(pid) {
+        return false;
+    }
+    let filter = format!("ProcessId = {pid}");
+    let Ok(output) = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            &format!("(Get-CimInstance Win32_Process -Filter '{filter}').CommandLine"),
+        ])
+        .output()
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    command_mentions_workflow(
+        String::from_utf8_lossy(&output.stdout).as_ref(),
+        &state.workflow_path,
+    )
+}
+
 fn command_mentions_service_dir(command: &str, service_dir: &Path) -> bool {
     command.contains(service_dir.to_string_lossy().as_ref())
+}
+
+fn command_mentions_workflow(command: &str, workflow_path: &Path) -> bool {
+    command.contains(workflow_path.to_string_lossy().as_ref())
 }
 
 #[cfg(unix)]
@@ -1426,6 +1647,37 @@ mod tests {
     }
 
     #[test]
+    fn registration_env_captures_effective_dotenv_refs() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflow_path = dir.path().join("WORKFLOW.md");
+        let env_key = unique_env_key("DOTENV_CAPTURE");
+        write_workflow_with_api_key(&workflow_path, "work", &format!("${env_key}"));
+        fs::write(dir.path().join(".env"), format!("{env_key}=from_dotenv\n")).unwrap();
+        let paths = ServicePaths::from_dir(dir.path().join("service"));
+
+        register_workflow_in_registry_with_env(&paths, Some(workflow_path.clone()), HashMap::new())
+            .unwrap();
+
+        let registry = read_registry(&paths.registry_path).unwrap();
+        let workflow = &registry.workflows[0];
+        assert_eq!(
+            workflow.registration_env.get(&env_key).map(String::as_str),
+            Some("from_dotenv")
+        );
+        let runtime_env = workflow_runtime_env_with_process_env(
+            workflow,
+            HashMap::from([(env_key.clone(), "stale_daemon".to_string())]),
+        )
+        .unwrap();
+        assert_eq!(
+            runtime_env.get(&env_key).map(String::as_str),
+            Some("from_dotenv")
+        );
+        let loaded = load_effective_workflow_with_env(Some(workflow_path), &runtime_env).unwrap();
+        assert_eq!(loaded.config.tracker.api_key, "from_dotenv");
+    }
+
+    #[test]
     fn re_registering_workflow_updates_registration_env_overlay() {
         let dir = tempfile::tempdir().unwrap();
         let workflow_path = dir.path().join("WORKFLOW.md");
@@ -1523,6 +1775,7 @@ mod tests {
             paths: paths.clone(),
             port: None,
             bind_address: None,
+            legacy_workdir: dir.path().to_path_buf(),
         };
         let state = service_state_with_port(None);
         write_state(&paths.state_path, &state).unwrap();
@@ -1544,6 +1797,88 @@ mod tests {
 
         assert!(!paths.state_path.exists());
         assert!(!paths.registry_path.exists());
+    }
+
+    #[test]
+    fn uninstall_removes_registry_without_service_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = ServicePaths::from_dir(dir.path().join("service"));
+        let target = ServiceTarget {
+            paths: paths.clone(),
+            port: None,
+            bind_address: None,
+            legacy_workdir: dir.path().to_path_buf(),
+        };
+        write_registry(
+            &paths.registry_path,
+            &WorkflowRegistry {
+                version: 1,
+                workflows: vec![RegisteredWorkflow {
+                    workflow_path: dir.path().join("WORKFLOW.md"),
+                    cwd: dir.path().to_path_buf(),
+                    registration_env: HashMap::new(),
+                    registered_at_unix: 1,
+                }],
+            },
+        )
+        .unwrap();
+
+        target.uninstall().unwrap();
+
+        assert!(!paths.state_path.exists());
+        assert!(!paths.registry_path.exists());
+    }
+
+    #[test]
+    fn legacy_service_state_paths_find_old_workflow_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let service_dir = dir.path().join(".vik").join("service");
+        fs::create_dir_all(&service_dir).unwrap();
+        let legacy_path = service_dir.join("WORKFLOW-123.json");
+        fs::write(&legacy_path, "{}").unwrap();
+        fs::write(service_dir.join("service.json"), "{}").unwrap();
+        fs::write(service_dir.join("workflows.json"), "{}").unwrap();
+        fs::write(service_dir.join("service.log"), "").unwrap();
+
+        assert_eq!(
+            legacy_service_state_paths_in_workdir(dir.path()).unwrap(),
+            vec![legacy_path]
+        );
+    }
+
+    #[test]
+    fn stop_legacy_services_removes_old_stopped_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy_path = dir
+            .path()
+            .join(".vik")
+            .join("service")
+            .join("WORKFLOW-123.json");
+        write_legacy_state(
+            &legacy_path,
+            &LegacyServiceState {
+                version: 1,
+                workflow_path: dir.path().join("WORKFLOW.md"),
+                cwd: dir.path().to_path_buf(),
+                pid: None,
+                status: StoredStatus::Stopped,
+                started_at_unix: Some(1),
+                stopped_at_unix: Some(2),
+                log_path: dir
+                    .path()
+                    .join(".vik")
+                    .join("service")
+                    .join("WORKFLOW-123.log"),
+                port: None,
+                command: vec![],
+            },
+        )
+        .unwrap();
+
+        let stopped = stop_legacy_services_in_workdir(dir.path(), true).unwrap();
+
+        assert_eq!(stopped, 1);
+        assert!(!legacy_path.exists());
     }
 
     #[test]
@@ -1638,6 +1973,7 @@ mod tests {
             paths: ServicePaths::from_dir(PathBuf::from("/tmp/vik/.vik/service")),
             port: None,
             bind_address: None,
+            legacy_workdir: PathBuf::from("/tmp/vik"),
         }
     }
 
