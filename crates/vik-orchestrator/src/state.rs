@@ -63,6 +63,17 @@ impl OrchestratorState {
             },
         );
     }
+
+    pub fn abort_running_workers(&mut self) -> usize {
+        let running = std::mem::take(&mut self.running);
+        let count = running.len();
+        for entry in running.into_values() {
+            entry.abort.abort();
+        }
+        self.claimed.clear();
+        self.retry_attempts.clear();
+        count
+    }
 }
 
 #[derive(Debug)]

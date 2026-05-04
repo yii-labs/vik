@@ -75,6 +75,10 @@ where
         self.refresh_tx.clone()
     }
 
+    pub async fn abort_running_workers(&self) -> usize {
+        self.state.lock().await.abort_running_workers()
+    }
+
     pub async fn run_forever(&self) -> Result<(), OrchestratorError> {
         self.startup_cleanup().await;
         let mut poll_interval_ms = {

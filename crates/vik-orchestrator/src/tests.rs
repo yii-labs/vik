@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use chrono::{TimeZone, Utc};
 use serde_json::json;
+use tokio::sync::oneshot;
 use vik_core::{AgentEvent, BlockerRef, Issue, TokenUsage, WorkerOutcome};
 use vik_workflow::{
     AgentConfig, CodexConfig, HooksConfig, LoggingConfig, PollingConfig, ServiceConfig,
@@ -180,6 +181,48 @@ async fn lifecycle_event_without_session_updates_running_status() {
     assert_eq!(running.last_message.as_deref(), Some("starting"));
     assert!(running.last_event_at.is_some());
     assert_eq!(state.recent_events["A"][0].event, "codex_thread_starting");
+}
+
+#[tokio::test]
+async fn abort_running_workers_clears_state_and_aborts_handles() {
+    let config = config();
+    let mut state = OrchestratorState::new(&config);
+    let current_issue = issue("A", Some(1), 1, "Todo");
+    let (tx, rx) = oneshot::channel::<()>();
+    let handle = tokio::spawn(async move {
+        let _ = rx.await;
+        WorkerOutcome::normal(&issue("A", Some(1), 1, "Todo"))
+    });
+    state.claimed.insert("A".into());
+    state.schedule_retry("B".into(), "B".into(), 1, 10_000, Some("retry".into()));
+    state.running.insert(
+        "A".into(),
+        RunningEntry {
+            issue: current_issue.clone(),
+            identifier: current_issue.identifier.clone(),
+            retry_attempt: None,
+            started_at: Utc::now(),
+            workspace_path: None,
+            session_id: None,
+            turn_count: 0,
+            last_event: None,
+            last_message: None,
+            last_event_at: None,
+            tokens: TokenUsage::default(),
+            last_reported_input_tokens: 0,
+            last_reported_output_tokens: 0,
+            last_reported_total_tokens: 0,
+            abort: handle,
+        },
+    );
+
+    assert_eq!(state.abort_running_workers(), 1);
+    tokio::task::yield_now().await;
+
+    assert!(state.running.is_empty());
+    assert!(state.claimed.is_empty());
+    assert!(state.retry_attempts.is_empty());
+    assert!(tx.send(()).is_err());
 }
 
 #[test]

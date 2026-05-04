@@ -726,8 +726,10 @@ async fn reconcile_registered_workflows(
             .insert(workflow.workflow_path.clone(), runtime);
         if let Some(previous) = previous {
             previous.task.abort();
+            let aborted_workers = previous.orchestrator.abort_running_workers().await;
             tracing::info!(
                 workflow=%workflow.workflow_path.display(),
+                aborted_workers,
                 "workflow_runtime outcome=restarted reason=registration_changed"
             );
         } else {
@@ -848,9 +850,7 @@ fn collect_config_env_refs_from_mapping(
 fn collect_config_env_refs_from_value(value: &YamlValue, keys: &mut BTreeSet<String>) {
     match value {
         YamlValue::String(raw) => {
-            if let Some(var) = exact_env_ref(raw) {
-                keys.insert(var.to_string());
-            }
+            collect_env_refs_from_string(raw, keys);
             if raw.starts_with("~/") {
                 keys.insert("HOME".to_string());
             }
@@ -865,27 +865,89 @@ fn collect_config_env_refs_from_value(value: &YamlValue, keys: &mut BTreeSet<Str
     }
 }
 
-fn exact_env_ref(raw: &str) -> Option<&str> {
-    let var = raw.strip_prefix('$')?;
-    if var.is_empty() || var.contains('/') || var.contains(' ') {
-        None
-    } else {
-        Some(var)
+fn collect_env_refs_from_string(raw: &str, keys: &mut BTreeSet<String>) {
+    let mut chars = raw.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '$' {
+            continue;
+        }
+
+        if chars.next_if_eq(&'{').is_some() {
+            let mut var = String::new();
+            let mut closed = false;
+            for ch in chars.by_ref() {
+                if ch == '}' {
+                    closed = true;
+                    break;
+                }
+                var.push(ch);
+            }
+            if closed && valid_env_ref(&var) {
+                keys.insert(var);
+            }
+            continue;
+        }
+
+        let Some(&first) = chars.peek() else {
+            continue;
+        };
+        if !env_ref_start(first) {
+            continue;
+        }
+        let mut var = String::new();
+        while let Some(&ch) = chars.peek() {
+            if !env_ref_continue(ch) {
+                break;
+            }
+            var.push(ch);
+            chars.next();
+        }
+        keys.insert(var);
     }
 }
 
+fn valid_env_ref(raw: &str) -> bool {
+    let mut chars = raw.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    env_ref_start(first) && chars.all(env_ref_continue)
+}
+
+fn env_ref_start(ch: char) -> bool {
+    ch == '_' || ch.is_ascii_alphabetic()
+}
+
+fn env_ref_continue(ch: char) -> bool {
+    env_ref_start(ch) || ch.is_ascii_digit()
+}
+
 async fn reap_finished_workflows(runtimes: Arc<Mutex<BTreeMap<PathBuf, WorkflowRuntime>>>) {
-    let mut runtimes = runtimes.lock().await;
-    runtimes.retain(|workflow_path, runtime| {
-        let keep = !runtime.task.is_finished();
-        if !keep {
-            tracing::warn!(
-                workflow=%workflow_path.display(),
-                "workflow_runtime outcome=exited"
-            );
-        }
-        keep
-    });
+    let finished = {
+        let mut runtimes = runtimes.lock().await;
+        let finished_paths: Vec<_> = runtimes
+            .iter()
+            .filter_map(|(workflow_path, runtime)| {
+                runtime.task.is_finished().then_some(workflow_path.clone())
+            })
+            .collect();
+        finished_paths
+            .into_iter()
+            .filter_map(|workflow_path| {
+                runtimes
+                    .remove(&workflow_path)
+                    .map(|runtime| (workflow_path, runtime))
+            })
+            .collect::<Vec<_>>()
+    };
+    for (workflow_path, runtime) in finished {
+        let aborted_workers = runtime.orchestrator.abort_running_workers().await;
+        tracing::warn!(
+            workflow=%workflow_path.display(),
+            aborted_workers,
+            "workflow_runtime outcome=exited"
+        );
+    }
 }
 
 async fn preferred_runtime_port(
@@ -992,8 +1054,17 @@ async fn broadcast_refresh(runtimes: Arc<Mutex<BTreeMap<PathBuf, WorkflowRuntime
 }
 
 async fn abort_workflows(runtimes: Arc<Mutex<BTreeMap<PathBuf, WorkflowRuntime>>>) {
-    for runtime in runtimes.lock().await.values() {
-        runtime.task.abort();
+    let orchestrators = {
+        let runtimes = runtimes.lock().await;
+        let mut orchestrators = Vec::with_capacity(runtimes.len());
+        for runtime in runtimes.values() {
+            runtime.task.abort();
+            orchestrators.push(Arc::clone(&runtime.orchestrator));
+        }
+        orchestrators
+    };
+    for orchestrator in orchestrators {
+        let _ = orchestrator.abort_running_workers().await;
     }
 }
 
@@ -1722,6 +1793,45 @@ mod tests {
         );
         let loaded = load_effective_workflow_with_env(Some(workflow_path), &runtime_env).unwrap();
         assert_eq!(loaded.config.tracker.api_key, "from_dotenv");
+    }
+
+    #[test]
+    fn registration_env_captures_embedded_string_refs() {
+        let config = serde_yaml::from_str::<YamlValue>(
+            r#"
+hooks:
+  before_run: echo $HOOK_TOKEN
+codex:
+  command: ${CODEX_BIN} app-server
+workspace:
+  root: $WORKSPACE_ROOT/nested
+"#,
+        )
+        .unwrap();
+        let config = config.as_mapping().unwrap();
+        let captured = capture_registration_env(
+            config,
+            &HashMap::from([
+                ("HOOK_TOKEN".to_string(), "hook-secret".to_string()),
+                ("CODEX_BIN".to_string(), "codex-custom".to_string()),
+                ("WORKSPACE_ROOT".to_string(), "/tmp/workspaces".to_string()),
+                ("UNRELATED_SECRET".to_string(), "do-not-persist".to_string()),
+            ]),
+        );
+
+        assert_eq!(
+            captured.get("HOOK_TOKEN").map(String::as_str),
+            Some("hook-secret")
+        );
+        assert_eq!(
+            captured.get("CODEX_BIN").map(String::as_str),
+            Some("codex-custom")
+        );
+        assert_eq!(
+            captured.get("WORKSPACE_ROOT").map(String::as_str),
+            Some("/tmp/workspaces")
+        );
+        assert!(!captured.contains_key("UNRELATED_SECRET"));
     }
 
     #[test]
