@@ -16,16 +16,20 @@ use crate::event::{agent_event, truncate};
 use crate::process::ProcessCommand;
 
 const CONTINUATION_PROMPT: &str = "Continue working on this Linear issue. Check current issue state and proceed only if it is still active.";
-const HEARTBEAT_INTERVAL_SECS: u64 = 30;
+const DEFAULT_HEARTBEAT_INTERVAL_MS: u64 = 30_000;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ClaudeCodeClient {
     config: ClaudeCodeConfig,
+    heartbeat_interval: Duration,
 }
 
 impl ClaudeCodeClient {
-    pub(crate) fn new(config: ClaudeCodeConfig) -> Self {
-        Self { config }
+    pub(crate) fn new(config: ClaudeCodeConfig, stall_timeout_ms: i64) -> Self {
+        Self {
+            config,
+            heartbeat_interval: heartbeat_interval_for_stall_timeout(stall_timeout_ms),
+        }
     }
 
     async fn run_request(&self, request: CodingAgentRun) -> Result<(), AgentError> {
@@ -163,10 +167,13 @@ impl ClaudeCodeClient {
             stdin,
             &turn.prompt,
             deadline,
-            turn.issue_id,
-            turn.turn_count,
-            &live,
             on_event,
+            PromptWriteContext {
+                issue_id: turn.issue_id,
+                turn_count: turn.turn_count,
+                live: &live,
+                heartbeat_interval: self.heartbeat_interval(),
+            },
         )
         .await
         {
@@ -181,7 +188,8 @@ impl ClaudeCodeClient {
                 let _ = child.kill().await;
                 return Err(AgentError::TurnTimeout);
             };
-            let wait = remaining.min(heartbeat_interval());
+            let heartbeat_interval = self.heartbeat_interval();
+            let wait = remaining.min(heartbeat_interval);
             match time::timeout(wait, lines.next_line()).await {
                 Ok(Ok(Some(line))) => {
                     if line.trim().is_empty() {
@@ -209,7 +217,7 @@ impl ClaudeCodeClient {
                 Ok(Ok(None)) => break,
                 Ok(Err(err)) => return Err(AgentError::ResponseError(err.to_string())),
                 Err(_) => {
-                    if remaining <= heartbeat_interval() {
+                    if remaining <= heartbeat_interval {
                         let _ = child.kill().await;
                         return Err(AgentError::TurnTimeout);
                     }
@@ -235,7 +243,7 @@ impl ClaudeCodeClient {
                 let _ = child.kill().await;
                 return Err(AgentError::TurnTimeout);
             };
-            let wait = remaining.min(heartbeat_interval());
+            let wait = remaining.min(self.heartbeat_interval());
             time::sleep(wait).await;
             if let Some(status) = child
                 .try_wait()
@@ -270,6 +278,10 @@ impl ClaudeCodeClient {
             json!({ "status": "completed", "turn_count": turn.turn_count }),
         );
         Ok(())
+    }
+
+    fn heartbeat_interval(&self) -> Duration {
+        self.heartbeat_interval
     }
 }
 
@@ -308,10 +320,8 @@ pub(crate) async fn write_prompt_with_deadline<W>(
     mut stdin: W,
     prompt: &str,
     deadline: time::Instant,
-    issue_id: &str,
-    turn_count: u32,
-    live: &LiveSession,
     on_event: &mut EventSink,
+    context: PromptWriteContext<'_>,
 ) -> Result<(), AgentError>
 where
     W: AsyncWrite + Unpin,
@@ -331,23 +341,30 @@ where
         let Some(remaining) = remaining_time(deadline) else {
             return Err(AgentError::TurnTimeout);
         };
-        let wait = remaining.min(heartbeat_interval());
+        let wait = remaining.min(context.heartbeat_interval);
         match time::timeout(wait, &mut write_prompt).await {
             Ok(result) => return result,
             Err(_) => {
-                if remaining <= heartbeat_interval() {
+                if remaining <= context.heartbeat_interval {
                     return Err(AgentError::TurnTimeout);
                 }
                 emit_lifecycle_event(
                     on_event,
-                    issue_id,
-                    Some(live.clone()),
+                    context.issue_id,
+                    Some(context.live.clone()),
                     "claude_code_heartbeat",
-                    json!({ "turn_count": turn_count, "phase": "stdin" }),
+                    json!({ "turn_count": context.turn_count, "phase": "stdin" }),
                 );
             }
         }
     }
+}
+
+pub(crate) struct PromptWriteContext<'a> {
+    issue_id: &'a str,
+    turn_count: u32,
+    live: &'a LiveSession,
+    heartbeat_interval: Duration,
 }
 
 pub(crate) fn claude_code_spawn_command(config: &ClaudeCodeConfig, max_turns: u32) -> String {
@@ -498,8 +515,12 @@ fn remaining_time(deadline: time::Instant) -> Option<Duration> {
     (now < deadline).then_some(deadline - now)
 }
 
-fn heartbeat_interval() -> Duration {
-    Duration::from_secs(HEARTBEAT_INTERVAL_SECS)
+fn heartbeat_interval_for_stall_timeout(stall_timeout_ms: i64) -> Duration {
+    if stall_timeout_ms <= 0 {
+        return Duration::from_millis(DEFAULT_HEARTBEAT_INTERVAL_MS);
+    }
+    let safe_interval_ms = ((stall_timeout_ms as u64) / 2).max(1);
+    Duration::from_millis(DEFAULT_HEARTBEAT_INTERVAL_MS.min(safe_interval_ms))
 }
 
 fn claude_code_continuation_prompt(original_prompt: &str) -> String {
@@ -566,7 +587,7 @@ mod tests {
     use vik_workflow::ClaudeCodeConfig;
 
     use super::{
-        ClaudeUsageAccumulator, claude_code_spawn_command,
+        ClaudeUsageAccumulator, PromptWriteContext, claude_code_spawn_command,
         claude_code_spawn_process_command_for_platform, write_prompt_with_deadline,
     };
     use crate::agent::EventSink;
@@ -576,11 +597,14 @@ mod tests {
     #[tokio::test]
     async fn claude_code_accepts_success_after_stdout_eof_near_deadline() {
         let workspace = tempfile::TempDir::new().unwrap();
-        let client = super::ClaudeCodeClient::new(ClaudeCodeConfig {
-            command: "sh -c 'exec 1>&-; cat >/dev/null; sleep 0.01; exit 0'".to_string(),
-            turn_timeout_ms: 1000,
-            ..ClaudeCodeConfig::default()
-        });
+        let client = super::ClaudeCodeClient::new(
+            ClaudeCodeConfig {
+                command: "sh -c 'exec 1>&-; cat >/dev/null; sleep 0.01; exit 0'".to_string(),
+                turn_timeout_ms: 1000,
+                ..ClaudeCodeConfig::default()
+            },
+            300_000,
+        );
 
         let result = client
             .run_request(crate::agent::CodingAgentRun {
@@ -609,6 +633,22 @@ mod tests {
         assert_eq!(
             claude_code_spawn_command(&config, 7),
             "claude -p --output-format stream-json --input-format text --model 'sonnet' --permission-mode 'acceptEdits' --max-turns '7'"
+        );
+    }
+
+    #[test]
+    fn claude_code_heartbeat_interval_stays_below_stall_timeout() {
+        assert_eq!(
+            super::heartbeat_interval_for_stall_timeout(300_000),
+            Duration::from_millis(30_000)
+        );
+        assert_eq!(
+            super::heartbeat_interval_for_stall_timeout(10_000),
+            Duration::from_millis(5_000)
+        );
+        assert_eq!(
+            super::heartbeat_interval_for_stall_timeout(0),
+            Duration::from_millis(30_000)
         );
     }
 
@@ -672,10 +712,13 @@ mod tests {
             writer,
             &"x".repeat(8 * 1024),
             deadline,
-            "VIK-37",
-            1,
-            &live,
             &mut on_event,
+            PromptWriteContext {
+                issue_id: "VIK-37",
+                turn_count: 1,
+                live: &live,
+                heartbeat_interval: Duration::from_millis(1),
+            },
         )
         .await;
 

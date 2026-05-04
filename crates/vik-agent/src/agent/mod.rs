@@ -44,6 +44,9 @@ pub(crate) fn adapter_for(
         CodingAgentKind::Codex => Box::new(CodexAdapter {
             client: CodexAppServerClient::new(config.codex.clone()).with_dynamic_tools(tools),
         }),
-        CodingAgentKind::ClaudeCode => Box::new(ClaudeCodeClient::new(config.claude_code.clone())),
+        CodingAgentKind::ClaudeCode => Box::new(ClaudeCodeClient::new(
+            config.claude_code.clone(),
+            config.codex.stall_timeout_ms,
+        )),
     }
 }
