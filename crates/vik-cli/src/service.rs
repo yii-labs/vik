@@ -490,9 +490,8 @@ enum RuntimeStatus {
 
 pub(crate) async fn run(args: ServiceArgs) -> Result<(), Box<dyn Error>> {
     match args.command {
-        ServiceCommand::Install(args) => {
-            let target = ServiceTarget::load_for_dispatch(args.workflow, args.port)?;
-            target.start_detached("installed")?;
+        ServiceCommand::Install(args) | ServiceCommand::Start(args) => {
+            start(args.into_start_options(), true).await?;
         }
         ServiceCommand::Uninstall(args) => {
             let target = ServiceTarget::load(args.workflow, None, false)?;
@@ -506,17 +505,12 @@ pub(crate) async fn run(args: ServiceArgs) -> Result<(), Box<dyn Error>> {
             let target = ServiceTarget::load(args.workflow, None, false)?;
             target.print_logs(args.lines, args.follow)?;
         }
-        ServiceCommand::Start(args) => {
-            start(args.into_start_options(), true).await?;
-        }
         ServiceCommand::Stop(args) => {
             let target = ServiceTarget::load(args.workflow, None, false)?;
             let _ = target.stop(false)?;
         }
         ServiceCommand::Restart(args) => {
-            let target = ServiceTarget::load_for_dispatch(args.workflow, args.port)?;
-            let _ = target.stop(false)?;
-            target.start_detached("restarted")?;
+            restart(args)?;
         }
     }
     Ok(())
@@ -535,6 +529,37 @@ pub(crate) async fn start(options: StartOptions, detached: bool) -> Result<(), B
         let target = ServiceTarget::load_for_foreground(workflow, port)?;
         target.start_foreground(bind_address).await
     }
+}
+
+fn restart(args: RunArgs) -> Result<(), Box<dyn Error>> {
+    let target = ServiceTarget::load_for_dispatch(args.workflow, args.port)?;
+    let state = read_state(&target.state_path)?;
+    if state.as_ref().map(classify_state) == Some(RuntimeStatus::Running) {
+        let _ = target.stop(false)?;
+        return target.start_detached("restarted");
+    }
+
+    if !confirm_start_when_not_running()? {
+        println!("service start skipped");
+        return Ok(());
+    }
+
+    if state.is_some() {
+        let _ = target.stop(false)?;
+    }
+    target.start_detached("started")
+}
+
+fn confirm_start_when_not_running() -> io::Result<bool> {
+    print!("service is not running, do you want to start now? [Y/n] ");
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    Ok(confirmation_starts_service(&input))
+}
+
+fn confirmation_starts_service(input: &str) -> bool {
+    !matches!(input.trim().chars().next(), Some('n' | 'N'))
 }
 
 impl ServiceTarget {
@@ -979,6 +1004,20 @@ mod tests {
         assert_eq!(options.workflow, Some(PathBuf::from("WORKFLOW.md")));
         assert_eq!(options.port, Some(3000));
         assert_eq!(options.bind_address, None);
+    }
+
+    #[test]
+    fn restart_confirmation_defaults_to_start() {
+        assert!(confirmation_starts_service(""));
+        assert!(confirmation_starts_service("\n"));
+        assert!(confirmation_starts_service("y\n"));
+        assert!(confirmation_starts_service("yes\n"));
+    }
+
+    #[test]
+    fn restart_confirmation_honors_no() {
+        assert!(!confirmation_starts_service("n\n"));
+        assert!(!confirmation_starts_service("No\n"));
     }
 
     #[test]

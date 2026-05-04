@@ -65,6 +65,9 @@ vik service restart --port 3000
 vik service stop
 ```
 
+If restart finds no running service for the workflow, it asks whether to start
+one instead.
+
 Uninstall stops the process and removes service state:
 
 ```sh
