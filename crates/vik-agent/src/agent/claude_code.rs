@@ -566,7 +566,7 @@ mod tests {
     use vik_workflow::ClaudeCodeConfig;
 
     use super::{
-        ClaudeCodeClient, ClaudeUsageAccumulator, claude_code_spawn_command,
+        ClaudeUsageAccumulator, claude_code_spawn_command,
         claude_code_spawn_process_command_for_platform, write_prompt_with_deadline,
     };
     use crate::agent::EventSink;
@@ -576,7 +576,7 @@ mod tests {
     #[tokio::test]
     async fn claude_code_accepts_success_after_stdout_eof_near_deadline() {
         let workspace = tempfile::TempDir::new().unwrap();
-        let client = ClaudeCodeClient::new(ClaudeCodeConfig {
+        let client = super::ClaudeCodeClient::new(ClaudeCodeConfig {
             command: "sh -c 'exec 1>&-; cat >/dev/null; sleep 0.02; exit 0'".to_string(),
             turn_timeout_ms: 100,
             ..ClaudeCodeConfig::default()
