@@ -100,10 +100,9 @@ Service state lives under:
 When `logging.service_dir` is set, state files live in that configured
 directory instead.
 
-If an existing service was installed before `logging.service_dir` changed,
-management commands check the legacy default state path when the configured
-state file does not exist. A later `service restart` writes the new service
-state under the configured directory.
+Changing `logging.service_dir` does not migrate or read service state from the
+previous directory. Stop or uninstall the existing service before changing the
+service state directory.
 
 Service management loads `.env` before reading `logging.service_dir` and before
 full dispatch validation, so `status`, `logs`, and `stop` can still find

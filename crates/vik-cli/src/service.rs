@@ -71,7 +71,6 @@ struct ServiceTarget {
     workflow_path: PathBuf,
     service_dir: PathBuf,
     state_path: PathBuf,
-    legacy_state_path: Option<PathBuf>,
     log_path: PathBuf,
     cwd: PathBuf,
     port: Option<u16>,
@@ -111,14 +110,10 @@ impl ServiceTarget {
         port: Option<u16>,
     ) -> Result<Self, Box<dyn Error>> {
         let name = service_name(&workflow_path);
-        let default_service_dir = service_dir_for_workflow(&workflow_path);
-        let legacy_state_path = (service_dir != default_service_dir)
-            .then(|| default_service_dir.join(format!("{name}.json")));
         Ok(Self {
             workflow_path,
             service_dir: service_dir.clone(),
             state_path: service_dir.join(format!("{name}.json")),
-            legacy_state_path,
             log_path: service_dir.join(format!("{name}.log")),
             cwd,
             port,
@@ -187,11 +182,6 @@ impl ServiceTarget {
             port,
             command: self.display_command(&executable, port),
         };
-        if let Some((path, _)) = previous_state
-            && path != self.state_path
-        {
-            remove_state_file(&path)?;
-        }
         write_state(&self.state_path, &state)?;
         println!(
             "service {verb}: pid={} state={} log={}",
@@ -294,11 +284,6 @@ impl ServiceTarget {
     fn read_existing_state(&self) -> Result<Option<(PathBuf, ServiceState)>, Box<dyn Error>> {
         if let Some(state) = read_state(&self.state_path)? {
             return Ok(Some((self.state_path.clone(), state)));
-        }
-        if let Some(path) = &self.legacy_state_path
-            && let Some(state) = read_state(path)?
-        {
-            return Ok(Some((path.clone(), state)));
         }
         Ok(None)
     }
@@ -777,7 +762,6 @@ mod tests {
             workflow_path: PathBuf::from("/tmp/vik/WORKFLOW.md"),
             service_dir: PathBuf::from("/tmp/vik/.vik/service"),
             state_path: PathBuf::from("/tmp/vik/.vik/service/state.json"),
-            legacy_state_path: None,
             log_path: PathBuf::from("/tmp/vik/.vik/service/service.log"),
             cwd: PathBuf::from("/tmp/vik"),
             port: Some(3000),
@@ -870,40 +854,30 @@ mod tests {
     }
 
     #[test]
-    fn legacy_state_is_checked_when_configured_state_is_missing() {
+    fn configured_service_dir_does_not_read_default_state() {
         let dir = tempfile::tempdir().unwrap();
         let workflow_path = dir.path().join("WORKFLOW.md");
         write_workflow_with_logging_service_dir(&workflow_path, "service-logs");
         let target = ServiceTarget::load(Some(workflow_path.clone()), None, false).unwrap();
-        let legacy_state_path = target
-            .legacy_state_path
-            .clone()
-            .expect("configured service dir should track the legacy state path");
+        let default_state_path = service_dir_for_workflow(&target.workflow_path)
+            .join(format!("{}.json", service_name(&target.workflow_path)));
         let state = service_state_with_cwd(fs::canonicalize(dir.path()).unwrap(), Some(3000));
-        write_state(&legacy_state_path, &state).unwrap();
+        write_state(&default_state_path, &state).unwrap();
 
-        let (path, found_state) = target.read_existing_state().unwrap().unwrap();
-
-        assert_eq!(path, legacy_state_path);
-        assert_eq!(found_state.port, Some(3000));
-        assert!(!target.state_path.exists());
+        assert!(target.read_existing_state().unwrap().is_none());
+        assert_eq!(
+            target.state_path.parent(),
+            Some(target.service_dir.as_path())
+        );
+        assert!(default_state_path.exists());
     }
 
     #[test]
-    fn configured_state_is_preferred_over_legacy_state() {
+    fn configured_state_is_read_from_configured_service_dir() {
         let dir = tempfile::tempdir().unwrap();
         let workflow_path = dir.path().join("WORKFLOW.md");
         write_workflow_with_logging_service_dir(&workflow_path, "service-logs");
         let target = ServiceTarget::load(Some(workflow_path.clone()), None, false).unwrap();
-        let legacy_state_path = target
-            .legacy_state_path
-            .clone()
-            .expect("configured service dir should track the legacy state path");
-        write_state(
-            &legacy_state_path,
-            &service_state_with_cwd(fs::canonicalize(dir.path()).unwrap(), Some(3000)),
-        )
-        .unwrap();
         write_state(
             &target.state_path,
             &service_state_with_cwd(fs::canonicalize(dir.path()).unwrap(), Some(4000)),
@@ -1059,7 +1033,6 @@ mod tests {
             workflow_path: PathBuf::from("/tmp/vik/WORKFLOW.md"),
             service_dir: PathBuf::from("/tmp/vik/.vik/service"),
             state_path: PathBuf::from("/tmp/vik/.vik/service/state.json"),
-            legacy_state_path: None,
             log_path: PathBuf::from("/tmp/vik/.vik/service/service.log"),
             cwd,
             port: None,
