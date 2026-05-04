@@ -17,6 +17,7 @@ pub struct TrackerConfig {
     pub endpoint: String,
     pub api_key: String,
     pub project_slug: String,
+    pub repository: String,
     pub active_states: Vec<String>,
     pub terminal_states: Vec<String>,
     #[serde(default)]
@@ -191,30 +192,19 @@ impl ServiceConfig {
         let server_map = get_map(&definition.config, "server");
 
         let tracker_kind = string_value(tracker_map, "kind").unwrap_or_default();
-        let endpoint = string_value(tracker_map, "endpoint").unwrap_or_else(|| {
-            if tracker_kind == "linear" {
-                "https://api.linear.app/graphql".to_string()
-            } else {
-                String::new()
-            }
-        });
+        let endpoint = string_value(tracker_map, "endpoint")
+            .unwrap_or_else(|| default_tracker_endpoint(&tracker_kind).to_string());
         let api_key = string_value(tracker_map, "api_key")
-            .or_else(|| env::var("LINEAR_API_KEY").ok())
+            .or_else(|| tracker_api_key_from_env(&tracker_kind))
             .map(resolve_exact_env)
             .transpose()?
             .unwrap_or_default();
         let project_slug = string_value(tracker_map, "project_slug").unwrap_or_default();
+        let repository = string_value(tracker_map, "repository").unwrap_or_default();
         let active_states = string_vec(tracker_map, "active_states")
-            .unwrap_or_else(|| vec!["Todo".to_string(), "In Progress".to_string()]);
-        let terminal_states = string_vec(tracker_map, "terminal_states").unwrap_or_else(|| {
-            vec![
-                "Closed".to_string(),
-                "Cancelled".to_string(),
-                "Canceled".to_string(),
-                "Duplicate".to_string(),
-                "Done".to_string(),
-            ]
-        });
+            .unwrap_or_else(|| default_active_states(&tracker_kind));
+        let terminal_states = string_vec(tracker_map, "terminal_states")
+            .unwrap_or_else(|| default_terminal_states(&tracker_kind));
         let tracker_filter_map = nested_map(tracker_map, "filter");
         let filter = TrackerFilterConfig {
             assignees: string_vec(tracker_filter_map, "assignees").unwrap_or_default(),
@@ -279,6 +269,7 @@ impl ServiceConfig {
                 endpoint,
                 api_key,
                 project_slug,
+                repository,
                 active_states,
                 terminal_states,
                 filter,
@@ -303,14 +294,32 @@ impl ServiceConfig {
     }
 
     pub fn validate_for_dispatch(&self) -> Result<(), WorkflowError> {
-        if self.tracker.kind != "linear" {
-            return Err(WorkflowError::UnsupportedTrackerKind);
+        match self.tracker.kind.as_str() {
+            "linear" => {
+                if self.tracker.api_key.trim().is_empty() {
+                    return Err(WorkflowError::MissingTrackerApiKey);
+                }
+                if self.tracker.project_slug.trim().is_empty() {
+                    return Err(WorkflowError::MissingTrackerProjectSlug);
+                }
+            }
+            "github" => {
+                if self.tracker.api_key.trim().is_empty() {
+                    return Err(WorkflowError::MissingTrackerApiKey);
+                }
+                if self.tracker.repository.trim().is_empty() {
+                    return Err(WorkflowError::MissingTrackerRepository);
+                }
+                validate_github_repository(&self.tracker.repository)?;
+                validate_github_states("tracker.active_states", &self.tracker.active_states)?;
+                validate_github_states("tracker.terminal_states", &self.tracker.terminal_states)?;
+            }
+            _ => return Err(WorkflowError::UnsupportedTrackerKind),
         }
-        if self.tracker.api_key.trim().is_empty() {
-            return Err(WorkflowError::MissingTrackerApiKey);
-        }
-        if self.tracker.project_slug.trim().is_empty() {
-            return Err(WorkflowError::MissingTrackerProjectSlug);
+        if self.tracker.endpoint.trim().is_empty() {
+            return Err(WorkflowError::InvalidConfig(
+                "tracker.endpoint is empty".to_string(),
+            ));
         }
         if self.polling.interval_ms == 0 {
             return Err(WorkflowError::InvalidConfig(
@@ -349,4 +358,67 @@ impl ServiceConfig {
         }
         Ok(())
     }
+}
+
+fn default_tracker_endpoint(kind: &str) -> &'static str {
+    match kind {
+        "linear" => "https://api.linear.app/graphql",
+        "github" => "https://api.github.com",
+        _ => "",
+    }
+}
+
+fn tracker_api_key_from_env(kind: &str) -> Option<String> {
+    match kind {
+        "linear" => env::var("LINEAR_API_KEY").ok(),
+        "github" => env::var("GH_TOKEN")
+            .ok()
+            .or_else(|| env::var("GITHUB_TOKEN").ok()),
+        _ => None,
+    }
+}
+
+fn default_active_states(kind: &str) -> Vec<String> {
+    match kind {
+        "github" => vec!["open".to_string()],
+        _ => vec!["Todo".to_string(), "In Progress".to_string()],
+    }
+}
+
+fn default_terminal_states(kind: &str) -> Vec<String> {
+    match kind {
+        "github" => vec!["closed".to_string()],
+        _ => vec![
+            "Closed".to_string(),
+            "Cancelled".to_string(),
+            "Canceled".to_string(),
+            "Duplicate".to_string(),
+            "Done".to_string(),
+        ],
+    }
+}
+
+fn validate_github_repository(repository: &str) -> Result<(), WorkflowError> {
+    let parts = repository.trim().split('/').collect::<Vec<_>>();
+    if parts.len() == 2 && parts.iter().all(|part| !part.trim().is_empty()) {
+        Ok(())
+    } else {
+        Err(WorkflowError::InvalidConfig(
+            "tracker.repository must use owner/name".to_string(),
+        ))
+    }
+}
+
+fn validate_github_states(field: &str, states: &[String]) -> Result<(), WorkflowError> {
+    for state in states {
+        match state.trim().to_lowercase().as_str() {
+            "open" | "closed" => {}
+            _ => {
+                return Err(WorkflowError::InvalidConfig(format!(
+                    "{field} for github must use open or closed"
+                )));
+            }
+        }
+    }
+    Ok(())
 }

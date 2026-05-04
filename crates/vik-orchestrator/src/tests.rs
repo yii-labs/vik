@@ -21,6 +21,7 @@ fn config() -> ServiceConfig {
             endpoint: "https://api.linear.app/graphql".into(),
             api_key: "token".into(),
             project_slug: "proj".into(),
+            repository: String::new(),
             active_states: vec!["Todo".into(), "In Progress".into()],
             terminal_states: vec!["Done".into(), "Closed".into()],
             filter: Default::default(),

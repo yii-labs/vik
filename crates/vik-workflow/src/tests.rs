@@ -74,6 +74,7 @@ fn applies_defaults_and_path_resolution() {
     );
     assert!(config.tracker.filter.assignees.is_empty());
     assert!(config.tracker.filter.tags.is_empty());
+    assert!(config.tracker.repository.is_empty());
     assert!(
         !config
             .agent
@@ -97,6 +98,52 @@ fn parses_tracker_filter() {
 
     assert_eq!(config.tracker.filter.assignees, vec!["user-a", "user-b"]);
     assert_eq!(config.tracker.filter.tags, vec!["agent", "codex"]);
+}
+
+#[test]
+fn parses_github_tracker_defaults() {
+    let def = parse_workflow_content(
+        PathBuf::from("WORKFLOW.md"),
+        "---\ntracker:\n  kind: github\n  api_key: token\n  repository: yii-labs/vik\n---\nBody",
+    )
+    .unwrap();
+    let config = ServiceConfig::from_definition(&def).unwrap();
+
+    assert_eq!(config.tracker.endpoint, "https://api.github.com");
+    assert_eq!(config.tracker.repository, "yii-labs/vik");
+    assert_eq!(config.tracker.active_states, vec!["open"]);
+    assert_eq!(config.tracker.terminal_states, vec!["closed"]);
+    config.validate_for_dispatch().unwrap();
+}
+
+#[test]
+fn rejects_github_tracker_without_repository() {
+    let def = parse_workflow_content(
+        PathBuf::from("WORKFLOW.md"),
+        "---\ntracker:\n  kind: github\n  api_key: token\n---\nBody",
+    )
+    .unwrap();
+    let config = ServiceConfig::from_definition(&def).unwrap();
+    let err = config.validate_for_dispatch().unwrap_err();
+
+    assert!(matches!(err, WorkflowError::MissingTrackerRepository));
+}
+
+#[test]
+fn rejects_github_tracker_with_linear_states() {
+    let def = parse_workflow_content(
+        PathBuf::from("WORKFLOW.md"),
+        "---\ntracker:\n  kind: github\n  api_key: token\n  repository: yii-labs/vik\n  active_states:\n    - Todo\n---\nBody",
+    )
+    .unwrap();
+    let config = ServiceConfig::from_definition(&def).unwrap();
+    let err = config.validate_for_dispatch().unwrap_err();
+
+    assert!(matches!(
+        err,
+        WorkflowError::InvalidConfig(message)
+            if message == "tracker.active_states for github must use open or closed"
+    ));
 }
 
 #[test]

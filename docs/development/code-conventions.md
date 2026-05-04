@@ -14,7 +14,7 @@
 
 ## Orchestration
 
-- Treat Linear as the tracker authority.
+- Treat the configured issue tracker as the tracker authority.
 - Treat `WORKFLOW.md` as trusted local automation code.
 - Keep workspace path safety intact.
 - Do not add behavior that can delete paths outside `workspace.root`.

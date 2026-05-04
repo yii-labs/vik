@@ -11,7 +11,7 @@ use crate::process::{JsonlRpcProcess, ProcessCommand};
 use crate::session_log::{SessionLog, session_log_dir, session_log_path};
 use crate::tools::DynamicTools;
 
-const CONTINUATION_PROMPT: &str = "Continue working on this Linear issue. Check current issue state and proceed only if it is still active.";
+const CONTINUATION_PROMPT: &str = "Continue working on this issue. Check current issue state and proceed only if it is still active.";
 
 #[derive(Debug, Clone)]
 pub struct CodexAppServerClient {

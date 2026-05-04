@@ -11,6 +11,8 @@ pub enum TrackerError {
     MissingTrackerApiKey,
     #[error("missing_tracker_project_slug")]
     MissingTrackerProjectSlug,
+    #[error("missing_tracker_repository")]
+    MissingTrackerRepository,
     #[error("linear_api_request: {0}")]
     LinearApiRequest(String),
     #[error("linear_api_status: {0}")]
@@ -21,6 +23,12 @@ pub enum TrackerError {
     LinearUnknownPayload(String),
     #[error("linear_missing_end_cursor")]
     LinearMissingEndCursor,
+    #[error("github_api_request: {0}")]
+    GithubApiRequest(String),
+    #[error("github_api_status: {0}")]
+    GithubApiStatus(u16),
+    #[error("github_unknown_payload: {0}")]
+    GithubUnknownPayload(String),
 }
 
 #[async_trait]

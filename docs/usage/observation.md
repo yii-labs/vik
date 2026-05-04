@@ -103,7 +103,7 @@ jq . "$HOME/code/vik-workspaces/.vik/sessions/<file>.jsonl" | less
 ```
 
 Session files contain raw Codex app-server messages for the session. They do
-not replace Vik daemon logs, HTTP snapshots, or Linear workpad notes.
+not replace Vik daemon logs, HTTP snapshots, or tracker workpad notes.
 
 For builds before VIK-11, use `/api/v1/state`, `/api/v1/{issue_identifier}`,
 and JSON daemon logs only. Durable per-session JSONL files are unavailable in

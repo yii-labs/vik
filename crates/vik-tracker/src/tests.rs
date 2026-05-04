@@ -4,6 +4,9 @@ use crate::{
     ATTACHMENT_CREATE_MUTATION, CANDIDATE_QUERY, ISSUE_BY_IDENTIFIER_QUERY,
     ISSUE_STATES_BY_IDS_QUERY,
     client::{LinearIssueFilterConfig, issue_has_attachment_url},
+    github::{
+        GitHubIssueFilterConfig, GitHubIssueNode, github_issue_number, normalize_github_issue,
+    },
     normalize_issue,
 };
 
@@ -124,4 +127,54 @@ fn normalizes_labels_and_blockers() {
     assert_eq!(issue.labels, vec!["bug", "backend"]);
     assert_eq!(issue.blocked_by.len(), 1);
     assert_eq!(issue.blocked_by[0].identifier.as_deref(), Some("ABC-0"));
+}
+
+#[test]
+fn github_filters_match_assignees_and_labels_case_insensitively() {
+    let issue: GitHubIssueNode = serde_json::from_value(json!({
+        "number": 42,
+        "title": "Title",
+        "state": "open",
+        "labels": [{ "name": "Feature" }],
+        "assignees": [{ "login": "Forehalo" }]
+    }))
+    .unwrap();
+
+    let filter =
+        GitHubIssueFilterConfig::new(vec![" forehalo ".to_string()], vec!["feature".to_string()]);
+    assert!(filter.matches(&issue));
+
+    let filter = GitHubIssueFilterConfig::new(vec!["other".to_string()], vec![]);
+    assert!(!filter.matches(&issue));
+}
+
+#[test]
+fn normalizes_github_issue_shape() {
+    let issue: GitHubIssueNode = serde_json::from_value(json!({
+        "number": 42,
+        "title": "Add tracker support",
+        "body": "Details",
+        "state": "open",
+        "html_url": "https://github.com/yii-labs/vik/issues/42",
+        "created_at": "2026-02-24T20:15:30Z",
+        "updated_at": "2026-02-25T20:15:30Z",
+        "labels": [{ "name": "Feature" }, { "name": "Agent" }]
+    }))
+    .unwrap();
+
+    let normalized = normalize_github_issue("yii-labs/vik", &issue);
+
+    assert_eq!(normalized.id, "42");
+    assert_eq!(normalized.identifier, "yii-labs/vik#42");
+    assert_eq!(normalized.state, "open");
+    assert_eq!(normalized.labels, vec!["feature", "agent"]);
+    assert!(normalized.blocked_by.is_empty());
+}
+
+#[test]
+fn github_issue_number_accepts_internal_and_display_ids() {
+    assert_eq!(github_issue_number("42").unwrap(), "42");
+    assert_eq!(github_issue_number("#42").unwrap(), "42");
+    assert_eq!(github_issue_number("yii-labs/vik#42").unwrap(), "42");
+    assert!(github_issue_number("bad").is_err());
 }

@@ -50,5 +50,5 @@ cargo run --locked -p vik-cli -- start ./WORKFLOW.md --port 3000
 curl -fsS http://127.0.0.1:3000/api/v1/state | jq .
 ```
 
-Record the issue state, PR link, and final Linear state when using Vik itself to
-drive a ticket.
+Record the issue state, PR link, and final tracker state when using Vik itself
+to drive a ticket.

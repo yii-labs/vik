@@ -33,32 +33,27 @@ vik check ./WORKFLOW.md
 
 ## Tracker
 
-`tracker.kind` must be `linear`.
+`tracker.kind` selects the issue tracker adapter. Supported values:
 
-Fields:
+- `linear`
+- `github`
 
-- `endpoint`: defaults to `https://api.linear.app/graphql` for Linear.
-- `api_key`: optional when `LINEAR_API_KEY` is set in the environment or `.env`.
-- `project_slug`: Linear project slug Vik polls.
+Common fields:
+
+- `endpoint`: tracker API endpoint. Defaults are tracker-specific.
+- `api_key`: optional when the tracker-specific token environment variable is
+  set in the shell, service environment, Docker environment, or `.env`.
 - `active_states`: states Vik may claim.
 - `terminal_states`: states that stop tracking and may trigger cleanup.
-- `filter`: optional delegable issue filter. Omitted filter values and empty
-  lists match all issues.
-  - `assignees`: Linear user IDs, names, display names, or email addresses.
-  - `tags`: Linear label names.
+- `filter`: optional issue filter. Omitted filter values and empty lists match
+  all issues.
+  - `assignees`: tracker assignee identifiers.
+  - `tags`: tracker labels.
 
-`LINEAR_API_KEY` is loaded from `.env` before dispatch validation. Do not commit
-real keys.
+Tracker-specific fields and examples:
 
-Limit delegation to issues assigned to specific users and tagged with specific
-Linear labels:
-
-```yaml
-tracker:
-  filter:
-    assignees: [user-a, user-b]
-    tags: [agent, codex]
-```
+- [Linear tracker](trackers/linear.md)
+- [GitHub tracker](trackers/github.md)
 
 ## Polling
 
@@ -166,6 +161,8 @@ bind host.
 - [Docker](docker.md)
 - [Service Daemon](service-daemon.md)
 - [Observation](observation.md)
+- [Linear Tracker](trackers/linear.md)
+- [GitHub Tracker](trackers/github.md)
 - Linear GraphQL API: <https://linear.app/developers/graphql>
 - GitHub CLI auth: <https://cli.github.com/manual/gh_auth>
 - Codex CLI reference: <https://developers.openai.com/codex/cli/reference>

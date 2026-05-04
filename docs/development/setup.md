@@ -6,7 +6,7 @@
 - Git.
 - GitHub CLI for PR work.
 - Codex CLI for local orchestration runs.
-- Linear API key for real tracker runs.
+- A tracker API key for real tracker runs.
 - Docker for image validation when touching Docker files.
 
 ## Clone
@@ -35,8 +35,9 @@ LINEAR_API_KEY=ci-placeholder cargo run --locked -p vik-cli -- check ./WORKFLOW.
 
 ## Local Smoke Run
 
-Use an isolated Linear project and workspace root for real daemon testing. Do
-not point a smoke run at the shared project unless that is the test target.
+Use an isolated tracker project or repository and workspace root for real daemon
+testing. Do not point a smoke run at the shared project unless that is the test
+target.
 
 ```sh
 : "${VIK_LINEAR_PROJECT_SLUG:?set isolated Linear project slug}"

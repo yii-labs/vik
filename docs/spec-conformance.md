@@ -11,7 +11,8 @@ This document maps Vik draft v1 required behavior to this workspace.
 - Invalid workflow reload handling: reconciliation keeps last-good config, new dispatch/retry launch is
   blocked until reload succeeds.
 - Polling orchestrator state authority: `vik-orchestrator::OrchestratorState`.
-- Linear candidate, terminal, and state refresh reads: `vik-tracker::LinearClient`.
+- Tracker candidate, terminal, and state refresh reads:
+  `vik-tracker::TrackerClient` with Linear and GitHub adapters.
 - Sanitized per-issue workspaces: `vik-workspace::WorkspaceManager`.
 - Workspace hooks and timeout: `vik-workspace::WorkspaceManager`.
 - Codex JSONL app-server client: `vik-agent::CodexAppServerClient`.
@@ -26,15 +27,15 @@ Not implemented:
 
 - SSH worker extension.
 - Durable retry/session persistence.
-- Pluggable non-Linear trackers.
 
 ## Production Validation
 
-Run with real Linear and Codex credentials before production use:
+Run with real tracker and Codex credentials before production use:
 
 ```sh
 cargo run -p vik-cli -- check ./WORKFLOW.md
 cargo test --workspace
 ```
 
-Then start the daemon against an isolated Linear project and workspace root.
+Then start the daemon against an isolated tracker project or repository and
+workspace root.
