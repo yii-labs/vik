@@ -27,7 +27,7 @@ mod transport;
 #[cfg(test)]
 mod tests;
 
-const CONTINUATION_PROMPT: &str = "Continue working on this Linear issue. Check current issue state and proceed only if it is still active.";
+const CONTINUATION_PROMPT: &str = "Continue working on this tracker issue. Check current issue state and proceed only if it is still active.";
 
 #[derive(Clone)]
 pub(crate) struct Codex<T>
