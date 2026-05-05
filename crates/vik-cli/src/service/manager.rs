@@ -13,7 +13,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use inquire::Confirm;
 use serde::{Deserialize, Serialize};
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{
+    EnvFilter, Layer, filter::LevelFilter, layer::SubscriberExt, util::SubscriberInitExt,
+};
 use vik_agent::LocalAgentWorker;
 use vik_http::{HttpState, serve};
 use vik_orchestrator::Orchestrator;
@@ -23,11 +25,12 @@ use vik_workflow::{WorkflowReloader, load_effective_workflow, select_workflow_pa
 use crate::service::{LogsArgs, RunArgs, StartArgs};
 
 pub struct ServiceManager {
+    cwd: PathBuf,
     workflow_path: PathBuf,
     service_dir: PathBuf,
     state_path: PathBuf,
-    log_path: PathBuf,
-    cwd: PathBuf,
+    log_dir: PathBuf,
+    session_dir: PathBuf,
 }
 
 impl ServiceManager {
@@ -39,11 +42,15 @@ impl ServiceManager {
             env::current_dir()?.join(selected)
         };
         let workflow_path = normalize_workflow_path(workflow_path);
+
         let cwd = workflow_path
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
-        let service_dir = cwd.join(".vik").join("service");
+        let service_dir = cwd.join("service");
+        let log_dir = cwd.join("logs");
+        let session_dir = service_dir.join("sessions");
+
         let stem = workflow_path
             .file_stem()
             .and_then(|value| value.to_str())
@@ -69,11 +76,12 @@ impl ServiceManager {
         let name = format!("{stem}-{hash:016x}");
 
         Ok(Self {
+            cwd,
             workflow_path,
             service_dir: service_dir.clone(),
             state_path: service_dir.join(format!("{name}.json")),
-            log_path: service_dir.join(format!("{name}.log")),
-            cwd,
+            log_dir,
+            session_dir,
         })
     }
 
@@ -124,18 +132,18 @@ impl ServiceManager {
                 "running: pid={} workflow={} log={}",
                 state.pid.unwrap_or_default(),
                 state.workflow_path.display(),
-                state.log_path.display()
+                state.log_dir.display()
             ),
             RuntimeStatus::Stopped => println!(
                 "stopped: workflow={} log={}",
                 state.workflow_path.display(),
-                state.log_path.display()
+                state.log_dir.display()
             ),
             RuntimeStatus::Stale => println!(
                 "stale: pid={} workflow={} log={}",
                 state.pid.unwrap_or_default(),
                 state.workflow_path.display(),
-                state.log_path.display()
+                state.log_dir.display()
             ),
         }
         Ok(())
@@ -144,8 +152,8 @@ impl ServiceManager {
     pub fn print_logs(&self, args: LogsArgs) -> Result<(), Box<dyn Error>> {
         let path = self
             .read_state()?
-            .map(|state| state.log_path)
-            .unwrap_or_else(|| self.log_path.clone());
+            .map(|state| state.log_dir)
+            .unwrap_or_else(|| self.log_dir.clone());
         if !path.exists() {
             println!("service logs not found: {}", path.display());
             return Ok(());
@@ -174,7 +182,7 @@ impl ServiceManager {
             println!(
                 "service already running: pid={} log={}",
                 state.pid.unwrap_or_default(),
-                state.log_path.display()
+                state.log_dir.display()
             );
             return Ok(());
         }
@@ -205,15 +213,10 @@ impl ServiceManager {
         command.current_dir(&cwd);
         self.detach_command(&mut command);
 
-        let log = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.log_path)?;
-        let err_log = log.try_clone()?;
         command
             .stdin(Stdio::null())
-            .stdout(Stdio::from(log))
-            .stderr(Stdio::from(err_log));
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
 
         let child = command.spawn()?;
         let pid = child.id();
@@ -225,7 +228,8 @@ impl ServiceManager {
             status: StoredStatus::Running,
             started_at_unix: Some(self.now_unix()),
             stopped_at_unix: None,
-            log_path: self.log_path.clone(),
+            log_dir: self.log_dir.clone(),
+            session_dir: self.session_dir.clone(),
             port: args.port,
             command: self.display_command(&executable, args),
         };
@@ -285,9 +289,8 @@ impl ServiceManager {
         let loaded = reloader.current().clone();
         loaded.config.validate_for_dispatch()?;
 
-        let log_dir = loaded.config.logging.dir.clone();
-        let _log_guard = self.init_logging(&log_dir)?;
-        tracing::info!(log_dir=%log_dir.display(), "logging outcome=started");
+        let _log_guard = self.init_logging(&self.log_dir)?;
+        tracing::info!(log_dir=%self.log_dir.display(), "logging outcome=started");
 
         let tracker = Arc::new(TrackerClient::from_config(&loaded.config.tracker)?);
         let worker = Arc::new(LocalAgentWorker::new(Arc::clone(&tracker)));
@@ -320,10 +323,12 @@ impl ServiceManager {
         Ok(())
     }
 
-    fn init_logging(&self, log_dir: &Path) -> Result<WorkerGuard, Box<dyn Error>> {
+    fn init_logging(&self, log_dir: &Path) -> Result<(WorkerGuard, WorkerGuard), Box<dyn Error>> {
         fs::create_dir_all(log_dir)?;
         let file_appender = tracing_appender::rolling::daily(log_dir, "vik.log");
         let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
+        let error_file_appender = tracing_appender::rolling::daily(log_dir, "vik-error.log");
+        let (error_file_writer, error_guard) = tracing_appender::non_blocking(error_file_appender);
         let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
         let stdout_layer = tracing_subscriber::fmt::layer()
@@ -335,13 +340,20 @@ impl ServiceManager {
             .json()
             .with_current_span(false)
             .with_span_list(false);
+        let error_file_layer = tracing_subscriber::fmt::layer()
+            .with_writer(error_file_writer)
+            .json()
+            .with_current_span(false)
+            .with_span_list(false)
+            .with_filter(LevelFilter::ERROR);
 
         tracing_subscriber::registry()
             .with(filter)
             .with(stdout_layer)
             .with(file_layer)
+            .with(error_file_layer)
             .init();
-        Ok(guard)
+        Ok((guard, error_guard))
     }
 
     fn load_dotenv_from_cwd(&self) -> Result<(), Box<dyn Error>> {
@@ -412,7 +424,7 @@ impl ServiceManager {
             "service started: pid={} state={} log={}",
             pid,
             self.state_path.display(),
-            self.log_path.display()
+            self.log_dir.display()
         );
     }
 
@@ -421,7 +433,7 @@ impl ServiceManager {
             "service restarted: pid={} state={} log={}",
             pid,
             self.state_path.display(),
-            self.log_path.display()
+            self.log_dir.display()
         );
     }
 
@@ -704,13 +716,14 @@ fn normalize_workflow_path(path: PathBuf) -> PathBuf {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ServiceState {
     version: u32,
-    workflow_path: PathBuf,
     cwd: PathBuf,
+    workflow_path: PathBuf,
     pid: Option<u32>,
     status: StoredStatus,
     started_at_unix: Option<u64>,
     stopped_at_unix: Option<u64>,
-    log_path: PathBuf,
+    log_dir: PathBuf,
+    session_dir: PathBuf,
     port: Option<u16>,
     command: Vec<String>,
 }
@@ -787,7 +800,7 @@ mod tests {
         let second = test_manager(&workflow_path, "work-b").unwrap();
 
         assert_eq!(first.state_path, second.state_path);
-        assert_eq!(first.service_dir, dir.path().join(".vik").join("service"));
+        assert_eq!(first.service_dir, dir.path().join("service"));
     }
 
     #[test]
@@ -861,7 +874,7 @@ mod tests {
         let manager = ServiceManager::new(Some(workflow_path.clone())).unwrap();
 
         assert_eq!(manager.workflow_path, workflow_path);
-        assert_eq!(manager.service_dir, dir.path().join(".vik").join("service"));
+        assert_eq!(manager.service_dir, dir.path().join("service"));
     }
 
     #[test]
@@ -875,7 +888,8 @@ mod tests {
             status: StoredStatus::Stopped,
             started_at_unix: Some(1),
             stopped_at_unix: Some(2),
-            log_path: PathBuf::from("/tmp/vik/service.log"),
+            log_dir: PathBuf::from("/tmp/vik/service.log"),
+            session_dir: PathBuf::from("/tmp/vik/sessions"),
             port: None,
             command: vec![],
         };
@@ -1019,7 +1033,8 @@ mod tests {
             status: StoredStatus::Stopped,
             started_at_unix: Some(1),
             stopped_at_unix: Some(2),
-            log_path: PathBuf::from("/tmp/vik/service.log"),
+            log_dir: PathBuf::from("/tmp/vik/service.log"),
+            session_dir: PathBuf::from("/tmp/vik/sessions"),
             port,
             command: vec![],
         }
