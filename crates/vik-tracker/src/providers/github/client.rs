@@ -598,7 +598,7 @@ impl IssueTracker for GitHubClient {
 
     async fn link_pr(&self, issue_id: &str, _title: &str, url: &str) -> Result<(), TrackerError> {
         let issue_number = parse_issue_number(issue_id)?;
-        let pull_request = GitHubPullRequest::parse_url(url)?;
+        let pull_request = GitHubPullRequest::parse_url_for_endpoint(url, &self.endpoint)?;
         let path = pull_path(
             &pull_request.repository.owner,
             &pull_request.repository.name,
@@ -630,14 +630,14 @@ pub(crate) struct GitHubPullRequest {
 }
 
 impl GitHubPullRequest {
-    pub(crate) fn parse_url(raw: &str) -> Result<Self, TrackerError> {
+    pub(crate) fn parse_url_for_endpoint(raw: &str, endpoint: &str) -> Result<Self, TrackerError> {
         let value = raw.trim();
         let url = Url::parse(value).map_err(|_| {
             TrackerError::UnsupportedTrackerOperation(format!(
                 "GitHub pull request URL is not supported: {raw}"
             ))
         })?;
-        if url.host_str() != Some("github.com") {
+        if !allowed_pull_request_host(url.host_str(), endpoint) {
             return Err(TrackerError::UnsupportedTrackerOperation(format!(
                 "GitHub pull request URL is not supported: {raw}"
             )));
@@ -661,6 +661,29 @@ impl GitHubPullRequest {
             number,
         })
     }
+}
+
+fn allowed_pull_request_host(url_host: Option<&str>, endpoint: &str) -> bool {
+    let Some(url_host) = url_host.map(|host| host.to_ascii_lowercase()) else {
+        return false;
+    };
+    let Ok(endpoint_url) = Url::parse(endpoint.trim()) else {
+        return url_host == "github.com";
+    };
+    let Some(endpoint_host) = endpoint_url
+        .host_str()
+        .map(|host| host.to_ascii_lowercase())
+    else {
+        return url_host == "github.com";
+    };
+    let mut allowed = HashSet::from([endpoint_host.clone()]);
+    if endpoint_host == "api.github.com" {
+        allowed.insert("github.com".to_string());
+    }
+    if let Some(web_host) = endpoint_host.strip_prefix("api.") {
+        allowed.insert(web_host.to_string());
+    }
+    allowed.contains(&url_host)
 }
 
 pub(crate) fn closing_reference(repository: &GitHubRepository, issue_number: u64) -> String {

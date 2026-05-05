@@ -86,8 +86,11 @@ fn github_api_version_tracks_latest_supported_version() {
 
 #[test]
 fn pull_request_url_parses_owner_repo_and_number() {
-    let pull_request =
-        GitHubPullRequest::parse_url("https://github.com/yii-labs/vik/pull/48").unwrap();
+    let pull_request = GitHubPullRequest::parse_url_for_endpoint(
+        "https://github.com/yii-labs/vik/pull/48",
+        DEFAULT_GITHUB_ENDPOINT,
+    )
+    .unwrap();
 
     assert_eq!(
         pull_request.repository,
@@ -102,7 +105,10 @@ fn pull_request_url_parses_owner_repo_and_number() {
 #[test]
 fn pull_request_url_rejects_non_pull_urls() {
     assert!(matches!(
-        GitHubPullRequest::parse_url("https://github.com/yii-labs/vik/issues/48"),
+        GitHubPullRequest::parse_url_for_endpoint(
+            "https://github.com/yii-labs/vik/issues/48",
+            DEFAULT_GITHUB_ENDPOINT,
+        ),
         Err(TrackerError::UnsupportedTrackerOperation(_))
     ));
 }
@@ -110,7 +116,45 @@ fn pull_request_url_rejects_non_pull_urls() {
 #[test]
 fn pull_request_url_rejects_non_github_hosts() {
     assert!(matches!(
-        GitHubPullRequest::parse_url("https://example.com/yii-labs/vik/pull/48"),
+        GitHubPullRequest::parse_url_for_endpoint(
+            "https://example.com/yii-labs/vik/pull/48",
+            DEFAULT_GITHUB_ENDPOINT,
+        ),
+        Err(TrackerError::UnsupportedTrackerOperation(_))
+    ));
+}
+
+#[test]
+fn pull_request_url_accepts_configured_github_hosts() {
+    let pull_request = GitHubPullRequest::parse_url_for_endpoint(
+        "https://ghe.example.com/yii-labs/vik/pull/48",
+        "https://ghe.example.com/api/v3",
+    )
+    .unwrap();
+
+    assert_eq!(
+        pull_request.repository,
+        GitHubRepository {
+            owner: "yii-labs".to_string(),
+            name: "vik".to_string(),
+        }
+    );
+    assert_eq!(pull_request.number, 48);
+
+    GitHubPullRequest::parse_url_for_endpoint(
+        "https://github.example.com/yii-labs/vik/pull/48",
+        "https://api.github.example.com",
+    )
+    .unwrap();
+}
+
+#[test]
+fn pull_request_url_rejects_hosts_outside_configured_endpoint() {
+    assert!(matches!(
+        GitHubPullRequest::parse_url_for_endpoint(
+            "https://example.com/yii-labs/vik/pull/48",
+            "https://ghe.example.com/api/v3",
+        ),
         Err(TrackerError::UnsupportedTrackerOperation(_))
     ));
 }
