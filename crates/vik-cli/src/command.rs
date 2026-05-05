@@ -104,9 +104,19 @@ mod tests {
 
         match args.command {
             Command::Start(args) => {
-                assert_eq!(args.run_args.port, 3000);
+                assert_eq!(args.run_args.port, Some(3000));
                 assert_eq!(args.run_args.host, IpAddr::V4(Ipv4Addr::UNSPECIFIED));
             }
+            other => panic!("expected start command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn start_command_keeps_port_optional() {
+        let args = Args::try_parse_from(["vik", "start", "WORKFLOW.md"]).unwrap();
+
+        match args.command {
+            Command::Start(args) => assert_eq!(args.run_args.port, None),
             other => panic!("expected start command, got {other:?}"),
         }
     }

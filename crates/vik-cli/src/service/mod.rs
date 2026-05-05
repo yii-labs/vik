@@ -33,8 +33,8 @@ enum ServiceCommand {
 #[derive(Debug, Clone, Copy, ClapArgs)]
 pub(crate) struct RunArgs {
     /// HTTP status server port. Overrides server.port from WORKFLOW.md.
-    #[arg(long, short, default_value_t = DEFAULT_SERVICE_PORT)]
-    pub(crate) port: u16,
+    #[arg(long, short)]
+    pub(crate) port: Option<u16>,
 
     /// HTTP status server bind address. Defaults to 127.0.0.1.
     #[arg(
@@ -61,6 +61,15 @@ impl From<RunArgs> for StartArgs {
         Self {
             run_args,
             detached: false,
+        }
+    }
+}
+
+impl RunArgs {
+    fn with_default_service_port(self) -> Self {
+        Self {
+            port: Some(self.port.unwrap_or(DEFAULT_SERVICE_PORT)),
+            ..self
         }
     }
 }
@@ -94,7 +103,7 @@ pub(crate) async fn run(
         ServiceCommand::Status => manager.status()?,
         ServiceCommand::Logs(args) => manager.print_logs(args)?,
         ServiceCommand::Stop => manager.stop()?,
-        ServiceCommand::Restart(args) => manager.restart(args).await?,
+        ServiceCommand::Restart(args) => manager.restart(args.with_default_service_port()).await?,
     }
     Ok(())
 }
@@ -105,4 +114,33 @@ pub(crate) async fn start(
 ) -> Result<(), Box<dyn Error>> {
     let manager = manager::ServiceManager::new(workflow)?;
     manager.start(args).await
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr};
+
+    use super::*;
+
+    #[test]
+    fn default_service_port_is_applied_for_detached_runs() {
+        let args = RunArgs {
+            port: None,
+            host: IpAddr::V4(Ipv4Addr::LOCALHOST),
+        }
+        .with_default_service_port();
+
+        assert_eq!(args.port, Some(DEFAULT_SERVICE_PORT));
+    }
+
+    #[test]
+    fn explicit_service_port_is_preserved_for_detached_runs() {
+        let args = RunArgs {
+            port: Some(3000),
+            host: IpAddr::V4(Ipv4Addr::LOCALHOST),
+        }
+        .with_default_service_port();
+
+        assert_eq!(args.port, Some(3000));
+    }
 }

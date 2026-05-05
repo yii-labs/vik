@@ -83,7 +83,7 @@ impl ServiceManager {
 
     pub async fn start(&self, args: StartArgs) -> Result<(), Box<dyn Error>> {
         if args.detached {
-            self.start_detached(args.run_args)
+            self.start_detached(args.run_args.with_default_service_port())
         } else {
             self.start_foreground(args.run_args).await
         }
@@ -230,7 +230,7 @@ impl ServiceManager {
             started_at_unix: Some(self.now_unix()),
             stopped_at_unix: None,
             log_path: self.log_path.clone(),
-            port: Some(args.port),
+            port: args.port,
             command: self.display_command(&executable, args),
         };
         self.write_state(&state)?;
@@ -284,7 +284,7 @@ impl ServiceManager {
         &self,
         reloader: WorkflowReloader,
         host: IpAddr,
-        port: u16,
+        port: Option<u16>,
     ) -> Result<(), Box<dyn Error>> {
         let loaded = reloader.current().clone();
         loaded.config.validate_for_dispatch()?;
@@ -297,25 +297,28 @@ impl ServiceManager {
         let worker = Arc::new(LocalAgentWorker::new(Arc::clone(&tracker)));
         let orchestrator = Arc::new(Orchestrator::new(Arc::clone(&tracker), worker, reloader));
 
-        let orch_for_state = Arc::clone(&orchestrator);
-        let orch_for_issue = Arc::clone(&orchestrator);
-        let addr = SocketAddr::new(host, port);
-        let bound = serve(
-            addr,
-            HttpState {
-                snapshot: Arc::new(move || {
-                    let orch = Arc::clone(&orch_for_state);
-                    Box::pin(async move { orch.snapshot().await })
-                }),
-                issue: Arc::new(move |identifier| {
-                    let orch = Arc::clone(&orch_for_issue);
-                    Box::pin(async move { orch.issue_debug(&identifier).await })
-                }),
-                refresh_tx: orchestrator.refresh_sender(),
-            },
-        )
-        .await?;
-        tracing::info!(addr=%bound, "http_server outcome=started");
+        let port = port.or(loaded.config.server.as_ref().map(|server| server.port));
+        if let Some(port) = port {
+            let orch_for_state = Arc::clone(&orchestrator);
+            let orch_for_issue = Arc::clone(&orchestrator);
+            let addr = SocketAddr::new(host, port);
+            let bound = serve(
+                addr,
+                HttpState {
+                    snapshot: Arc::new(move || {
+                        let orch = Arc::clone(&orch_for_state);
+                        Box::pin(async move { orch.snapshot().await })
+                    }),
+                    issue: Arc::new(move |identifier| {
+                        let orch = Arc::clone(&orch_for_issue);
+                        Box::pin(async move { orch.issue_debug(&identifier).await })
+                    }),
+                    refresh_tx: orchestrator.refresh_sender(),
+                },
+            )
+            .await?;
+            tracing::info!(addr=%bound, "http_server outcome=started");
+        }
 
         orchestrator.run_forever().await?;
         Ok(())
@@ -391,11 +394,12 @@ impl ServiceManager {
     }
 
     fn daemon_args(&self, args: RunArgs) -> Vec<String> {
+        let port = args.port.unwrap_or(super::DEFAULT_SERVICE_PORT);
         vec![
             "start".to_string(),
             self.workflow_path.display().to_string(),
             "--port".to_string(),
-            args.port.to_string(),
+            port.to_string(),
             "--host".to_string(),
             args.host.to_string(),
         ]
@@ -681,7 +685,7 @@ impl ServiceManager {
 impl Default for RunArgs {
     fn default() -> Self {
         Self {
-            port: super::DEFAULT_SERVICE_PORT,
+            port: Some(super::DEFAULT_SERVICE_PORT),
             host: IpAddr::V4(Ipv4Addr::LOCALHOST),
         }
     }
