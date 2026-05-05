@@ -108,6 +108,14 @@ fn pull_request_url_rejects_non_pull_urls() {
 }
 
 #[test]
+fn pull_request_url_rejects_non_github_hosts() {
+    assert!(matches!(
+        GitHubPullRequest::parse_url("https://example.com/yii-labs/vik/pull/48"),
+        Err(TrackerError::UnsupportedTrackerOperation(_))
+    ));
+}
+
+#[test]
 fn closing_reference_uses_full_issue_repository_reference() {
     let repository = GitHubRepository::parse("yii-labs/vik").unwrap();
 

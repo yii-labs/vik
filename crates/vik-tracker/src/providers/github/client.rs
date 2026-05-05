@@ -637,6 +637,11 @@ impl GitHubPullRequest {
                 "GitHub pull request URL is not supported: {raw}"
             ))
         })?;
+        if url.host_str() != Some("github.com") {
+            return Err(TrackerError::UnsupportedTrackerOperation(format!(
+                "GitHub pull request URL is not supported: {raw}"
+            )));
+        }
         let segments: Vec<_> = url
             .path_segments()
             .map(|segments| segments.collect())
