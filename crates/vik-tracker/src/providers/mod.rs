@@ -178,6 +178,10 @@ impl IssueTracker for TrackerClient {
         self.inner.create_comment(issue_id, body).await
     }
 
+    async fn list_comments(&self, issue_id: &str) -> Result<Vec<IssueComment>, TrackerError> {
+        self.inner.list_comments(issue_id).await
+    }
+
     async fn update_comment(
         &self,
         comment_id: &str,

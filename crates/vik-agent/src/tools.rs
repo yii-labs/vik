@@ -6,12 +6,14 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use vik_core::{IssueTracker, IssueUpdate, TrackerError};
 
-const GET_ISSUE_TOOL: &str = "get_issue";
-const UPDATE_ISSUE_TOOL: &str = "update_issue";
-const CREATE_COMMENT_TOOL: &str = "create_comment";
-const UPDATE_COMMENT_TOOL: &str = "update_comment";
-const UPLOAD_ATTACHMENT_TOOL: &str = "upload_attachment";
-const LINK_PR_TOOL: &str = "link_pr";
+const VIK_ISSUE_TOOL: &str = "vik_issue";
+const GET_ISSUE_ACTION: &str = "get_issue";
+const LIST_COMMENTS_ACTION: &str = "list_comments";
+const UPDATE_ISSUE_ACTION: &str = "update_issue";
+const CREATE_COMMENT_ACTION: &str = "create_comment";
+const UPDATE_COMMENT_ACTION: &str = "update_comment";
+const UPLOAD_ATTACHMENT_ACTION: &str = "upload_attachment";
+const LINK_PR_ACTION: &str = "link_pr";
 
 #[derive(Clone, Default)]
 pub(crate) struct DynamicTools {
@@ -45,74 +47,48 @@ impl DynamicTools {
         if self.tracker.is_none() {
             return Vec::new();
         }
-        vec![
-            tracker_definition(
-                GET_ISSUE_TOOL,
-                "Fetch the current tracker issue by provider-specific issue id.",
-                json!({
-                    "issue_id": string_schema("Provider-specific issue id.")
-                }),
-                vec!["issue_id"],
-            ),
-            tracker_definition(
-                UPDATE_ISSUE_TOOL,
-                "Update tracker issue state and labels using the configured tracker.",
-                json!({
-                    "issue_id": string_schema("Provider-specific issue id."),
-                    "state": string_schema("Optional tracker state to set."),
-                    "labels": {
-                        "type": "array",
-                        "description": "Optional labels to add or set through the configured tracker.",
-                        "items": { "type": "string" }
-                    }
-                }),
-                vec!["issue_id"],
-            ),
-            tracker_definition(
-                CREATE_COMMENT_TOOL,
-                "Create a tracker issue comment using the configured tracker.",
-                json!({
-                    "issue_id": string_schema("Provider-specific issue id."),
-                    "body": string_schema("Comment body.")
-                }),
-                vec!["issue_id", "body"],
-            ),
-            tracker_definition(
-                UPDATE_COMMENT_TOOL,
-                "Update a tracker issue comment using the configured tracker.",
-                json!({
-                    "comment_id": string_schema("Provider-specific comment id."),
-                    "body": string_schema("Replacement comment body.")
-                }),
-                vec!["comment_id", "body"],
-            ),
-            tracker_definition(
-                UPLOAD_ATTACHMENT_TOOL,
-                "Upload an attachment through the configured tracker and post its returned link.",
-                json!({
-                    "issue_id": string_schema("Provider-specific issue id."),
-                    "path": string_schema("Path to a file inside the issue workspace."),
-                    "content_type": string_schema("Attachment content type.")
-                }),
-                vec!["issue_id", "path", "content_type"],
-            ),
-            tracker_definition(
-                LINK_PR_TOOL,
-                "Link a pull request to the tracker issue using the configured tracker.",
-                json!({
-                    "issue_id": string_schema("Provider-specific issue id."),
-                    "title": string_schema("Pull request title."),
-                    "url": string_schema("Pull request URL.")
-                }),
-                vec!["issue_id", "title", "url"],
-            ),
-        ]
+        vec![tracker_definition(
+            VIK_ISSUE_TOOL,
+            "Run a common issue operation against Vik's configured tracker.",
+            json!({
+                "action": {
+                    "type": "string",
+                    "description": "Tracker operation to run.",
+                    "enum": [
+                        GET_ISSUE_ACTION,
+                        LIST_COMMENTS_ACTION,
+                        UPDATE_ISSUE_ACTION,
+                        CREATE_COMMENT_ACTION,
+                        UPDATE_COMMENT_ACTION,
+                        UPLOAD_ATTACHMENT_ACTION,
+                        LINK_PR_ACTION
+                    ]
+                },
+                "issue_id": string_schema("Provider-specific issue id."),
+                "comment_id": string_schema("Provider-specific comment id."),
+                "state": string_schema("Optional tracker state to set."),
+                "labels": {
+                    "type": "array",
+                    "description": "Optional labels to add or set through the configured tracker.",
+                    "items": { "type": "string" }
+                },
+                "body": string_schema("Comment body."),
+                "path": string_schema("Path to a file inside the issue workspace."),
+                "content_type": string_schema("Attachment content type."),
+                "title": string_schema("Pull request title."),
+                "url": string_schema("Pull request URL.")
+            }),
+            vec!["action"],
+        )]
     }
 
     pub(crate) async fn handle_call(&self, params: &Value) -> Value {
         let Some(tool) = extract_tool_name(params) else {
             return tool_failure("missing dynamic tool name");
         };
+        if tool != VIK_ISSUE_TOOL {
+            return tool_failure(format!("unsupported dynamic tool call: {tool}"));
+        }
         let Some(tracker) = &self.tracker else {
             return tool_failure("tracker dynamic tools are not configured");
         };
@@ -120,15 +96,26 @@ impl DynamicTools {
             Ok(arguments) => arguments,
             Err(err) => return tool_failure(err),
         };
-        match tool.as_str() {
-            GET_ISSUE_TOOL => {
+        let action = match required_string(&arguments, "action") {
+            Ok(action) => action,
+            Err(err) => return tool_failure(err),
+        };
+        match action.as_str() {
+            GET_ISSUE_ACTION => {
                 let issue_id = match required_string(&arguments, "issue_id") {
                     Ok(issue_id) => issue_id,
                     Err(err) => return tool_failure(err),
                 };
                 tool_result(tracker.get_issue(&issue_id).await)
             }
-            UPDATE_ISSUE_TOOL => {
+            LIST_COMMENTS_ACTION => {
+                let issue_id = match required_string(&arguments, "issue_id") {
+                    Ok(issue_id) => issue_id,
+                    Err(err) => return tool_failure(err),
+                };
+                tool_result(tracker.list_comments(&issue_id).await)
+            }
+            UPDATE_ISSUE_ACTION => {
                 let issue_id = match required_string(&arguments, "issue_id") {
                     Ok(issue_id) => issue_id,
                     Err(err) => return tool_failure(err),
@@ -139,7 +126,7 @@ impl DynamicTools {
                 };
                 tool_result(tracker.update_issue(&issue_id, update).await)
             }
-            CREATE_COMMENT_TOOL => {
+            CREATE_COMMENT_ACTION => {
                 let issue_id = match required_string(&arguments, "issue_id") {
                     Ok(issue_id) => issue_id,
                     Err(err) => return tool_failure(err),
@@ -150,7 +137,7 @@ impl DynamicTools {
                 };
                 tool_result(tracker.create_comment(&issue_id, &body).await)
             }
-            UPDATE_COMMENT_TOOL => {
+            UPDATE_COMMENT_ACTION => {
                 let comment_id = match required_string(&arguments, "comment_id") {
                     Ok(comment_id) => comment_id,
                     Err(err) => return tool_failure(err),
@@ -161,7 +148,7 @@ impl DynamicTools {
                 };
                 tool_result(tracker.update_comment(&comment_id, &body).await)
             }
-            UPLOAD_ATTACHMENT_TOOL => {
+            UPLOAD_ATTACHMENT_ACTION => {
                 let issue_id = match required_string(&arguments, "issue_id") {
                     Ok(issue_id) => issue_id,
                     Err(err) => return tool_failure(err),
@@ -184,7 +171,7 @@ impl DynamicTools {
                         .await,
                 )
             }
-            LINK_PR_TOOL => {
+            LINK_PR_ACTION => {
                 let issue_id = match required_string(&arguments, "issue_id") {
                     Ok(issue_id) => issue_id,
                     Err(err) => return tool_failure(err),
@@ -202,7 +189,7 @@ impl DynamicTools {
                     Err(err) => tool_failure(err.to_string()),
                 }
             }
-            _ => tool_failure(format!("unsupported dynamic tool call: {tool}")),
+            _ => tool_failure(format!("unsupported vik_issue action: {action}")),
         }
     }
 
@@ -430,6 +417,14 @@ mod tests {
             })
         }
 
+        async fn list_comments(&self, issue_id: &str) -> Result<Vec<IssueComment>, TrackerError> {
+            Ok(vec![IssueComment {
+                id: "comment-1".to_string(),
+                body: format!("workpad for {issue_id}"),
+                url: None,
+            }])
+        }
+
         async fn update_comment(
             &self,
             comment_id: &str,
@@ -490,16 +485,11 @@ mod tests {
     fn tracker_tool_definitions_are_exposed_when_configured() {
         let definitions = tools().definitions();
 
-        assert_eq!(definitions[0]["name"], GET_ISSUE_TOOL);
-        assert!(
-            definitions
-                .iter()
-                .any(|definition| definition["name"] == UPDATE_ISSUE_TOOL)
-        );
-        assert!(
-            definitions
-                .iter()
-                .any(|definition| definition["name"] == LINK_PR_TOOL)
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0]["name"], VIK_ISSUE_TOOL);
+        assert_eq!(
+            definitions[0].pointer("/inputSchema/required/0"),
+            Some(&json!("action"))
         );
     }
 
@@ -511,21 +501,22 @@ mod tests {
     #[test]
     fn app_server_tool_call_shape_is_extracted() {
         let params = json!({
-            "tool": UPDATE_ISSUE_TOOL,
-            "arguments": { "issue_id": "1", "state": "Done" }
+            "tool": VIK_ISSUE_TOOL,
+            "arguments": {
+                "action": UPDATE_ISSUE_ACTION,
+                "issue_id": "1",
+                "state": "Done"
+            }
         });
-        assert_eq!(
-            extract_tool_name(&params).as_deref(),
-            Some(UPDATE_ISSUE_TOOL)
-        );
+        assert_eq!(extract_tool_name(&params).as_deref(), Some(VIK_ISSUE_TOOL));
         assert_eq!(extract_tool_arguments(&params).unwrap()["state"], "Done");
     }
 
     #[test]
     fn string_arguments_are_parsed() {
         let params = json!({
-            "tool": UPDATE_ISSUE_TOOL,
-            "arguments": "{\"issue_id\":\"1\",\"state\":\"Done\"}"
+            "tool": VIK_ISSUE_TOOL,
+            "arguments": "{\"action\":\"update_issue\",\"issue_id\":\"1\",\"state\":\"Done\"}"
         });
         assert_eq!(extract_tool_arguments(&params).unwrap()["issue_id"], "1");
     }
@@ -534,8 +525,12 @@ mod tests {
     async fn update_issue_routes_to_configured_tracker() {
         let result = tools()
             .handle_call(&json!({
-                "tool": UPDATE_ISSUE_TOOL,
-                "arguments": { "issue_id": "42", "state": "Done" }
+                "tool": VIK_ISSUE_TOOL,
+                "arguments": {
+                    "action": UPDATE_ISSUE_ACTION,
+                    "issue_id": "42",
+                    "state": "Done"
+                }
             }))
             .await;
 
@@ -553,11 +548,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_comments_routes_to_configured_tracker() {
+        let result = tools()
+            .handle_call(&json!({
+                "tool": VIK_ISSUE_TOOL,
+                "arguments": {
+                    "action": LIST_COMMENTS_ACTION,
+                    "issue_id": "42"
+                }
+            }))
+            .await;
+
+        assert_eq!(result["success"], true);
+        let body: Value = serde_json::from_str(
+            result
+                .pointer("/contentItems/0/text")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body[0]["id"], "comment-1");
+        assert_eq!(body[0]["body"], "workpad for 42");
+    }
+
+    #[tokio::test]
     async fn missing_issue_id_returns_tool_failure_without_network() {
         let result = tools()
             .handle_call(&json!({
-                "tool": UPDATE_ISSUE_TOOL,
-                "arguments": { "state": "Done" }
+                "tool": VIK_ISSUE_TOOL,
+                "arguments": { "action": UPDATE_ISSUE_ACTION, "state": "Done" }
             }))
             .await;
 
@@ -578,8 +598,9 @@ mod tests {
         let tools = DynamicTools::from_tracker(tracker).with_workspace_root(dir.path());
         let result = tools
             .handle_call(&json!({
-                "tool": UPLOAD_ATTACHMENT_TOOL,
+                "tool": VIK_ISSUE_TOOL,
                 "arguments": {
+                    "action": UPLOAD_ATTACHMENT_ACTION,
                     "issue_id": "42",
                     "path": outside_file.to_string_lossy(),
                     "content_type": "text/plain"

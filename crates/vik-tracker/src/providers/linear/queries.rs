@@ -188,6 +188,21 @@ mutation VikCommentCreate($issueId: String!, $body: String!) {
 }
 "#;
 
+pub const ISSUE_COMMENTS_QUERY: &str = r#"
+query VikIssueComments($id: String!, $first: Int!, $after: String) {
+  issue(id: $id) {
+    comments(first: $first, after: $after) {
+      nodes {
+        id
+        body
+        url
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}
+"#;
+
 pub const COMMENT_UPDATE_MUTATION: &str = r#"
 mutation VikCommentUpdate($id: String!, $body: String!) {
   commentUpdate(id: $id, input: { body: $body }) {

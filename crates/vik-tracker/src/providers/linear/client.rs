@@ -9,7 +9,7 @@ use vik_core::{Issue, IssueAttachment, IssueComment, IssueTracker, IssueUpdate, 
 use super::normalize::normalize_issue;
 use super::queries::{
     ATTACHMENT_CREATE_MUTATION, CANDIDATE_QUERY, COMMENT_CREATE_MUTATION, COMMENT_UPDATE_MUTATION,
-    FILE_UPLOAD_MUTATION, ISSUE_BY_ID_QUERY, ISSUE_STATES_BY_IDS_QUERY,
+    FILE_UPLOAD_MUTATION, ISSUE_BY_ID_QUERY, ISSUE_COMMENTS_QUERY, ISSUE_STATES_BY_IDS_QUERY,
     ISSUE_STATES_FOR_ISSUE_QUERY, ISSUE_UPDATE_MUTATION, ISSUES_BY_STATES_QUERY,
 };
 
@@ -389,6 +389,49 @@ impl LinearClient {
         normalize_comment(comment)
     }
 
+    async fn issue_comments(&self, issue_id: &str) -> Result<Vec<IssueComment>, TrackerError> {
+        let mut comments = Vec::new();
+        let mut after: Option<String> = None;
+        loop {
+            let payload = self
+                .graphql(
+                    ISSUE_COMMENTS_QUERY,
+                    json!({ "id": issue_id, "first": self.config.page_size, "after": after }),
+                )
+                .await?;
+            let comments_payload = payload.pointer("/data/issue/comments").ok_or_else(|| {
+                TrackerError::LinearUnknownPayload("missing issue.comments".to_string())
+            })?;
+            let nodes = comments_payload
+                .get("nodes")
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    TrackerError::LinearUnknownPayload("missing issue.comments.nodes".to_string())
+                })?;
+            for node in nodes {
+                comments.push(normalize_comment(node)?);
+            }
+            let page_info = comments_payload.get("pageInfo").ok_or_else(|| {
+                TrackerError::LinearUnknownPayload("missing issue.comments.pageInfo".to_string())
+            })?;
+            let has_next = page_info
+                .get("hasNextPage")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if !has_next {
+                break;
+            }
+            after = page_info
+                .get("endCursor")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            if after.is_none() {
+                return Err(TrackerError::LinearMissingEndCursor);
+            }
+        }
+        Ok(comments)
+    }
+
     async fn file_upload(
         &self,
         filename: &str,
@@ -536,6 +579,10 @@ impl IssueTracker for LinearClient {
         body: &str,
     ) -> Result<IssueComment, TrackerError> {
         self.comment_create(issue_id, body).await
+    }
+
+    async fn list_comments(&self, issue_id: &str) -> Result<Vec<IssueComment>, TrackerError> {
+        self.issue_comments(issue_id).await
     }
 
     async fn update_comment(

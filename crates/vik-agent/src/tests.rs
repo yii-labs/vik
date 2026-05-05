@@ -56,6 +56,10 @@ impl IssueTracker for TestTracker {
         })
     }
 
+    async fn list_comments(&self, _issue_id: &str) -> Result<Vec<IssueComment>, TrackerError> {
+        Ok(vec![])
+    }
+
     async fn update_comment(
         &self,
         comment_id: &str,
@@ -247,7 +251,7 @@ fn thread_start_payload_includes_configured_dynamic_tools() {
     );
     assert_eq!(
         payload.pointer("/dynamicTools/0/name"),
-        Some(&json!("get_issue"))
+        Some(&json!("vik_issue"))
     );
 }
 

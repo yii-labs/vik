@@ -54,6 +54,7 @@ pub trait IssueTracker: Send + Sync + 'static {
         issue_id: &str,
         body: &str,
     ) -> Result<IssueComment, TrackerError>;
+    async fn list_comments(&self, issue_id: &str) -> Result<Vec<IssueComment>, TrackerError>;
     async fn update_comment(
         &self,
         comment_id: &str,

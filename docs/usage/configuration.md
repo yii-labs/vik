@@ -66,8 +66,9 @@ Tracker reference:
 - [Linear](trackers/linear.md)
 - [GitHub](trackers/github.md)
 
-During agent runs, Vik exposes tracker-agnostic Codex app-server tools for
-common issue operations: `get_issue`, `update_issue`, `create_comment`,
+During agent runs, Vik exposes one tracker-agnostic Codex app-server tool named
+`vik_issue`. Its `action` field supports common issue operations including
+`get_issue`, `list_comments`, `update_issue`, `create_comment`,
 `update_comment`, `upload_attachment`, and `link_pr`. Each tool call is routed
 to the configured tracker provider.
 

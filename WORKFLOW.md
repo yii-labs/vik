@@ -73,11 +73,12 @@ Work only in the provided repository copy. Do not touch any other path.
 
 ## Prerequisite: Tracker dynamic tools are available
 
-The agent should be able to update the configured tracker through injected
-tracker dynamic tools such as `update_issue`, `create_comment`,
-`update_comment`, `upload_attachment`, and `link_pr`. If those tools are
-unavailable, fall back to a configured tracker MCP server. If neither path is
-present, stop and ask the user to configure tracker access.
+The agent should be able to update the configured tracker through the injected
+`vik_issue` dynamic tool. Use its `action` field for operations such as
+`update_issue`, `list_comments`, `create_comment`, `update_comment`,
+`upload_attachment`, and `link_pr`. If that tool is unavailable, fall back to a
+configured tracker MCP server. If neither path is present, stop and ask the
+user to configure tracker access.
 
 ## Default posture
 
@@ -132,7 +133,7 @@ handoff quality.
 
 ## Related skills
 
-- `linear`: interact with Linear.
+- `vik`: interact with the configured tracker through `vik_issue`.
 - `commit`: produce clean, logical commits during implementation.
 - `push`: keep remote branch current and publish updates.
 - `pull`: keep branch updated with latest `origin/main` before handoff.
@@ -166,7 +167,7 @@ handoff quality.
    - If a branch PR exists and is `CLOSED` or `MERGED`, treat prior branch work as non-reusable for this run.
    - Create a fresh branch from `origin/main` and restart execution flow as a new attempt.
 5. For `Todo` tickets, do startup sequencing in this exact order:
-   - `update_issue(issue_id: "{{ issue.id }}", state: "In Progress")`
+   - `vik_issue(action: "update_issue", issue_id: "{{ issue.id }}", state: "In Progress")`
    - find/create `## Codex Workpad` bootstrap comment
    - only then begin analysis/planning/implementation work.
 6. Add a short comment if state and issue content are inconsistent, then proceed with the safest flow.

@@ -17,8 +17,8 @@ This document maps Vik draft v1 required behavior to this workspace.
 - Sanitized per-issue workspaces: `vik-workspace::WorkspaceManager`.
 - Workspace hooks and timeout: `vik-workspace::WorkspaceManager`.
 - Codex JSONL app-server client: `vik-agent::CodexAppServerClient`.
-- Tracker-agnostic Codex app-server dynamic tools route through the configured
-  `vik_core::IssueTracker`.
+- Tracker-agnostic Codex app-server `vik_issue` dynamic tool routes through the
+  configured `vik_core::IssueTracker`.
 - Strict prompt rendering: `vik-workflow::render_prompt`.
 - Retry queue and backoff: `vik-orchestrator::failure_backoff_ms`.
 - Terminal/non-active reconciliation: `vik-orchestrator::Orchestrator`.

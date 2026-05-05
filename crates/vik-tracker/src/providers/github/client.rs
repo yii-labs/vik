@@ -539,6 +539,37 @@ impl IssueTracker for GitHubClient {
         normalize_comment(&payload)
     }
 
+    async fn list_comments(&self, issue_id: &str) -> Result<Vec<IssueComment>, TrackerError> {
+        let number = parse_issue_number(issue_id)?;
+        let path = issue_comments_path(&self.repository.owner, &self.repository.name, number);
+        let mut comments = Vec::new();
+        let mut page = 1_u64;
+        loop {
+            let payload = self
+                .request_json(
+                    Method::GET,
+                    &path,
+                    &[
+                        ("per_page", GITHUB_PAGE_SIZE.to_string()),
+                        ("page", page.to_string()),
+                    ],
+                    None,
+                )
+                .await?;
+            let items = payload.as_array().ok_or_else(|| {
+                TrackerError::GitHubUnknownPayload("missing issue comments array".to_string())
+            })?;
+            for item in items {
+                comments.push(normalize_comment(item)?);
+            }
+            if items.len() < GITHUB_PAGE_SIZE as usize {
+                break;
+            }
+            page += 1;
+        }
+        Ok(comments)
+    }
+
     async fn update_comment(
         &self,
         comment_id: &str,
