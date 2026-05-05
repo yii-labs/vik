@@ -321,15 +321,7 @@ impl ServiceConfig {
 
     pub fn validate_for_dispatch(&self) -> Result<(), WorkflowError> {
         self.tracker.validate()?;
-        if self.polling.interval_ms == 0 {
-            return Err(WorkflowError::InvalidConfig(
-                "polling.interval_ms must be positive".to_string(),
-            ));
-        }
-        match self.agent.runtime {
-            AgentRuntimeConfig::Codex => self.validate_codex_config()?,
-        }
-        Ok(())
+        self.validate_non_tracker_config()
     }
 
     pub fn validate_for_check(&self) -> Result<Vec<String>, WorkflowError> {
@@ -346,6 +338,11 @@ impl ServiceConfig {
                 TrackerKind::Unsupported(_) => unreachable!("unsupported tracker kind is rejected before warnings"),
             });
         }
+        self.validate_non_tracker_config()?;
+        Ok(warnings)
+    }
+
+    fn validate_non_tracker_config(&self) -> Result<(), WorkflowError> {
         if self.polling.interval_ms == 0 {
             return Err(WorkflowError::InvalidConfig(
                 "polling.interval_ms must be positive".to_string(),
@@ -354,7 +351,7 @@ impl ServiceConfig {
         match self.agent.runtime {
             AgentRuntimeConfig::Codex => self.validate_codex_config()?,
         }
-        Ok(warnings)
+        Ok(())
     }
 
     fn validate_codex_config(&self) -> Result<(), WorkflowError> {
