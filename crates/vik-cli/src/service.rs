@@ -11,6 +11,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use clap::{Args as ClapArgs, Subcommand};
+use inquire::Confirm;
 use serde::{Deserialize, Serialize};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
@@ -45,8 +46,6 @@ pub(crate) struct ServiceArgs {
 
 #[derive(Debug, Subcommand)]
 enum ServiceCommand {
-    /// Install service state and start Vik in the background.
-    Install(RunArgs),
     /// Remove service state and stop Vik if it is running.
     Uninstall(WorkflowArg),
     /// Print current service status.
@@ -490,7 +489,7 @@ enum RuntimeStatus {
 
 pub(crate) async fn run(args: ServiceArgs) -> Result<(), Box<dyn Error>> {
     match args.command {
-        ServiceCommand::Install(args) | ServiceCommand::Start(args) => {
+        ServiceCommand::Start(args) => {
             start(args.into_start_options(), true).await?;
         }
         ServiceCommand::Uninstall(args) => {
@@ -550,16 +549,12 @@ fn restart(args: RunArgs) -> Result<(), Box<dyn Error>> {
     target.start_detached("started")
 }
 
-fn confirm_start_when_not_running() -> io::Result<bool> {
-    print!("service is not running, do you want to start now? [Y/n] ");
-    io::stdout().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    Ok(confirmation_starts_service(&input))
-}
-
-fn confirmation_starts_service(input: &str) -> bool {
-    !matches!(input.trim().chars().next(), Some('n' | 'N'))
+fn confirm_start_when_not_running() -> Result<bool, Box<dyn Error>> {
+    Ok(
+        Confirm::new("service is not running, do you want to start now?")
+            .with_default(true)
+            .prompt()?,
+    )
 }
 
 impl ServiceTarget {
@@ -1004,20 +999,6 @@ mod tests {
         assert_eq!(options.workflow, Some(PathBuf::from("WORKFLOW.md")));
         assert_eq!(options.port, Some(3000));
         assert_eq!(options.bind_address, None);
-    }
-
-    #[test]
-    fn restart_confirmation_defaults_to_start() {
-        assert!(confirmation_starts_service(""));
-        assert!(confirmation_starts_service("\n"));
-        assert!(confirmation_starts_service("y\n"));
-        assert!(confirmation_starts_service("yes\n"));
-    }
-
-    #[test]
-    fn restart_confirmation_honors_no() {
-        assert!(!confirmation_starts_service("n\n"));
-        assert!(!confirmation_starts_service("No\n"));
     }
 
     #[test]

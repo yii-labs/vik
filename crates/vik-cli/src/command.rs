@@ -123,4 +123,11 @@ mod tests {
 
         assert_eq!(err, clap::error::ErrorKind::UnknownArgument);
     }
+
+    #[test]
+    fn service_install_command_is_rejected() {
+        let err = Args::try_parse_from(["vik", "service", "install"]).unwrap_err();
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::InvalidSubcommand);
+    }
 }
