@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use chrono::{TimeZone, Utc};
 use serde_json::json;
-use vik_core::{AgentEvent, BlockerRef, Issue, TokenUsage, WorkerOutcome};
+use vik_core::{AgentEvent, BlockerRef, Issue, RuntimeSnapshot, TokenUsage, WorkerOutcome};
 use vik_workflow::{
     AgentConfig, AgentRuntimeConfig, CodexConfig, CommonTrackerConfig, HooksConfig,
     LinearTrackerConfig, LoggingConfig, PollingConfig, ServiceConfig, TrackerConfig,
@@ -205,4 +205,32 @@ fn service_log_decision_suppresses_session_log_duplicates() {
     lifecycle.event = "codex_thread_starting".into();
     lifecycle.session = None;
     assert!(should_log_agent_event_to_service(&lifecycle));
+}
+
+#[test]
+fn runtime_snapshot_keeps_old_token_totals_json_key() {
+    let snapshot = OrchestratorState::new(&config()).snapshot();
+    let value = serde_json::to_value(&snapshot).unwrap();
+
+    assert!(value.get("codex_totals").is_some());
+    assert!(value.get("token_totals").is_none());
+    assert!(value.get("rate_limits").is_some());
+
+    let decoded: RuntimeSnapshot = serde_json::from_value(json!({
+        "generated_at": "2026-01-01T00:00:00Z",
+        "counts": {},
+        "running": [],
+        "retrying": [],
+        "token_totals": {
+            "input_tokens": 1,
+            "output_tokens": 2,
+            "total_tokens": 3,
+            "seconds_running": 4.0
+        },
+        "codex_rate_limits": { "remaining": 10 }
+    }))
+    .unwrap();
+
+    assert_eq!(decoded.token_totals.total_tokens, 3);
+    assert_eq!(decoded.rate_limits, Some(json!({ "remaining": 10 })));
 }

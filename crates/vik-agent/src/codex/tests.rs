@@ -431,7 +431,8 @@ async fn codex_run_shuts_down_and_unsubscribes_after_turn_failure() {
 #[tokio::test]
 async fn local_agent_worker_maps_runtime_failure_to_worker_outcome() {
     let runtime = Arc::new(FailingRuntime);
-    let worker = crate::LocalAgentWorker::new(runtime);
+    let tracker = Arc::new(FakeTracker::new(vec!["Todo"]));
+    let worker = crate::LocalAgentWorker::with_runtime_override(tracker, runtime);
     let (tx, _rx) = mpsc::unbounded_channel();
 
     let outcome =
@@ -447,11 +448,11 @@ async fn local_agent_worker_maps_runtime_failure_to_worker_outcome() {
 }
 
 #[test]
-fn local_agent_worker_builds_runtime_from_config() {
+fn local_agent_worker_keeps_tracker_constructor() {
     let tracker = Arc::new(FakeTracker::new(vec!["Todo"]));
-    let _worker = crate::LocalAgentWorker::from_config(&AgentRuntimeConfig::Codex, tracker);
+    let _worker = crate::LocalAgentWorker::new(tracker);
 
-    // Building the worker must stay outside CLI-specific code.
+    // Runtime selection happens for each request from the current workflow config.
 }
 
 #[derive(Clone)]
