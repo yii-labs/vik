@@ -22,6 +22,7 @@ use vik_orchestrator::Orchestrator;
 use vik_tracker::TrackerClient;
 use vik_workflow::{WorkflowReloader, load_effective_workflow, select_workflow_path};
 
+use crate::env::load_dotenv_from_dir;
 use crate::service::{LogsArgs, RunArgs, StartArgs};
 
 pub struct ServiceManager {
@@ -41,14 +42,15 @@ impl ServiceManager {
         } else {
             env::current_dir()?.join(selected)
         };
-        let workflow_path = normalize_workflow_path(workflow_path);
+        let workflow_path = workflow_path.canonicalize()?;
 
-        let cwd = workflow_path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .to_path_buf();
+        if let Some(workflow_dir) = workflow_path.parent() {
+            load_dotenv_from_dir(workflow_dir)?;
+        }
+        let loaded = load_effective_workflow(Some(workflow_path.clone()))?;
+        let cwd = loaded.config.workspace.root.canonicalize()?;
         let service_dir = cwd.join("service");
-        let log_dir = cwd.join("logs");
+        let log_dir = loaded.config.logging.dir.canonicalize()?;
         let session_dir = service_dir.join("sessions");
 
         let stem = workflow_path
@@ -226,8 +228,8 @@ impl ServiceManager {
             cwd,
             pid: Some(pid),
             status: StoredStatus::Running,
-            started_at_unix: Some(self.now_unix()),
-            stopped_at_unix: None,
+            started_at: Some(self.now()),
+            stopped_at: None,
             log_dir: self.log_dir.clone(),
             session_dir: self.session_dir.clone(),
             port: args.port,
@@ -248,7 +250,7 @@ impl ServiceManager {
                 let pid = state.pid.unwrap_or_default();
                 self.terminate_pid(pid)?;
                 state.status = StoredStatus::Stopped;
-                state.stopped_at_unix = Some(self.now_unix());
+                state.stopped_at = Some(self.now());
                 println!("service stopped: pid={pid}");
             }
             RuntimeStatus::Stopped => {
@@ -260,7 +262,7 @@ impl ServiceManager {
                     self.terminate_stale_service_processes(pid)?;
                 }
                 state.status = StoredStatus::Stopped;
-                state.stopped_at_unix = Some(self.now_unix());
+                state.stopped_at = Some(self.now());
                 println!("service stale: pid={pid} is not running");
             }
         }
@@ -357,15 +359,7 @@ impl ServiceManager {
     }
 
     fn load_dotenv_from_cwd(&self) -> Result<(), Box<dyn Error>> {
-        for ancestor in self.cwd.ancestors() {
-            let path = ancestor.join(".env");
-            match dotenvy::from_path(&path) {
-                Ok(_) => return Ok(()),
-                Err(dotenvy::Error::Io(err)) if err.kind() == io::ErrorKind::NotFound => {}
-                Err(err) => return Err(format!("failed to load {}: {err}", path.display()).into()),
-            }
-        }
-        Ok(())
+        load_dotenv_from_dir(&self.cwd)
     }
 
     fn read_state(&self) -> Result<Option<ServiceState>, Box<dyn Error>> {
@@ -499,7 +493,7 @@ impl ServiceManager {
         )
     }
 
-    fn now_unix(&self) -> u64 {
+    fn now(&self) -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -720,8 +714,8 @@ struct ServiceState {
     workflow_path: PathBuf,
     pid: Option<u32>,
     status: StoredStatus,
-    started_at_unix: Option<u64>,
-    stopped_at_unix: Option<u64>,
+    started_at: Option<u64>,
+    stopped_at: Option<u64>,
     log_dir: PathBuf,
     session_dir: PathBuf,
     port: Option<u16>,
@@ -793,14 +787,43 @@ mod tests {
     }
 
     #[test]
-    fn manager_state_path_survives_workspace_root_change() {
+    fn manager_cwd_uses_resolved_workspace_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflow_path = dir.path().join("WORKFLOW.md");
+
+        let manager = test_manager(&workflow_path, "work").unwrap();
+
+        assert_eq!(manager.cwd, dir.path().join("work"));
+        assert_eq!(manager.service_dir, manager.cwd.join("service"));
+        assert_eq!(manager.log_dir, manager.cwd.join("logs"));
+    }
+
+    #[test]
+    fn manager_cwd_uses_workspace_root_from_dotenv() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflow_path = dir.path().join("WORKFLOW.md");
+        let key = unique_env_key("WORKSPACE_ROOT");
+        fs::write(dir.path().join(".env"), format!("{key}=env-workspace\n")).unwrap();
+        write_workflow(&workflow_path, &format!("${key}"));
+
+        let manager = ServiceManager::new(Some(workflow_path)).unwrap();
+
+        assert_eq!(manager.cwd, dir.path().join("env-workspace"));
+    }
+
+    #[test]
+    fn manager_state_path_uses_workspace_root() {
         let dir = tempfile::tempdir().unwrap();
         let workflow_path = dir.path().join("WORKFLOW.md");
         let first = test_manager(&workflow_path, "work-a").unwrap();
         let second = test_manager(&workflow_path, "work-b").unwrap();
 
-        assert_eq!(first.state_path, second.state_path);
-        assert_eq!(first.service_dir, dir.path().join("service"));
+        assert_ne!(first.state_path, second.state_path);
+        assert_eq!(first.service_dir, dir.path().join("work-a").join("service"));
+        assert_eq!(
+            second.service_dir,
+            dir.path().join("work-b").join("service")
+        );
     }
 
     #[test]
@@ -867,14 +890,16 @@ mod tests {
     }
 
     #[test]
-    fn manager_does_not_load_workflow_file() {
+    fn manager_reports_missing_workflow_file() {
         let dir = tempfile::tempdir().unwrap();
         let workflow_path = dir.path().join("missing.md");
 
-        let manager = ServiceManager::new(Some(workflow_path.clone())).unwrap();
+        let err = match ServiceManager::new(Some(workflow_path)) {
+            Ok(_) => panic!("expected missing workflow file error"),
+            Err(err) => err.to_string(),
+        };
 
-        assert_eq!(manager.workflow_path, workflow_path);
-        assert_eq!(manager.service_dir, dir.path().join("service"));
+        assert!(err.contains("missing_workflow_file"));
     }
 
     #[test]
@@ -886,8 +911,8 @@ mod tests {
             cwd: PathBuf::from("/tmp/vik"),
             pid: Some(999_999),
             status: StoredStatus::Stopped,
-            started_at_unix: Some(1),
-            stopped_at_unix: Some(2),
+            started_at: Some(1),
+            stopped_at: Some(2),
             log_dir: PathBuf::from("/tmp/vik/service.log"),
             session_dir: PathBuf::from("/tmp/vik/sessions"),
             port: None,
@@ -930,7 +955,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn signal_service_process_group_stops_unix_descendants() {
+    fn signal_service_process_group_stops_descendants() {
         let manager = temp_manager().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let child_pid_path = dir.path().join("child.pid");
@@ -989,7 +1014,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn terminate_pid_force_kills_unix_descendants_after_leader_exit() {
+    fn terminate_pid_force_kills_descendants_after_leader_exit() {
         let manager = temp_manager().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let child_pid_path = dir.path().join("child.pid");
@@ -1031,8 +1056,8 @@ mod tests {
             cwd,
             pid: None,
             status: StoredStatus::Stopped,
-            started_at_unix: Some(1),
-            stopped_at_unix: Some(2),
+            started_at: Some(1),
+            stopped_at: Some(2),
             log_dir: PathBuf::from("/tmp/vik/service.log"),
             session_dir: PathBuf::from("/tmp/vik/sessions"),
             port,
