@@ -27,12 +27,18 @@ This document maps Vik draft v1 required behavior to this workspace.
 - Structured logs: `tracing` events include issue/session fields where available.
 - Operator observability: JSON logs plus optional HTTP API in `vik-http`.
 
+Implemented tracker providers:
+
+- Linear.
+- GitHub.
+- Feishu through `lark-cli` and one configured Base table.
+
 Not implemented:
 
 - SSH worker extension.
 - Durable retry/session persistence.
 - Non-Codex runtimes.
-- Trackers beyond Linear and GitHub.
+- Trackers beyond Linear, GitHub, and Feishu.
 
 ## Production Validation
 

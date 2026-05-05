@@ -36,6 +36,18 @@ pub enum TrackerError {
     GitHubApiStatus(u16),
     #[error("github_unknown_payload: {0}")]
     GitHubUnknownPayload(String),
+    #[error("missing_tracker_base_token")]
+    MissingTrackerBaseToken,
+    #[error("missing_tracker_table_id")]
+    MissingTrackerTableId,
+    #[error("missing_tracker_cli_path")]
+    MissingTrackerCliPath,
+    #[error("invalid_tracker_cli_identity: {0}")]
+    InvalidTrackerCliIdentity(String),
+    #[error("feishu_cli: {0}")]
+    FeishuCli(String),
+    #[error("feishu_unknown_payload: {0}")]
+    FeishuUnknownPayload(String),
 }
 
 #[async_trait]
