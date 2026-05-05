@@ -7,13 +7,15 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::time;
-use vik_core::{AgentEvent, LiveSession};
+use vik_core::{AgentEvent, AgentSession};
 use vik_workflow::CodexConfig;
 
+use crate::codex::events::{
+    agent_event, extract_rate_limits, extract_usage, summarize_message, truncate,
+};
+use crate::codex::session_log::SessionLog;
+use crate::codex::tools::DynamicTools;
 use crate::error::AgentError;
-use crate::event::{agent_event, extract_rate_limits, extract_usage, summarize_message, truncate};
-use crate::session_log::SessionLog;
-use crate::tools::DynamicTools;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProcessCommand {
@@ -234,9 +236,9 @@ impl JsonlRpcProcess {
         &mut self,
         thread_id: &str,
         turn_id: &str,
-        live: &mut LiveSession,
+        live: &mut AgentSession,
         issue_id: &str,
-        on_event: &mut impl FnMut(AgentEvent),
+        on_event: &mut (dyn FnMut(AgentEvent) + Send),
     ) -> Result<(), AgentError> {
         let deadline = time::Instant::now() + self.turn_timeout;
         loop {
@@ -255,13 +257,13 @@ impl JsonlRpcProcess {
                 .get("method")
                 .and_then(Value::as_str)
                 .unwrap_or("other_message");
-            live.last_codex_event = Some(method.to_string());
-            live.last_codex_timestamp = Some(Utc::now());
-            live.last_codex_message = summarize_message(&message);
+            live.last_event = Some(method.to_string());
+            live.last_event_at = Some(Utc::now());
+            live.last_message = summarize_message(&message);
             if let Some(usage) = extract_usage(method, &message) {
-                live.codex_input_tokens = usage.input_tokens;
-                live.codex_output_tokens = usage.output_tokens;
-                live.codex_total_tokens = usage.total_tokens;
+                live.input_tokens = usage.input_tokens;
+                live.output_tokens = usage.output_tokens;
+                live.total_tokens = usage.total_tokens;
             }
             on_event(agent_event(
                 issue_id.to_string(),

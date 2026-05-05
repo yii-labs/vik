@@ -41,10 +41,33 @@ pub struct HooksConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentConfig {
+    #[serde(default)]
+    pub runtime: AgentRuntimeConfig,
     pub max_concurrent_agents: usize,
     pub max_turns: u32,
     pub max_retry_backoff_ms: u64,
     pub max_concurrent_agents_by_state: HashMap<String, usize>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRuntimeConfig {
+    #[default]
+    Codex,
+}
+
+impl AgentRuntimeConfig {
+    fn from_name(raw: &str) -> Result<Self, WorkflowError> {
+        match raw.trim() {
+            "codex" => Ok(Self::Codex),
+            "" => Err(WorkflowError::InvalidConfig(
+                "agent.runtime is empty".to_string(),
+            )),
+            value => Err(WorkflowError::InvalidConfig(format!(
+                "unsupported agent.runtime: {value}"
+            ))),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -250,6 +273,10 @@ impl ServiceConfig {
         let max_retry_backoff_ms = u64_value(agent_map, "max_retry_backoff_ms").unwrap_or(300_000);
         let max_concurrent_agents_by_state =
             concurrency_map(agent_map, "max_concurrent_agents_by_state");
+        let runtime = string_value(agent_map, "runtime")
+            .map(|raw| AgentRuntimeConfig::from_name(&raw))
+            .transpose()?
+            .unwrap_or_default();
 
         let codex = CodexConfig {
             command: string_value(codex_map, "command")
@@ -281,6 +308,7 @@ impl ServiceConfig {
             logging: LoggingConfig { dir: logging_dir },
             hooks,
             agent: AgentConfig {
+                runtime,
                 max_concurrent_agents,
                 max_turns,
                 max_retry_backoff_ms,
@@ -298,6 +326,13 @@ impl ServiceConfig {
                 "polling.interval_ms must be positive".to_string(),
             ));
         }
+        match self.agent.runtime {
+            AgentRuntimeConfig::Codex => self.validate_codex_config()?,
+        }
+        Ok(())
+    }
+
+    fn validate_codex_config(&self) -> Result<(), WorkflowError> {
         if self.codex.command.trim().is_empty() {
             return Err(WorkflowError::InvalidConfig(
                 "codex.command is empty".to_string(),

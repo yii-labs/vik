@@ -22,8 +22,8 @@ impl OrchestratorState {
                 issue_id=%event.issue_id,
                 issue_identifier,
                 session_id,
-                codex_event=%event.event,
-                "codex_update outcome=received"
+                agent_event=%event.event,
+                "agent_update outcome=received"
             );
         }
         if let Some(entry) = self.running.get_mut(&event.issue_id) {
@@ -40,9 +40,9 @@ impl OrchestratorState {
                 let total_delta = usage
                     .total_tokens
                     .saturating_sub(entry.last_reported_total_tokens);
-                self.codex_totals.input_tokens += input_delta;
-                self.codex_totals.output_tokens += output_delta;
-                self.codex_totals.total_tokens += total_delta;
+                self.token_totals.input_tokens += input_delta;
+                self.token_totals.output_tokens += output_delta;
+                self.token_totals.total_tokens += total_delta;
                 entry.last_reported_input_tokens = usage.input_tokens;
                 entry.last_reported_output_tokens = usage.output_tokens;
                 entry.last_reported_total_tokens = usage.total_tokens;
@@ -54,7 +54,7 @@ impl OrchestratorState {
             }
         }
         if let Some(rate_limits) = event.rate_limits {
-            self.codex_rate_limits = Some(rate_limits);
+            self.rate_limits = Some(rate_limits);
         }
         self.recent_events
             .entry(event.issue_id.clone())
@@ -81,7 +81,7 @@ impl OrchestratorState {
         );
         let running = self.running.remove(&outcome.issue_id);
         if let Some(entry) = running {
-            self.codex_totals.seconds_running += (outcome.finished_at - entry.started_at)
+            self.token_totals.seconds_running += (outcome.finished_at - entry.started_at)
                 .num_milliseconds()
                 .max(0) as f64
                 / 1000.0;

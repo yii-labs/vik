@@ -1,11 +1,11 @@
 use chrono::Utc;
 use serde_json::Value;
-use vik_core::{AgentEvent, LiveSession, TokenUsage};
+use vik_core::{AgentEvent, AgentSession, TokenUsage};
 
 pub(crate) fn agent_event(
     issue_id: String,
     event: impl Into<String>,
-    session: Option<LiveSession>,
+    session: Option<AgentSession>,
     usage: Option<TokenUsage>,
     rate_limits: Option<Value>,
     raw: Value,
@@ -15,9 +15,7 @@ pub(crate) fn agent_event(
         issue_id,
         event: event.into(),
         timestamp: Utc::now(),
-        codex_app_server_pid: session
-            .as_ref()
-            .and_then(|s| s.codex_app_server_pid.clone()),
+        process_id: session.as_ref().and_then(|s| s.process_id.clone()),
         session,
         usage,
         rate_limits,

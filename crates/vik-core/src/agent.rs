@@ -54,24 +54,24 @@ impl Default for TokenTotals {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct LiveSession {
+pub struct AgentSession {
     pub session_id: String,
     pub thread_id: String,
     pub turn_id: String,
-    pub codex_app_server_pid: Option<String>,
-    pub last_codex_event: Option<String>,
-    pub last_codex_timestamp: Option<DateTime<Utc>>,
-    pub last_codex_message: Option<String>,
-    pub codex_input_tokens: u64,
-    pub codex_output_tokens: u64,
-    pub codex_total_tokens: u64,
+    pub process_id: Option<String>,
+    pub last_event: Option<String>,
+    pub last_event_at: Option<DateTime<Utc>>,
+    pub last_message: Option<String>,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub total_tokens: u64,
     pub last_reported_input_tokens: u64,
     pub last_reported_output_tokens: u64,
     pub last_reported_total_tokens: u64,
     pub turn_count: u32,
 }
 
-impl LiveSession {
+impl AgentSession {
     pub fn new(thread_id: impl Into<String>, turn_id: impl Into<String>) -> Self {
         let thread_id = thread_id.into();
         let turn_id = turn_id.into();
@@ -79,13 +79,13 @@ impl LiveSession {
             session_id: session_id(&thread_id, &turn_id),
             thread_id,
             turn_id,
-            codex_app_server_pid: None,
-            last_codex_event: None,
-            last_codex_timestamp: None,
-            last_codex_message: None,
-            codex_input_tokens: 0,
-            codex_output_tokens: 0,
-            codex_total_tokens: 0,
+            process_id: None,
+            last_event: None,
+            last_event_at: None,
+            last_message: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            total_tokens: 0,
             last_reported_input_tokens: 0,
             last_reported_output_tokens: 0,
             last_reported_total_tokens: 0,
@@ -108,8 +108,8 @@ pub struct AgentEvent {
     pub issue_id: String,
     pub event: String,
     pub timestamp: DateTime<Utc>,
-    pub codex_app_server_pid: Option<String>,
-    pub session: Option<LiveSession>,
+    pub process_id: Option<String>,
+    pub session: Option<AgentSession>,
     pub usage: Option<TokenUsage>,
     pub rate_limits: Option<Value>,
     pub message: Option<String>,

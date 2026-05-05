@@ -16,7 +16,9 @@ This document maps Vik draft v1 required behavior to this workspace.
   `vik-tracker::TrackerClient`.
 - Sanitized per-issue workspaces: `vik-workspace::WorkspaceManager`.
 - Workspace hooks and timeout: `vik-workspace::WorkspaceManager`.
-- Codex JSONL app-server client: `vik-agent::CodexAppServerClient`.
+- Agent runtime seam: `vik-agent::AgentRuntime`.
+- Agent runtime selection: `agent.runtime` in `vik-workflow::AgentConfig`.
+- Codex runtime adapter: internal `vik-agent` Codex module.
 - Tracker-agnostic Codex app-server `vik_issue` dynamic tool routes through the
   configured `vik_core::IssueTracker`.
 - Strict prompt rendering: `vik-workflow::render_prompt`.
@@ -29,6 +31,7 @@ Not implemented:
 
 - SSH worker extension.
 - Durable retry/session persistence.
+- Non-Codex runtimes.
 - Trackers beyond Linear and GitHub.
 
 ## Production Validation

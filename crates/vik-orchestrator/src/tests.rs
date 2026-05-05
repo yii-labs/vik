@@ -4,8 +4,9 @@ use chrono::{TimeZone, Utc};
 use serde_json::json;
 use vik_core::{AgentEvent, BlockerRef, Issue, TokenUsage, WorkerOutcome};
 use vik_workflow::{
-    AgentConfig, CodexConfig, CommonTrackerConfig, HooksConfig, LinearTrackerConfig, LoggingConfig,
-    PollingConfig, ServiceConfig, TrackerConfig, WorkspaceConfig,
+    AgentConfig, AgentRuntimeConfig, CodexConfig, CommonTrackerConfig, HooksConfig,
+    LinearTrackerConfig, LoggingConfig, PollingConfig, ServiceConfig, TrackerConfig,
+    WorkspaceConfig,
 };
 
 use crate::state_events::should_log_agent_event_to_service;
@@ -38,6 +39,7 @@ fn config() -> ServiceConfig {
             ..HooksConfig::default()
         },
         agent: AgentConfig {
+            runtime: AgentRuntimeConfig::Codex,
             max_concurrent_agents: 2,
             max_turns: 20,
             max_retry_backoff_ms: 300_000,
@@ -165,7 +167,7 @@ async fn lifecycle_event_without_session_updates_running_status() {
         issue_id: "A".into(),
         event: "codex_thread_starting".into(),
         timestamp: Utc::now(),
-        codex_app_server_pid: None,
+        process_id: None,
         session: None,
         usage: None,
         rate_limits: None,
@@ -182,24 +184,24 @@ async fn lifecycle_event_without_session_updates_running_status() {
 
 #[test]
 fn service_log_decision_suppresses_session_log_duplicates() {
-    let codex_event = AgentEvent {
+    let agent_event = AgentEvent {
         issue_id: "A".into(),
         event: "turn/completed".into(),
         timestamp: Utc::now(),
-        codex_app_server_pid: Some("123".into()),
-        session: Some(vik_core::LiveSession::new("thread-1", "turn-1")),
+        process_id: Some("123".into()),
+        session: Some(vik_core::AgentSession::new("thread-1", "turn-1")),
         usage: None,
         rate_limits: None,
         message: Some("completed".into()),
         raw: json!({ "method": "turn/completed" }),
     };
-    assert!(!should_log_agent_event_to_service(&codex_event));
+    assert!(!should_log_agent_event_to_service(&agent_event));
 
-    let mut session_started = codex_event.clone();
+    let mut session_started = agent_event.clone();
     session_started.event = "session_started".into();
     assert!(should_log_agent_event_to_service(&session_started));
 
-    let mut lifecycle = codex_event.clone();
+    let mut lifecycle = agent_event.clone();
     lifecycle.event = "codex_thread_starting".into();
     lifecycle.session = None;
     assert!(should_log_agent_event_to_service(&lifecycle));

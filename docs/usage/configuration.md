@@ -18,6 +18,8 @@ workspace:
 hooks:
   after_create: |
     git clone --depth 1 git@github.com:yii-labs/vik .
+agent:
+  runtime: codex
 codex:
   command: codex --config shell_environment_policy.inherit=all app-server
 ---
@@ -107,8 +109,8 @@ Hooks are trusted shell snippets from `WORKFLOW.md`.
 Fields:
 
 - `after_create`: run once after a new issue workspace is created.
-- `before_run`: run before Codex starts.
-- `after_run`: run after Codex exits.
+- `before_run`: run before the agent runtime starts.
+- `after_run`: run after the agent runtime exits.
 - `before_remove`: run before terminal cleanup.
 - `timeout_ms`: hook timeout. Default: `60000`.
 
@@ -132,12 +134,19 @@ hooks:
 
 Fields:
 
+- `runtime`: agent runtime adapter. Default: `codex`.
 - `max_concurrent_agents`: global concurrency. Default: `10`.
-- `max_turns`: max Codex turns per issue attempt. Default: `20`.
+- `max_turns`: max runtime turns per issue attempt. Default: `20`.
 - `max_retry_backoff_ms`: retry backoff cap. Default: `300000`.
 - `max_concurrent_agents_by_state`: optional per-state concurrency limits.
 
+Supported runtime values:
+
+- `codex`: run Codex app-server through the Vik Codex adapter.
+
 ## Codex
+
+Used when `agent.runtime` is `codex`.
 
 `codex.command` launches Codex app-server. Default: `codex app-server`.
 

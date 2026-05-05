@@ -16,8 +16,8 @@ pub struct OrchestratorState {
     pub claimed: HashSet<String>,
     pub retry_attempts: HashMap<String, RetryEntry>,
     pub completed: HashSet<String>,
-    pub codex_totals: TokenTotals,
-    pub codex_rate_limits: Option<Value>,
+    pub token_totals: TokenTotals,
+    pub rate_limits: Option<Value>,
     pub recent_events: HashMap<String, Vec<RecentEvent>>,
     pub last_errors: HashMap<String, String>,
 }
@@ -31,8 +31,8 @@ impl OrchestratorState {
             claimed: HashSet::new(),
             retry_attempts: HashMap::new(),
             completed: HashSet::new(),
-            codex_totals: TokenTotals::default(),
-            codex_rate_limits: None,
+            token_totals: TokenTotals::default(),
+            rate_limits: None,
             recent_events: HashMap::new(),
             last_errors: HashMap::new(),
         }
