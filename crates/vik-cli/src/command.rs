@@ -2,6 +2,9 @@ use std::error::Error;
 
 use clap::{Parser, Subcommand};
 
+use crate::check;
+use crate::service;
+
 #[derive(Debug, Parser)]
 #[command(
     name = "vik",
@@ -13,29 +16,27 @@ use clap::{Parser, Subcommand};
 pub(crate) struct Args {
     #[command(subcommand)]
     command: Command,
+
+    /// Path to WORKFLOW.md. Defaults to ./WORKFLOW.md.
+    #[arg(global = true)]
+    workflow: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Start Vik coding-agent orchestration.
-    Start(crate::start::StartArgs),
     /// Validate workflow and exit.
-    Check(crate::check::CheckArgs),
+    Check,
+    /// Start Vik coding-agent orchestration.
+    Start(service::StartArgs),
     /// Manage Vik as a detached local service.
-    Service(crate::service::ServiceArgs),
+    Service(service::ServiceArgs),
 }
 
 pub(crate) async fn run(args: Args) -> Result<(), Box<dyn Error>> {
     match args.command {
-        Command::Start(args) => {
-            crate::env::load_dotenv()?;
-            crate::start::run(args).await
-        }
-        Command::Check(args) => {
-            crate::env::load_dotenv()?;
-            crate::check::run(args.workflow)
-        }
-        Command::Service(args) => crate::service::run(args).await,
+        Command::Check => check::run(args.workflow),
+        Command::Start(start_args) => service::start(args.workflow, start_args).await,
+        Command::Service(service_args) => service::run(args.workflow, service_args).await,
     }
 }
 
@@ -53,8 +54,8 @@ mod tests {
         let args = Args::try_parse_from(["vik", "check", "./custom.md"]).unwrap();
 
         match args.command {
-            Command::Check(check_args) => {
-                assert_eq!(check_args.workflow, Some(PathBuf::from("./custom.md")));
+            Command::Check => {
+                assert_eq!(args.workflow, Some(PathBuf::from("./custom.md")));
             }
             other => panic!("expected check subcommand, got {other:?}"),
         }
@@ -65,7 +66,7 @@ mod tests {
         let args = Args::try_parse_from(["vik", "check"]).unwrap();
 
         match args.command {
-            Command::Check(check_args) => assert_eq!(check_args.workflow, None),
+            Command::Check => assert_eq!(args.workflow, None),
             other => panic!("expected check subcommand, got {other:?}"),
         }
     }
@@ -74,7 +75,7 @@ mod tests {
     fn legacy_check_flag_is_rejected() {
         let err = Args::try_parse_from(["vik", "./WORKFLOW.md", "--check"]).unwrap_err();
 
-        assert_eq!(err.kind(), clap::error::ErrorKind::InvalidSubcommand);
+        assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
     }
 
     #[test]
@@ -103,10 +104,19 @@ mod tests {
 
         match args.command {
             Command::Start(args) => {
-                assert_eq!(args.workflow, Some(PathBuf::from("WORKFLOW.md")));
-                assert_eq!(args.port, Some(3000));
-                assert_eq!(args.bind_address, Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED)));
+                assert_eq!(args.run_args.port, Some(3000));
+                assert_eq!(args.run_args.host, IpAddr::V4(Ipv4Addr::UNSPECIFIED));
             }
+            other => panic!("expected start command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn start_command_keeps_port_optional() {
+        let args = Args::try_parse_from(["vik", "start", "WORKFLOW.md"]).unwrap();
+
+        match args.command {
+            Command::Start(args) => assert_eq!(args.run_args.port, None),
             other => panic!("expected start command, got {other:?}"),
         }
     }
@@ -115,7 +125,7 @@ mod tests {
     fn implicit_workflow_arg_is_rejected() {
         let err = Args::try_parse_from(["vik", "WORKFLOW.md"]).unwrap_err();
 
-        assert_eq!(err.kind(), clap::error::ErrorKind::InvalidSubcommand);
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingSubcommand);
     }
 
     #[test]
@@ -125,5 +135,28 @@ mod tests {
             .kind();
 
         assert_eq!(err, clap::error::ErrorKind::UnknownArgument);
+    }
+
+    #[test]
+    fn service_install_command_is_rejected() {
+        let err = Args::try_parse_from(["vik", "service", "install"]).unwrap_err();
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingSubcommand);
+    }
+
+    #[test]
+    fn service_start_accepts_workflow_path() {
+        let args =
+            Args::try_parse_from(["vik", "service", "start", "WORKFLOW.md", "--port", "3000"])
+                .unwrap();
+
+        assert_eq!(args.workflow, Some(PathBuf::from("WORKFLOW.md")));
+    }
+
+    #[test]
+    fn service_status_accepts_workflow_path() {
+        let args = Args::try_parse_from(["vik", "service", "status", "WORKFLOW.md"]).unwrap();
+
+        assert_eq!(args.workflow, Some(PathBuf::from("WORKFLOW.md")));
     }
 }

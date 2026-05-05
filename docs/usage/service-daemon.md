@@ -4,18 +4,18 @@ Use service commands when Vik should keep running after the terminal exits.
 This is a local detached process manager, not a system-wide launchd or systemd
 unit.
 
-## Install And Start
+## Start
 
 Run from the directory that contains `WORKFLOW.md`:
 
 ```sh
-vik service install --port 3000
+vik service start --port 3000
 ```
 
 Use an explicit workflow path when managing another workflow:
 
 ```sh
-vik service install /path/to/WORKFLOW.md --port 3000
+vik service start /path/to/WORKFLOW.md --port 3000
 ```
 
 ## Status
@@ -64,6 +64,9 @@ Daemon JSON logs still use `logging.dir` from `WORKFLOW.md`.
 vik service restart --port 3000
 vik service stop
 ```
+
+If restart finds no running service for the workflow, it asks whether to start
+one instead.
 
 Uninstall stops the process and removes service state:
 
