@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 use serde_json::{Value, json};
-use vik_core::{IssueTracker, IssueUpdate, TrackerError};
+use vik_core::{Issue, IssueTracker, IssueUpdate, TrackerError};
 
 const VIK_ISSUE_TOOL: &str = "vik_issue";
 const GET_ISSUE_ACTION: &str = "get_issue";
@@ -19,6 +19,13 @@ const LINK_PR_ACTION: &str = "link_pr";
 pub(crate) struct DynamicTools {
     tracker: Option<Arc<dyn IssueTracker>>,
     workspace_root: Option<PathBuf>,
+    issue_context: Option<IssueContext>,
+}
+
+#[derive(Clone)]
+struct IssueContext {
+    provider_id: String,
+    identifier: String,
 }
 
 impl fmt::Debug for DynamicTools {
@@ -26,6 +33,7 @@ impl fmt::Debug for DynamicTools {
         f.debug_struct("DynamicTools")
             .field("tracker", &self.tracker.is_some())
             .field("workspace_root", &self.workspace_root)
+            .field("issue_context", &self.issue_context.is_some())
             .finish()
     }
 }
@@ -35,7 +43,16 @@ impl DynamicTools {
         Self {
             tracker: Some(tracker),
             workspace_root: None,
+            issue_context: None,
         }
+    }
+
+    pub(crate) fn with_issue_context(mut self, issue: &Issue) -> Self {
+        self.issue_context = Some(IssueContext {
+            provider_id: issue.id.clone(),
+            identifier: issue.identifier.clone(),
+        });
+        self
     }
 
     pub(crate) fn with_workspace_root(mut self, workspace_root: impl Into<PathBuf>) -> Self {
@@ -64,7 +81,7 @@ impl DynamicTools {
                         LINK_PR_ACTION
                     ]
                 },
-                "issue_id": string_schema("Provider-specific issue id."),
+                "issue_id": string_schema("Vik issue id for the current tracker issue."),
                 "comment_id": string_schema("Provider-specific comment id."),
                 "state": string_schema("Optional tracker state to set."),
                 "labels": {
@@ -102,21 +119,21 @@ impl DynamicTools {
         };
         match action.as_str() {
             GET_ISSUE_ACTION => {
-                let issue_id = match required_string(&arguments, "issue_id") {
+                let issue_id = match self.issue_id_from_arguments(&arguments) {
                     Ok(issue_id) => issue_id,
                     Err(err) => return tool_failure(err),
                 };
                 tool_result(tracker.get_issue(&issue_id).await)
             }
             LIST_COMMENTS_ACTION => {
-                let issue_id = match required_string(&arguments, "issue_id") {
+                let issue_id = match self.issue_id_from_arguments(&arguments) {
                     Ok(issue_id) => issue_id,
                     Err(err) => return tool_failure(err),
                 };
                 tool_result(tracker.list_comments(&issue_id).await)
             }
             UPDATE_ISSUE_ACTION => {
-                let issue_id = match required_string(&arguments, "issue_id") {
+                let issue_id = match self.issue_id_from_arguments(&arguments) {
                     Ok(issue_id) => issue_id,
                     Err(err) => return tool_failure(err),
                 };
@@ -127,7 +144,7 @@ impl DynamicTools {
                 tool_result(tracker.update_issue(&issue_id, update).await)
             }
             CREATE_COMMENT_ACTION => {
-                let issue_id = match required_string(&arguments, "issue_id") {
+                let issue_id = match self.issue_id_from_arguments(&arguments) {
                     Ok(issue_id) => issue_id,
                     Err(err) => return tool_failure(err),
                 };
@@ -149,7 +166,7 @@ impl DynamicTools {
                 tool_result(tracker.update_comment(&comment_id, &body).await)
             }
             UPLOAD_ATTACHMENT_ACTION => {
-                let issue_id = match required_string(&arguments, "issue_id") {
+                let issue_id = match self.issue_id_from_arguments(&arguments) {
                     Ok(issue_id) => issue_id,
                     Err(err) => return tool_failure(err),
                 };
@@ -172,7 +189,7 @@ impl DynamicTools {
                 )
             }
             LINK_PR_ACTION => {
-                let issue_id = match required_string(&arguments, "issue_id") {
+                let issue_id = match self.issue_id_from_arguments(&arguments) {
                     Ok(issue_id) => issue_id,
                     Err(err) => return tool_failure(err),
                 };
@@ -191,6 +208,20 @@ impl DynamicTools {
             }
             _ => tool_failure(format!("unsupported vik_issue action: {action}")),
         }
+    }
+
+    fn issue_id_from_arguments(&self, arguments: &Value) -> Result<String, String> {
+        let issue_id = required_string(arguments, "issue_id")?;
+        let Some(context) = &self.issue_context else {
+            return Ok(issue_id);
+        };
+        if issue_id == context.identifier {
+            return Ok(context.provider_id.clone());
+        }
+        Err(format!(
+            "issue_id must match the current Vik issue id: {}",
+            context.identifier
+        ))
     }
 
     fn workspace_file_path(&self, raw_path: &str) -> Result<PathBuf, String> {
@@ -464,6 +495,24 @@ mod tests {
         DynamicTools::from_tracker(tracker)
     }
 
+    fn tools_for_issue(id: &str, identifier: &str) -> DynamicTools {
+        let tracker: Arc<dyn IssueTracker> = Arc::new(TestTracker);
+        DynamicTools::from_tracker(tracker).with_issue_context(&Issue {
+            id: id.to_string(),
+            identifier: identifier.to_string(),
+            title: "Title".to_string(),
+            description: None,
+            priority: None,
+            state: "Todo".to_string(),
+            branch_name: None,
+            url: None,
+            labels: vec![],
+            blocked_by: vec![],
+            created_at: None,
+            updated_at: None,
+        })
+    }
+
     fn issue(id: &str, state: &str) -> Issue {
         Issue {
             id: id.to_string(),
@@ -545,6 +594,76 @@ mod tests {
         .unwrap();
         assert_eq!(body["id"], "42");
         assert_eq!(body["state"], "Done");
+    }
+
+    #[tokio::test]
+    async fn vik_issue_id_resolves_to_provider_id_inside_tool_handler() {
+        let result = tools_for_issue("provider-42", "VIK-42")
+            .handle_call(&json!({
+                "tool": VIK_ISSUE_TOOL,
+                "arguments": {
+                    "action": UPDATE_ISSUE_ACTION,
+                    "issue_id": "VIK-42",
+                    "state": "Done"
+                }
+            }))
+            .await;
+
+        assert_eq!(result["success"], true);
+        let body: Value = serde_json::from_str(
+            result
+                .pointer("/contentItems/0/text")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["id"], "provider-42");
+        assert_eq!(body["state"], "Done");
+    }
+
+    #[tokio::test]
+    async fn mismatched_vik_issue_id_is_rejected_before_tracker_call() {
+        let result = tools_for_issue("provider-42", "VIK-42")
+            .handle_call(&json!({
+                "tool": VIK_ISSUE_TOOL,
+                "arguments": {
+                    "action": UPDATE_ISSUE_ACTION,
+                    "issue_id": "VIK-43",
+                    "state": "Done"
+                }
+            }))
+            .await;
+
+        assert_eq!(result["success"], false);
+        assert_eq!(
+            result.pointer("/contentItems/0/text"),
+            Some(&json!(
+                "issue_id must match the current Vik issue id: VIK-42"
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_issue_id_is_not_accepted_as_agent_input() {
+        let result = tools_for_issue("provider-42", "VIK-42")
+            .handle_call(&json!({
+                "tool": VIK_ISSUE_TOOL,
+                "arguments": {
+                    "action": UPDATE_ISSUE_ACTION,
+                    "issue_id": "provider-42",
+                    "state": "Done"
+                }
+            }))
+            .await;
+
+        assert_eq!(result["success"], false);
+        assert_eq!(
+            result.pointer("/contentItems/0/text"),
+            Some(&json!(
+                "issue_id must match the current Vik issue id: VIK-42"
+            ))
+        );
     }
 
     #[tokio::test]

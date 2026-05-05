@@ -21,13 +21,13 @@ Common input fields:
 ```json
 {
   "action": "get_issue",
-  "issue_id": "provider-specific issue id"
+  "issue_id": "vik issue id from the prompt"
 }
 ```
 
 Supported actions:
 
-- `get_issue`: fetch one issue by provider-specific id.
+- `get_issue`: fetch the current issue by Vik issue id.
 - `list_comments`: list tracker comments for an issue.
 - `update_issue`: update state and labels.
 - `create_comment`: create an issue comment.
@@ -101,8 +101,8 @@ Upload an attachment:
 
 ## Usage rules
 
-- Use the provider-specific issue id from the rendered prompt, not the
-  human-facing identifier, unless the provider documents them as the same.
+- Use the Vik issue id from the rendered prompt. Vik resolves that id to the
+  provider-specific tracker id before calling Linear or GitHub.
 - Use `list_comments` before updating a persistent workpad comment so you reuse
   the existing comment id instead of creating duplicates.
 - Keep attachment paths inside the issue workspace. Vik rejects paths outside

@@ -37,7 +37,7 @@ codex:
     networkAccess: enabled
 ---
 
-You are working on a Linear ticket `{{ issue.identifier }}`
+You are working on a tracker issue `{{ issue.identifier }}`
 
 {% if attempt %}
 Continuation context:
@@ -49,8 +49,7 @@ Continuation context:
   {% endif %}
 
 Issue context:
-Provider ID: {{ issue.id }}
-Identifier: {{ issue.identifier }}
+Vik ID: {{ issue.identifier }}
 Title: {{ issue.title }}
 Current status: {{ issue.state }}
 Labels: {{ issue.labels }}
@@ -167,7 +166,7 @@ handoff quality.
    - If a branch PR exists and is `CLOSED` or `MERGED`, treat prior branch work as non-reusable for this run.
    - Create a fresh branch from `origin/main` and restart execution flow as a new attempt.
 5. For `Todo` tickets, do startup sequencing in this exact order:
-   - `vik_issue(action: "update_issue", issue_id: "{{ issue.id }}", state: "In Progress")`
+   - `vik_issue(action: "update_issue", issue_id: "{{ issue.identifier }}", state: "In Progress")`
    - find/create `## Codex Workpad` bootstrap comment
    - only then begin analysis/planning/implementation work.
 6. Add a short comment if state and issue content are inconsistent, then proceed with the safest flow.

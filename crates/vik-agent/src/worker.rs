@@ -62,7 +62,7 @@ where
         manager.before_run(&workspace.path).await?;
         let prompt = render_prompt(&request.workflow, &request.issue, request.attempt)?;
         let tracker_tools: Arc<dyn IssueTracker> = self.tracker.clone();
-        let tools = DynamicTools::from_tracker(tracker_tools);
+        let tools = DynamicTools::from_tracker(tracker_tools).with_issue_context(&request.issue);
         let client =
             CodexAppServerClient::new(request.config.codex.clone()).with_dynamic_tools(tools);
         let active_states = request.config.tracker.active_states().to_vec();
