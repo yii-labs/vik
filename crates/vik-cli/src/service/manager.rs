@@ -42,15 +42,15 @@ impl ServiceManager {
         } else {
             env::current_dir()?.join(selected)
         };
-        let workflow_path = workflow_path.canonicalize()?;
+        let workflow_path = normalize_path(workflow_path);
 
         if let Some(workflow_dir) = workflow_path.parent() {
             load_dotenv_from_dir(workflow_dir)?;
         }
         let loaded = load_effective_workflow(Some(workflow_path.clone()))?;
-        let cwd = loaded.config.workspace.root.canonicalize()?;
+        let cwd = normalize_path(loaded.config.workspace.root);
         let service_dir = cwd.join("service");
-        let log_dir = loaded.config.logging.dir.canonicalize()?;
+        let log_dir = normalize_path(loaded.config.logging.dir);
         let session_dir = service_dir.join("sessions");
 
         let stem = workflow_path
@@ -694,6 +694,20 @@ impl Default for RunArgs {
 }
 
 fn normalize_workflow_path(path: PathBuf) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
+}
+
+fn normalize_path(path: PathBuf) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
         match component {
