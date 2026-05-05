@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::time;
-use vik_core::{AgentEvent, LiveSession};
+use vik_core::{AgentEvent, LiveSession, session_id as compose_session_id};
 use vik_workflow::CodexConfig;
 
 use crate::SESSION_LOG_TARGET;
@@ -78,7 +78,7 @@ impl SessionLogContext {
         }
     }
 
-    fn set_thread(&mut self, thread_id: String) {
+    pub(crate) fn set_thread(&mut self, thread_id: String) {
         self.thread_id = Some(thread_id);
     }
 
@@ -383,9 +383,7 @@ fn log_session_message(
 ) {
     let fields = session_log_fields(message, pending_method);
     let rpc_id = fields.rpc_id.as_deref().unwrap_or_default();
-    let session_id = context.session_id.as_deref().unwrap_or_default();
-    let thread_id = context.thread_id.as_deref().unwrap_or_default();
-    let turn_id = context.turn_id.as_deref().unwrap_or_default();
+    let (session_id, thread_id, turn_id) = session_log_identity(context, message);
     let params_json = fields.params.to_string();
     tracing::info!(
         target: SESSION_LOG_TARGET,
@@ -393,9 +391,9 @@ fn log_session_message(
         agent = "codex",
         issue_id = context.issue_id.as_str(),
         issue_identifier = context.issue_identifier.as_str(),
-        session_id,
-        thread_id,
-        turn_id,
+        session_id = session_id.as_str(),
+        thread_id = thread_id.as_str(),
+        turn_id = turn_id.as_str(),
         direction,
         message_kind = fields.message_kind,
         event = fields.event.as_str(),
@@ -403,6 +401,53 @@ fn log_session_message(
         params_json = params_json.as_str(),
         "agent_session_message"
     );
+}
+
+pub(crate) fn session_log_identity(
+    context: &SessionLogContext,
+    message: &Value,
+) -> (String, String, String) {
+    let thread_id = context
+        .thread_id
+        .as_deref()
+        .or_else(|| message_thread_id(message))
+        .unwrap_or_default()
+        .to_string();
+    let turn_id = context
+        .turn_id
+        .as_deref()
+        .or_else(|| message_turn_id(message))
+        .unwrap_or_default()
+        .to_string();
+    let session_id = context
+        .session_id
+        .as_ref()
+        .filter(|session_id| !session_id.is_empty())
+        .cloned()
+        .unwrap_or_else(|| {
+            if thread_id.is_empty() || turn_id.is_empty() {
+                String::new()
+            } else {
+                compose_session_id(&thread_id, &turn_id)
+            }
+        });
+    (session_id, thread_id, turn_id)
+}
+
+fn message_thread_id(message: &Value) -> Option<&str> {
+    message
+        .pointer("/params/threadId")
+        .or_else(|| message.pointer("/params/thread/id"))
+        .or_else(|| message.pointer("/result/thread/id"))
+        .and_then(Value::as_str)
+}
+
+fn message_turn_id(message: &Value) -> Option<&str> {
+    message
+        .pointer("/params/turn/id")
+        .or_else(|| message.pointer("/params/turnId"))
+        .or_else(|| message.pointer("/result/turn/id"))
+        .and_then(Value::as_str)
 }
 
 pub(crate) fn session_log_fields(

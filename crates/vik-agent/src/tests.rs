@@ -6,7 +6,8 @@ use vik_workflow::{CodexConfig, TrackerConfig};
 use crate::client::{codex_spawn_command, codex_spawn_process_command_for_platform};
 use crate::event::extract_usage;
 use crate::process::{
-    permission_approval_result, session_log_fields, thread_start_params, turn_start_params,
+    SessionLogContext, permission_approval_result, session_log_fields, session_log_identity,
+    thread_start_params, turn_start_params,
 };
 use crate::tools::DynamicTools;
 use crate::worker::{SessionCancelOnDrop, session_thread_name};
@@ -268,6 +269,22 @@ fn session_log_fields_extract_method_params_and_rpc_results() {
     assert_eq!(fields.message_kind, "rpc_response");
     assert_eq!(fields.rpc_id.as_deref(), Some("4"));
     assert_eq!(fields.params["turn"]["id"], "turn-1");
+}
+
+#[test]
+fn session_log_identity_derives_turn_start_response_session() {
+    let mut context = SessionLogContext::new("issue-1".into(), "VIK-11".into());
+    context.set_thread("thread-1".into());
+    let response = json!({
+        "id": 4,
+        "result": { "turn": { "id": "turn-1" } }
+    });
+
+    let (session_id, thread_id, turn_id) = session_log_identity(&context, &response);
+
+    assert_eq!(session_id, "thread-1-turn-1");
+    assert_eq!(thread_id, "thread-1");
+    assert_eq!(turn_id, "turn-1");
 }
 
 #[test]
