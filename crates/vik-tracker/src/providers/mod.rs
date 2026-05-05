@@ -136,6 +136,42 @@ impl TrackerClient {
     pub fn new(inner: Box<dyn IssueTracker>) -> Self {
         Self { inner }
     }
+
+    pub fn from_config(config: &TrackerConfig) -> Result<Self, TrackerError> {
+        let tracker = match &config.kind {
+            TrackerKind::Linear(provider) => {
+                let filter = config.filter();
+                let tracker_config = linear::LinearClientConfig::new(
+                    &provider.endpoint,
+                    &provider.api_key,
+                    &provider.project_slug,
+                    config.active_states().to_vec(),
+                )
+                .with_filter(linear::LinearIssueFilterConfig::new(
+                    filter.assignees.clone(),
+                    filter.tags.clone(),
+                ));
+                Self::new(Box::new(linear::LinearClient::new(tracker_config)?))
+            }
+            TrackerKind::GitHub(provider) => {
+                let filter = config.filter();
+                let tracker_config = github::GitHubClientConfig::new(
+                    &provider.endpoint,
+                    &provider.api_key,
+                    &provider.repository,
+                    config.active_states().to_vec(),
+                    config.terminal_states().to_vec(),
+                )
+                .with_filter(github::GitHubIssueFilterConfig::new(
+                    filter.assignees.clone(),
+                    filter.tags.clone(),
+                ));
+                Self::new(Box::new(github::GitHubClient::new(tracker_config)?))
+            }
+            TrackerKind::Unsupported(_) => return Err(TrackerError::UnsupportedTrackerKind),
+        };
+        Ok(tracker)
+    }
 }
 
 impl std::fmt::Debug for TrackerClient {
@@ -203,5 +239,93 @@ impl IssueTracker for TrackerClient {
 
     async fn link_pr(&self, issue_id: &str, title: &str, url: &str) -> Result<(), TrackerError> {
         self.inner.link_pr(issue_id, title, url).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn common_config() -> CommonTrackerConfig {
+        CommonTrackerConfig {
+            active_states: vec!["Todo".to_string(), "In Progress".to_string()],
+            terminal_states: vec!["Done".to_string()],
+            filter: TrackerFilterConfig {
+                assignees: vec!["agent".to_string()],
+                tags: vec!["vik".to_string()],
+            },
+        }
+    }
+
+    #[test]
+    fn tracker_client_from_config_builds_linear_client() {
+        let config = TrackerConfig::linear(
+            common_config(),
+            linear::LinearTrackerConfig::new(
+                linear::DEFAULT_LINEAR_ENDPOINT,
+                "linear-token",
+                "vik-project",
+            ),
+        );
+
+        let tracker = TrackerClient::from_config(&config);
+
+        assert!(tracker.is_ok(), "{tracker:?}");
+    }
+
+    #[test]
+    fn tracker_client_from_config_builds_github_client() {
+        let config = TrackerConfig::github(
+            common_config(),
+            github::GitHubTrackerConfig::new(
+                github::DEFAULT_GITHUB_ENDPOINT,
+                "github-token",
+                "yii-labs/vik",
+            ),
+        );
+
+        let tracker = TrackerClient::from_config(&config);
+
+        assert!(tracker.is_ok(), "{tracker:?}");
+    }
+
+    #[test]
+    fn tracker_client_from_config_rejects_missing_linear_api_key() {
+        let config = TrackerConfig::linear(
+            common_config(),
+            linear::LinearTrackerConfig::new(linear::DEFAULT_LINEAR_ENDPOINT, "", "vik-project"),
+        );
+
+        let tracker = TrackerClient::from_config(&config);
+
+        assert!(matches!(tracker, Err(TrackerError::MissingTrackerApiKey)));
+    }
+
+    #[test]
+    fn tracker_client_from_config_rejects_invalid_github_repository() {
+        let config = TrackerConfig::github(
+            common_config(),
+            github::GitHubTrackerConfig::new(
+                github::DEFAULT_GITHUB_ENDPOINT,
+                "github-token",
+                "yii-labs",
+            ),
+        );
+
+        let tracker = TrackerClient::from_config(&config);
+
+        assert!(matches!(
+            tracker,
+            Err(TrackerError::InvalidTrackerRepository(_))
+        ));
+    }
+
+    #[test]
+    fn tracker_client_from_config_rejects_unsupported_kind() {
+        let config = TrackerConfig::unsupported(common_config(), "other");
+
+        let tracker = TrackerClient::from_config(&config);
+
+        assert!(matches!(tracker, Err(TrackerError::UnsupportedTrackerKind)));
     }
 }
