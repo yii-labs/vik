@@ -1,16 +1,15 @@
 use serde_json::json;
 use std::path::Path;
-use tempfile::TempDir;
 use vik_core::HostPlatform;
 use vik_workflow::{CodexConfig, TrackerConfig};
 
-use crate::client::{
-    codex_spawn_command, codex_spawn_process_command_for_platform, message_belongs_to_turn,
-};
+use crate::client::{codex_spawn_command, codex_spawn_process_command_for_platform};
 use crate::event::extract_usage;
-use crate::process::{permission_approval_result, thread_start_params, turn_start_params};
-use crate::session_log::{SessionLog, session_log_dir, session_log_path};
+use crate::process::{
+    permission_approval_result, session_log_fields, thread_start_params, turn_start_params,
+};
 use crate::tools::DynamicTools;
+use crate::worker::session_thread_name;
 
 #[test]
 fn token_usage_prefers_absolute_totals() {
@@ -248,98 +247,26 @@ fn turn_start_external_sandbox_policy_is_preserved() {
 }
 
 #[test]
-fn turn_start_buffered_message_routing_uses_message_turn_id() {
-    let early_new_turn = json!({
-        "method": "turn/started",
-        "params": {
-            "threadId": "thread-1",
-            "turn": { "id": "turn-2" }
-        }
+fn session_log_fields_extract_method_params_and_rpc_results() {
+    let request = json!({
+        "id": 4,
+        "method": "turn/start",
+        "params": { "threadId": "thread-1", "input": [] }
     });
-    let stale_old_turn = json!({
-        "method": "turn/completed",
-        "params": {
-            "threadId": "thread-1",
-            "turn": { "id": "turn-1" }
-        }
-    });
-    let server_request_without_turn = json!({
-        "id": 7,
-        "method": "item/tool/call",
-        "params": {}
-    });
+    let (event, params) = session_log_fields(&request);
+    assert_eq!(event, "turn/start");
+    assert_eq!(params["threadId"], "thread-1");
 
-    assert!(message_belongs_to_turn(&early_new_turn, "turn-2"));
-    assert!(!message_belongs_to_turn(&stale_old_turn, "turn-2"));
-    assert!(message_belongs_to_turn(
-        &server_request_without_turn,
-        "turn-2"
-    ));
+    let response = json!({
+        "id": 4,
+        "result": { "turn": { "id": "turn-1" } }
+    });
+    let (event, params) = session_log_fields(&response);
+    assert_eq!(event, "rpc_response");
+    assert_eq!(params["turn"]["id"], "turn-1");
 }
 
-#[tokio::test]
-async fn session_log_appends_raw_codex_jsonl_under_workspace_sessions() {
-    let workspace_root = TempDir::new().unwrap();
-    let sessions = session_log_dir(workspace_root.path());
-    let path = session_log_path(&sessions, "VIK-11", "thread/one:turn two");
-    let mut session_log = SessionLog::open(path.clone()).await.unwrap();
-
-    session_log
-        .append_message(&json!({
-            "method": "turn/started",
-            "params": { "turn": { "id": "turn two" } }
-        }))
-        .await
-        .unwrap();
-    session_log
-        .append_message(&json!({
-            "method": "turn/completed",
-            "params": { "turn": { "status": "completed" } }
-        }))
-        .await
-        .unwrap();
-
-    assert_eq!(
-        path,
-        workspace_root
-            .path()
-            .join("sessions")
-            .join("VIK-11-thread_one_turn_two.jsonl")
-    );
-    let contents = tokio::fs::read_to_string(&path).await.unwrap();
-    assert!(!contents.contains("VIK-11"));
-    assert!(!contents.contains("thread_one_turn_two"));
-    let lines: Vec<_> = contents.lines().collect();
-    assert_eq!(lines.len(), 2);
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(lines[0]).unwrap()["method"],
-        "turn/started"
-    );
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(lines[1]).unwrap()["method"],
-        "turn/completed"
-    );
-}
-
-#[tokio::test]
-async fn session_log_starts_new_line_after_torn_write() {
-    let workspace_root = TempDir::new().unwrap();
-    let sessions = session_log_dir(workspace_root.path());
-    let path = session_log_path(&sessions, "VIK-11", "session-1");
-    tokio::fs::create_dir_all(path.parent().unwrap())
-        .await
-        .unwrap();
-    tokio::fs::write(&path, b"{\"partial\":true").await.unwrap();
-    let mut session_log = SessionLog::open(path.clone()).await.unwrap();
-
-    session_log
-        .append_message(&json!({ "method": "turn/completed" }))
-        .await
-        .unwrap();
-
-    let contents = tokio::fs::read_to_string(&path).await.unwrap();
-    assert_eq!(
-        contents,
-        "{\"partial\":true\n{\"method\":\"turn/completed\"}\n"
-    );
+#[test]
+fn session_thread_name_uses_sanitized_issue_identifier() {
+    assert_eq!(session_thread_name("VIK/11 bad"), "vik-session-VIK_11_bad");
 }

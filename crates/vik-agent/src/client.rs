@@ -8,7 +8,6 @@ use vik_workflow::CodexConfig;
 use crate::error::AgentError;
 use crate::event::agent_event;
 use crate::process::{JsonlRpcProcess, ProcessCommand};
-use crate::session_log::{SessionLog, session_log_dir, session_log_path};
 use crate::tools::DynamicTools;
 
 const CONTINUATION_PROMPT: &str = "Continue working on this Linear issue. Check current issue state and proceed only if it is still active.";
@@ -56,8 +55,6 @@ impl CodexAppServerClient {
         if !workspace_path.is_absolute() {
             return Err(AgentError::InvalidWorkspaceCwd);
         }
-        let session_log_dir = session_log_dir(session_workspace_root(workspace_path));
-        let issue_identifier = session_issue_identifier(&issue).to_string();
         emit_lifecycle_event(
             &mut on_event,
             &issue.issue_id,
@@ -122,42 +119,6 @@ impl CodexAppServerClient {
             let mut live = LiveSession::new(thread_id.clone(), turn_id.clone());
             live.turn_count = turn_count;
             live.codex_app_server_pid = process.child.id().map(|pid| pid.to_string());
-            let session_log_path =
-                session_log_path(&session_log_dir, &issue_identifier, &live.session_id);
-            match SessionLog::open(session_log_path).await {
-                Ok(mut session_log) => {
-                    for message in &turn_start.pre_response_messages {
-                        if message_belongs_to_turn(message, &turn_id) {
-                            if let Err(err) = session_log.append_message(message).await {
-                                tracing::warn!(
-                                    path=%session_log.path().display(),
-                                    error=%err,
-                                    "codex_session_log_append outcome=failed"
-                                );
-                            }
-                        } else {
-                            process.append_current_session_message(message).await;
-                        }
-                    }
-                    if let Err(err) = session_log.append_message(&turn_start.response).await {
-                        tracing::warn!(
-                            path=%session_log.path().display(),
-                            error=%err,
-                            "codex_session_log_append outcome=failed"
-                        );
-                    }
-                    process.set_session_log(Some(session_log));
-                }
-                Err(err) => {
-                    tracing::warn!(error=%err, "codex_session_log_open outcome=failed");
-                    for message in &turn_start.pre_response_messages {
-                        if !message_belongs_to_turn(message, &turn_id) {
-                            process.append_current_session_message(message).await;
-                        }
-                    }
-                    process.set_session_log(None);
-                }
-            }
             on_event(agent_event(
                 issue.issue_id.clone(),
                 "session_started",
@@ -322,31 +283,6 @@ fn split_windows_command_line(input: &str) -> Vec<String> {
         args.push(current);
     }
     args
-}
-
-fn session_workspace_root(workspace_path: &Path) -> &Path {
-    workspace_path.parent().unwrap_or(workspace_path)
-}
-
-fn session_issue_identifier(issue: &CodexIssueContext) -> &str {
-    issue
-        .title
-        .split_once(':')
-        .map(|(identifier, _)| identifier.trim())
-        .filter(|identifier| !identifier.is_empty())
-        .unwrap_or(&issue.issue_id)
-}
-
-pub(crate) fn message_belongs_to_turn(message: &serde_json::Value, turn_id: &str) -> bool {
-    message_turn_id(message).is_none_or(|message_turn_id| message_turn_id == turn_id)
-}
-
-fn message_turn_id(message: &serde_json::Value) -> Option<&str> {
-    message
-        .pointer("/params/turn/id")
-        .or_else(|| message.pointer("/params/turnId"))
-        .or_else(|| message.pointer("/result/turn/id"))
-        .and_then(serde_json::Value::as_str)
 }
 
 fn toml_string(value: &str) -> String {

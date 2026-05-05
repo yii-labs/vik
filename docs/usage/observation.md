@@ -21,7 +21,8 @@ Service runs also write detached stdout and stderr to:
 Useful commands:
 
 ```sh
-tail -f "$HOME/code/vik-workspaces/logs"/vik.log.*
+tail -f "$HOME/code/vik-workspaces/logs"/service.log.*
+tail -f "$HOME/code/vik-workspaces/logs"/session.log.*
 vik service logs --lines 100
 vik service logs --follow
 ```
@@ -76,35 +77,17 @@ turn count, last event, last message, workspace path, and token usage.
 
 ## Sessions
 
-Persisted Codex app-server session logs require VIK-11. Builds that include
-VIK-11 append raw Codex app-server JSONL messages under:
+Codex app-server session traffic is emitted through tracing to the session log:
 
 ```text
-<workspace.root>/sessions/<issue-identifier>-<codex-session-id>.jsonl
+<workspace.root>/logs/session.log.<date>
 ```
 
-The issue identifier is the human-facing key such as `VIK-16`. Filename
-components are sanitized to ASCII letters, numbers, `.`, `_`, and `-`; other
-characters become `_`.
-
-Find logs for one issue:
+Inspect session events:
 
 ```sh
-find "$HOME/code/vik-workspaces/sessions" \
-  -type f \
-  -name 'VIK-16-*.jsonl' \
-  -print
+jq . "$HOME/code/vik-workspaces/logs"/session.log.* | less
 ```
 
-Inspect one session:
-
-```sh
-jq . "$HOME/code/vik-workspaces/sessions/<file>.jsonl" | less
-```
-
-Session files contain raw Codex app-server messages for the session. They do
-not replace Vik daemon logs, HTTP snapshots, or Linear workpad notes.
-
-For builds before VIK-11, use `/api/v1/state`, `/api/v1/{issue_identifier}`,
-and JSON daemon logs only. Durable per-session JSONL files are unavailable in
-those builds.
+Session log records contain `agent`, `event`, and `params` fields. Service
+events stay in `service.log.<date>` and do not include Codex message payloads.

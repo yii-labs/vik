@@ -86,7 +86,9 @@ reserved and cannot be used as issue workspace names.
 <workspace.root>/logs
 ```
 
-Each run logs to stdout and to a daily file named `vik.log.<date>`.
+Each run writes service events to stdout and to a daily file named
+`service.log.<date>`. Codex app-server request and response messages are written
+to `session.log.<date>` with `agent`, `event`, and `params` fields.
 
 ## Hooks
 

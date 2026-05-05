@@ -6,7 +6,9 @@ use std::sync::Arc;
 
 use clap::Args;
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{
+    EnvFilter, Layer, filter::filter_fn, layer::SubscriberExt, util::SubscriberInitExt,
+};
 use vik_agent::LocalAgentWorker;
 use vik_http::{HttpState, serve};
 use vik_orchestrator::Orchestrator;
@@ -35,7 +37,7 @@ pub(crate) async fn run(args: StartArgs) -> Result<(), Box<dyn Error>> {
     loaded.config.validate_for_dispatch()?;
 
     let log_dir = loaded.config.logging.dir.clone();
-    let _log_guard = init_logging(&log_dir)?;
+    let _log_guards = init_logging(&log_dir)?;
     tracing::info!(log_dir=%log_dir.display(), "logging outcome=started");
 
     let tracker_config = LinearClientConfig::new(
@@ -85,28 +87,51 @@ pub(crate) async fn run(args: StartArgs) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn init_logging(log_dir: &Path) -> Result<WorkerGuard, Box<dyn Error>> {
+fn init_logging(log_dir: &Path) -> Result<Vec<WorkerGuard>, Box<dyn Error>> {
     fs::create_dir_all(log_dir)?;
-    let file_appender = tracing_appender::rolling::daily(log_dir, "vik.log");
-    let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
+    let service_appender = tracing_appender::rolling::daily(log_dir, "service.log");
+    let session_appender = tracing_appender::rolling::daily(log_dir, "session.log");
+    let (service_writer, service_guard) = tracing_appender::non_blocking(service_appender);
+    let (session_writer, session_guard) = tracing_appender::non_blocking(session_appender);
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     let stdout_layer = tracing_subscriber::fmt::layer()
         .json()
         .with_current_span(false)
-        .with_span_list(false);
-    let file_layer = tracing_subscriber::fmt::layer()
-        .with_writer(file_writer)
+        .with_span_list(false)
+        .with_filter(filter_fn(is_service_log));
+    let service_layer = tracing_subscriber::fmt::layer()
+        .with_writer(service_writer)
         .json()
         .with_current_span(false)
-        .with_span_list(false);
+        .with_span_list(false)
+        .with_filter(filter_fn(is_service_log));
+    let session_layer = tracing_subscriber::fmt::layer()
+        .with_writer(session_writer)
+        .json()
+        .with_current_span(false)
+        .with_span_list(false)
+        .with_filter(filter_fn(is_session_log));
 
     tracing_subscriber::registry()
         .with(filter)
         .with(stdout_layer)
-        .with(file_layer)
+        .with(service_layer)
+        .with(session_layer)
         .init();
-    Ok(guard)
+    Ok(vec![service_guard, session_guard])
+}
+
+fn is_service_log(metadata: &tracing::Metadata<'_>) -> bool {
+    !is_session_target(metadata.target())
+}
+
+fn is_session_log(metadata: &tracing::Metadata<'_>) -> bool {
+    is_session_target(metadata.target())
+}
+
+fn is_session_target(target: &str) -> bool {
+    target == vik_agent::SESSION_LOG_TARGET
 }
 
 fn http_addr(host: Option<IpAddr>, port: u16) -> SocketAddr {
@@ -131,5 +156,11 @@ mod tests {
             http_addr(Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED)), 3000),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 3000)
         );
+    }
+
+    #[test]
+    fn log_filters_split_service_and_session_targets() {
+        assert!(is_session_target(vik_agent::SESSION_LOG_TARGET));
+        assert!(!is_session_target("vik_orchestrator::engine"));
     }
 }
