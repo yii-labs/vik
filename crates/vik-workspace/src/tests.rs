@@ -40,7 +40,7 @@ async fn rejects_reserved_support_workspace_names() {
     let dir = tempdir().unwrap();
     let manager = WorkspaceManager::new(dir.path(), hooks());
 
-    for identifier in ["logs", "sessions", ".vik", "Logs"] {
+    for identifier in ["logs", "service", "sessions", ".vik", "Logs"] {
         let err = manager.create_for_issue(identifier).await.unwrap_err();
         assert!(matches!(err, WorkspaceError::ReservedWorkspaceKey { .. }));
     }
