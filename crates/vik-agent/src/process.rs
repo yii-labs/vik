@@ -67,7 +67,8 @@ impl JsonlRpcProcess {
             .current_dir(cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
         let mut child = process.spawn().map_err(|err| AgentError::ProcessSpawn {
             program: command.program().to_string(),
             reason: err.to_string(),

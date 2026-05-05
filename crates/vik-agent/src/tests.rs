@@ -9,7 +9,7 @@ use crate::process::{
     permission_approval_result, session_log_fields, thread_start_params, turn_start_params,
 };
 use crate::tools::DynamicTools;
-use crate::worker::session_thread_name;
+use crate::worker::{SessionCancelOnDrop, session_thread_name};
 
 #[test]
 fn token_usage_prefers_absolute_totals() {
@@ -269,4 +269,11 @@ fn session_log_fields_extract_method_params_and_rpc_results() {
 #[test]
 fn session_thread_name_uses_sanitized_issue_identifier() {
     assert_eq!(session_thread_name("VIK/11 bad"), "vik-session-VIK_11_bad");
+}
+
+#[tokio::test]
+async fn session_cancel_guard_signals_when_dropped() {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    drop(SessionCancelOnDrop::new(tx));
+    assert!(rx.await.is_ok());
 }

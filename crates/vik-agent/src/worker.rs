@@ -118,10 +118,12 @@ where
 {
     let thread_name = session_thread_name(&run.issue_identifier);
     let (tx, rx) = oneshot::channel();
+    let (cancel_tx, cancel_rx) = oneshot::channel();
+    let _cancel_on_drop = SessionCancelOnDrop::new(cancel_tx);
     thread::Builder::new()
         .name(thread_name)
         .spawn(move || {
-            let result = run_session_in_current_thread(run);
+            let result = run_session_in_current_thread(run, cancel_rx);
             let _ = tx.send(result);
         })
         .map_err(|err| AgentError::SessionThread(err.to_string()))?;
@@ -129,7 +131,28 @@ where
         .map_err(|_| AgentError::SessionThread("session thread exited without result".into()))?
 }
 
-fn run_session_in_current_thread<T>(run: SessionRun<T>) -> Result<(), AgentError>
+pub(crate) struct SessionCancelOnDrop {
+    tx: Option<oneshot::Sender<()>>,
+}
+
+impl SessionCancelOnDrop {
+    pub(crate) fn new(tx: oneshot::Sender<()>) -> Self {
+        Self { tx: Some(tx) }
+    }
+}
+
+impl Drop for SessionCancelOnDrop {
+    fn drop(&mut self) {
+        if let Some(tx) = self.tx.take() {
+            let _ = tx.send(());
+        }
+    }
+}
+
+fn run_session_in_current_thread<T>(
+    run: SessionRun<T>,
+    cancel_rx: oneshot::Receiver<()>,
+) -> Result<(), AgentError>
 where
     T: IssueTracker,
 {
@@ -154,36 +177,38 @@ where
     runtime.block_on(async move {
         let tools = DynamicTools::from_tracker_config(&tracker_config);
         let client = CodexAppServerClient::new(codex_config).with_dynamic_tools(tools);
-        client
-            .run_turns(
-                &workspace_path,
-                issue,
-                prompt,
-                max_turns,
-                move || {
-                    let tracker = Arc::clone(&tracker);
-                    let issue_id = issue_id.clone();
-                    let active_states = active_states.clone();
-                    let terminal_states = terminal_states.clone();
-                    async move {
-                        let states = tracker
-                            .fetch_issue_states_by_ids(std::slice::from_ref(&issue_id))
-                            .await?;
-                        let Some(issue) = states.first() else {
-                            return Ok(false);
-                        };
-                        let normalized = issue.state.to_lowercase();
-                        Ok(active_states.iter().any(|s| s.to_lowercase() == normalized)
-                            && !terminal_states
-                                .iter()
-                                .any(|s| s.to_lowercase() == normalized))
-                    }
-                },
-                |event| {
-                    let _ = events.send(event);
-                },
-            )
-            .await
+        let session = client.run_turns(
+            &workspace_path,
+            issue,
+            prompt,
+            max_turns,
+            move || {
+                let tracker = Arc::clone(&tracker);
+                let issue_id = issue_id.clone();
+                let active_states = active_states.clone();
+                let terminal_states = terminal_states.clone();
+                async move {
+                    let states = tracker
+                        .fetch_issue_states_by_ids(std::slice::from_ref(&issue_id))
+                        .await?;
+                    let Some(issue) = states.first() else {
+                        return Ok(false);
+                    };
+                    let normalized = issue.state.to_lowercase();
+                    Ok(active_states.iter().any(|s| s.to_lowercase() == normalized)
+                        && !terminal_states
+                            .iter()
+                            .any(|s| s.to_lowercase() == normalized))
+                }
+            },
+            |event| {
+                let _ = events.send(event);
+            },
+        );
+        tokio::select! {
+            result = session => result,
+            _ = cancel_rx => Err(AgentError::SessionThread("session cancelled".to_string())),
+        }
     })
 }
 
