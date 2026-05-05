@@ -1,7 +1,7 @@
 # Linear Tracker
 
-Use Linear when Vik should claim issues from one Linear project and expose the
-`linear_graphql` dynamic tool to agent sessions.
+Use Linear when Vik should claim issues from one Linear project and route agent
+tracker tools through the Linear API.
 
 ## Configuration
 
@@ -38,5 +38,6 @@ export LINEAR_API_KEY=lin_api_xxx
 vik check ./WORKFLOW.md
 ```
 
-The `linear_graphql` dynamic tool is only exposed when `tracker.kind` is
-`linear` and Linear credentials are configured.
+When `tracker.kind` is `linear`, Vik's app-server dynamic tools route issue
+updates, comments, attachment uploads, and PR links through the configured
+Linear credentials.

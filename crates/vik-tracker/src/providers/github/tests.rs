@@ -1,9 +1,9 @@
 use std::path::Path;
 
 use serde_json::json;
-use vik_core::TrackerError;
+use vik_core::{IssueTracker, TrackerError};
 
-use crate::providers::{Tracker, TrackerConfigError};
+use crate::providers::TrackerConfigError;
 
 use super::{
     GitHubTrackerConfig,

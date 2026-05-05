@@ -1,169 +1,261 @@
 use std::fmt;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use serde::Serialize;
 use serde_json::{Value, json};
-use vik_workflow::TrackerConfig;
+use vik_core::{IssueTracker, IssueUpdate, TrackerError};
 
-const LINEAR_GRAPHQL_TOOL: &str = "linear_graphql";
+const GET_ISSUE_TOOL: &str = "get_issue";
+const UPDATE_ISSUE_TOOL: &str = "update_issue";
+const CREATE_COMMENT_TOOL: &str = "create_comment";
+const UPDATE_COMMENT_TOOL: &str = "update_comment";
+const UPLOAD_ATTACHMENT_TOOL: &str = "upload_attachment";
+const LINK_PR_TOOL: &str = "link_pr";
 
 #[derive(Clone, Default)]
 pub(crate) struct DynamicTools {
-    linear_graphql: Option<LinearGraphqlTool>,
+    tracker: Option<Arc<dyn IssueTracker>>,
+    workspace_root: Option<PathBuf>,
 }
 
 impl fmt::Debug for DynamicTools {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DynamicTools")
-            .field("linear_graphql", &self.linear_graphql.is_some())
+            .field("tracker", &self.tracker.is_some())
+            .field("workspace_root", &self.workspace_root)
             .finish()
     }
 }
 
 impl DynamicTools {
-    pub(crate) fn from_tracker_config(config: &TrackerConfig) -> Self {
-        let linear_graphql = if let Some(provider) = config.linear_provider()
-            && !provider.endpoint.trim().is_empty()
-            && !provider.api_key.trim().is_empty()
-        {
-            match LinearGraphqlTool::new(provider.endpoint.clone(), provider.api_key.clone()) {
-                Ok(tool) => Some(tool),
-                Err(err) => {
-                    tracing::warn!(error = %err, "linear_graphql tool disabled");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-        Self { linear_graphql }
+    pub(crate) fn from_tracker(tracker: Arc<dyn IssueTracker>) -> Self {
+        Self {
+            tracker: Some(tracker),
+            workspace_root: None,
+        }
+    }
+
+    pub(crate) fn with_workspace_root(mut self, workspace_root: impl Into<PathBuf>) -> Self {
+        self.workspace_root = Some(workspace_root.into());
+        self
     }
 
     pub(crate) fn definitions(&self) -> Vec<Value> {
-        let mut definitions = Vec::new();
-        if self.linear_graphql.is_some() {
-            definitions.push(json!({
-                "name": LINEAR_GRAPHQL_TOOL,
-                "description": "Run one Linear GraphQL query or mutation using Vik's configured Linear credentials.",
-                "deferLoading": false,
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "GraphQL query or mutation document."
-                        },
-                        "variables": {
-                            "type": "object",
-                            "description": "Optional GraphQL variables object.",
-                            "additionalProperties": true
-                        }
-                    },
-                    "required": ["query"],
-                    "additionalProperties": false
-                }
-            }));
+        if self.tracker.is_none() {
+            return Vec::new();
         }
-        definitions
+        vec![
+            tracker_definition(
+                GET_ISSUE_TOOL,
+                "Fetch the current tracker issue by provider-specific issue id.",
+                json!({
+                    "issue_id": string_schema("Provider-specific issue id.")
+                }),
+                vec!["issue_id"],
+            ),
+            tracker_definition(
+                UPDATE_ISSUE_TOOL,
+                "Update tracker issue state and labels using the configured tracker.",
+                json!({
+                    "issue_id": string_schema("Provider-specific issue id."),
+                    "state": string_schema("Optional tracker state to set."),
+                    "labels": {
+                        "type": "array",
+                        "description": "Optional labels to add or set through the configured tracker.",
+                        "items": { "type": "string" }
+                    }
+                }),
+                vec!["issue_id"],
+            ),
+            tracker_definition(
+                CREATE_COMMENT_TOOL,
+                "Create a tracker issue comment using the configured tracker.",
+                json!({
+                    "issue_id": string_schema("Provider-specific issue id."),
+                    "body": string_schema("Comment body.")
+                }),
+                vec!["issue_id", "body"],
+            ),
+            tracker_definition(
+                UPDATE_COMMENT_TOOL,
+                "Update a tracker issue comment using the configured tracker.",
+                json!({
+                    "comment_id": string_schema("Provider-specific comment id."),
+                    "body": string_schema("Replacement comment body.")
+                }),
+                vec!["comment_id", "body"],
+            ),
+            tracker_definition(
+                UPLOAD_ATTACHMENT_TOOL,
+                "Upload an attachment through the configured tracker and post its returned link.",
+                json!({
+                    "issue_id": string_schema("Provider-specific issue id."),
+                    "path": string_schema("Path to a file inside the issue workspace."),
+                    "content_type": string_schema("Attachment content type.")
+                }),
+                vec!["issue_id", "path", "content_type"],
+            ),
+            tracker_definition(
+                LINK_PR_TOOL,
+                "Link a pull request to the tracker issue using the configured tracker.",
+                json!({
+                    "issue_id": string_schema("Provider-specific issue id."),
+                    "title": string_schema("Pull request title."),
+                    "url": string_schema("Pull request URL.")
+                }),
+                vec!["issue_id", "title", "url"],
+            ),
+        ]
     }
 
     pub(crate) async fn handle_call(&self, params: &Value) -> Value {
         let Some(tool) = extract_tool_name(params) else {
             return tool_failure("missing dynamic tool name");
         };
-        if tool != LINEAR_GRAPHQL_TOOL {
-            return tool_failure(format!("unsupported dynamic tool call: {tool}"));
-        }
-        let Some(linear_graphql) = &self.linear_graphql else {
-            return tool_failure("linear_graphql tool is not configured");
+        let Some(tracker) = &self.tracker else {
+            return tool_failure("tracker dynamic tools are not configured");
         };
         let arguments = match extract_tool_arguments(params) {
             Ok(arguments) => arguments,
             Err(err) => return tool_failure(err),
         };
-        linear_graphql.call(arguments).await
-    }
-}
-
-#[derive(Clone)]
-struct LinearGraphqlTool {
-    http: reqwest::Client,
-    endpoint: String,
-    api_key: String,
-}
-
-impl fmt::Debug for LinearGraphqlTool {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("LinearGraphqlTool")
-            .field("endpoint", &self.endpoint)
-            .field("api_key", &"<redacted>")
-            .finish()
-    }
-}
-
-impl LinearGraphqlTool {
-    fn new(endpoint: String, api_key: String) -> Result<Self, reqwest::Error> {
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_millis(30_000))
-            .build()?;
-        Ok(Self {
-            http,
-            endpoint,
-            api_key,
-        })
-    }
-
-    async fn call(&self, arguments: Value) -> Value {
-        let Some(query) = arguments
-            .get("query")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|query| !query.is_empty())
-        else {
-            return tool_failure("linear_graphql.query is required");
-        };
-        let variables = arguments
-            .get("variables")
-            .cloned()
-            .unwrap_or_else(|| json!({}));
-        if !variables.is_object() {
-            return tool_failure("linear_graphql.variables must be an object");
-        }
-        let body = json!({ "query": query, "variables": variables });
-        let response = match self
-            .http
-            .post(&self.endpoint)
-            .header("Authorization", &self.api_key)
-            .json(&body)
-            .send()
-            .await
-        {
-            Ok(response) => response,
-            Err(err) => return tool_failure(format!("linear_graphql request failed: {err}")),
-        };
-        let status = response.status();
-        let text = match response.text().await {
-            Ok(text) => text,
-            Err(err) => {
-                return tool_failure(format!("linear_graphql response read failed: {err}"));
+        match tool.as_str() {
+            GET_ISSUE_TOOL => {
+                let issue_id = match required_string(&arguments, "issue_id") {
+                    Ok(issue_id) => issue_id,
+                    Err(err) => return tool_failure(err),
+                };
+                tool_result(tracker.get_issue(&issue_id).await)
             }
-        };
-        let payload: Value = match serde_json::from_str(&text) {
-            Ok(payload) => payload,
-            Err(err) => {
-                return tool_failure(format!(
-                    "linear_graphql response was not JSON: {err}; status: {}",
-                    status.as_u16()
-                ));
+            UPDATE_ISSUE_TOOL => {
+                let issue_id = match required_string(&arguments, "issue_id") {
+                    Ok(issue_id) => issue_id,
+                    Err(err) => return tool_failure(err),
+                };
+                let update = match issue_update_from_arguments(&arguments) {
+                    Ok(update) => update,
+                    Err(err) => return tool_failure(err),
+                };
+                tool_result(tracker.update_issue(&issue_id, update).await)
             }
-        };
-        if let Some(errors) = payload.get("errors") {
-            return tool_failure(format!("linear_graphql errors: {}", compact_json(errors)));
+            CREATE_COMMENT_TOOL => {
+                let issue_id = match required_string(&arguments, "issue_id") {
+                    Ok(issue_id) => issue_id,
+                    Err(err) => return tool_failure(err),
+                };
+                let body = match required_string(&arguments, "body") {
+                    Ok(body) => body,
+                    Err(err) => return tool_failure(err),
+                };
+                tool_result(tracker.create_comment(&issue_id, &body).await)
+            }
+            UPDATE_COMMENT_TOOL => {
+                let comment_id = match required_string(&arguments, "comment_id") {
+                    Ok(comment_id) => comment_id,
+                    Err(err) => return tool_failure(err),
+                };
+                let body = match required_string(&arguments, "body") {
+                    Ok(body) => body,
+                    Err(err) => return tool_failure(err),
+                };
+                tool_result(tracker.update_comment(&comment_id, &body).await)
+            }
+            UPLOAD_ATTACHMENT_TOOL => {
+                let issue_id = match required_string(&arguments, "issue_id") {
+                    Ok(issue_id) => issue_id,
+                    Err(err) => return tool_failure(err),
+                };
+                let raw_path = match required_string(&arguments, "path") {
+                    Ok(path) => path,
+                    Err(err) => return tool_failure(err),
+                };
+                let content_type = match required_string(&arguments, "content_type") {
+                    Ok(content_type) => content_type,
+                    Err(err) => return tool_failure(err),
+                };
+                let path = match self.workspace_file_path(&raw_path) {
+                    Ok(path) => path,
+                    Err(err) => return tool_failure(err),
+                };
+                tool_result(
+                    tracker
+                        .upload_attachment(&issue_id, &path, &content_type)
+                        .await,
+                )
+            }
+            LINK_PR_TOOL => {
+                let issue_id = match required_string(&arguments, "issue_id") {
+                    Ok(issue_id) => issue_id,
+                    Err(err) => return tool_failure(err),
+                };
+                let title = match required_string(&arguments, "title") {
+                    Ok(title) => title,
+                    Err(err) => return tool_failure(err),
+                };
+                let url = match required_string(&arguments, "url") {
+                    Ok(url) => url,
+                    Err(err) => return tool_failure(err),
+                };
+                match tracker.link_pr(&issue_id, &title, &url).await {
+                    Ok(()) => tool_success(compact_json(&json!({ "linked": true }))),
+                    Err(err) => tool_failure(err.to_string()),
+                }
+            }
+            _ => tool_failure(format!("unsupported dynamic tool call: {tool}")),
         }
-        if !status.is_success() {
-            return tool_failure(format!("linear_graphql HTTP status: {}", status.as_u16()));
-        }
-        tool_success(compact_json(&payload))
     }
+
+    fn workspace_file_path(&self, raw_path: &str) -> Result<PathBuf, String> {
+        let Some(workspace_root) = &self.workspace_root else {
+            return Err("workspace root is not configured for attachment upload".to_string());
+        };
+        let root = workspace_root
+            .canonicalize()
+            .map_err(|err| format!("workspace root could not be resolved: {err}"))?;
+        let raw = Path::new(raw_path);
+        let candidate = if raw.is_absolute() {
+            raw.to_path_buf()
+        } else {
+            root.join(raw)
+        };
+        let path = candidate
+            .canonicalize()
+            .map_err(|err| format!("attachment path could not be resolved: {err}"))?;
+        if !path.starts_with(&root) {
+            return Err("attachment path must stay inside the issue workspace".to_string());
+        }
+        if !path.is_file() {
+            return Err("attachment path must point to a file".to_string());
+        }
+        Ok(path)
+    }
+}
+
+fn tracker_definition(
+    name: &str,
+    description: &str,
+    properties: Value,
+    required: Vec<&str>,
+) -> Value {
+    json!({
+        "name": name,
+        "description": description,
+        "deferLoading": false,
+        "inputSchema": {
+            "type": "object",
+            "properties": properties,
+            "required": required,
+            "additionalProperties": false
+        }
+    })
+}
+
+fn string_schema(description: &str) -> Value {
+    json!({
+        "type": "string",
+        "description": description
+    })
 }
 
 fn extract_tool_name(params: &Value) -> Option<String> {
@@ -210,6 +302,58 @@ fn extract_tool_arguments(params: &Value) -> Result<Value, String> {
     }
 }
 
+fn issue_update_from_arguments(arguments: &Value) -> Result<IssueUpdate, String> {
+    let state = optional_string(arguments, "state")?;
+    let labels = optional_string_array(arguments, "labels")?;
+    Ok(IssueUpdate { state, labels })
+}
+
+fn required_string(arguments: &Value, field: &str) -> Result<String, String> {
+    optional_string(arguments, field)?.ok_or_else(|| format!("{field} is required"))
+}
+
+fn optional_string(arguments: &Value, field: &str) -> Result<Option<String>, String> {
+    match arguments.get(field) {
+        Some(Value::String(value)) => {
+            Ok(Some(value.trim().to_string()).filter(|value| !value.is_empty()))
+        }
+        Some(Value::Null) | None => Ok(None),
+        Some(_) => Err(format!("{field} must be a string")),
+    }
+}
+
+fn optional_string_array(arguments: &Value, field: &str) -> Result<Vec<String>, String> {
+    let Some(value) = arguments.get(field) else {
+        return Ok(Vec::new());
+    };
+    let Value::Array(items) = value else {
+        return Err(format!("{field} must be an array of strings"));
+    };
+    items
+        .iter()
+        .map(|item| {
+            item.as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| format!("{field} must be an array of strings"))
+        })
+        .collect()
+}
+
+fn tool_result<T>(result: Result<T, TrackerError>) -> Value
+where
+    T: Serialize,
+{
+    match result {
+        Ok(value) => match serde_json::to_value(value) {
+            Ok(value) => tool_success(compact_json(&value)),
+            Err(err) => tool_failure(format!("dynamic tool response serialization failed: {err}")),
+        },
+        Err(err) => tool_failure(err.to_string()),
+    }
+}
+
 fn tool_success(text: String) -> Value {
     json!({
         "success": true,
@@ -235,86 +379,220 @@ fn compact_json(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vik_workflow::{
-        CommonTrackerConfig, GitHubTrackerConfig, LinearTrackerConfig, TrackerKind,
-    };
+    use chrono::{TimeZone, Utc};
+    use tempfile::tempdir;
+    use vik_core::{Issue, IssueAttachment, IssueComment};
 
-    fn linear_tracker_config() -> TrackerConfig {
-        TrackerConfig::linear(
-            CommonTrackerConfig {
-                active_states: vec!["Todo".to_string()],
-                terminal_states: vec!["Done".to_string()],
-                filter: Default::default(),
-            },
-            LinearTrackerConfig::new("https://api.linear.app/graphql", "lin_api_key", "VIK"),
-        )
+    #[derive(Debug)]
+    struct TestTracker;
+
+    #[async_trait::async_trait]
+    impl IssueTracker for TestTracker {
+        async fn fetch_candidates(&self) -> Result<Vec<Issue>, TrackerError> {
+            Ok(vec![])
+        }
+
+        async fn fetch_by_states(
+            &self,
+            _state_names: &[String],
+        ) -> Result<Vec<Issue>, TrackerError> {
+            Ok(vec![])
+        }
+
+        async fn fetch_states_by_ids(
+            &self,
+            _issue_ids: &[String],
+        ) -> Result<Vec<Issue>, TrackerError> {
+            Ok(vec![])
+        }
+
+        async fn get_issue(&self, issue_id: &str) -> Result<Issue, TrackerError> {
+            Ok(issue(issue_id, "Todo"))
+        }
+
+        async fn update_issue(
+            &self,
+            issue_id: &str,
+            update: IssueUpdate,
+        ) -> Result<Issue, TrackerError> {
+            Ok(issue(issue_id, update.state.as_deref().unwrap_or("Todo")))
+        }
+
+        async fn create_comment(
+            &self,
+            _issue_id: &str,
+            body: &str,
+        ) -> Result<IssueComment, TrackerError> {
+            Ok(IssueComment {
+                id: "comment-1".to_string(),
+                body: body.to_string(),
+                url: None,
+            })
+        }
+
+        async fn update_comment(
+            &self,
+            comment_id: &str,
+            body: &str,
+        ) -> Result<IssueComment, TrackerError> {
+            Ok(IssueComment {
+                id: comment_id.to_string(),
+                body: body.to_string(),
+                url: None,
+            })
+        }
+
+        async fn upload_attachment(
+            &self,
+            _issue_id: &str,
+            path: &Path,
+            _content_type: &str,
+        ) -> Result<IssueAttachment, TrackerError> {
+            Ok(IssueAttachment {
+                url: path.display().to_string(),
+                comment: None,
+            })
+        }
+
+        async fn link_pr(
+            &self,
+            _issue_id: &str,
+            _title: &str,
+            _url: &str,
+        ) -> Result<(), TrackerError> {
+            Ok(())
+        }
+    }
+
+    fn tools() -> DynamicTools {
+        let tracker: Arc<dyn IssueTracker> = Arc::new(TestTracker);
+        DynamicTools::from_tracker(tracker)
+    }
+
+    fn issue(id: &str, state: &str) -> Issue {
+        Issue {
+            id: id.to_string(),
+            identifier: format!("ISSUE-{id}"),
+            title: "Title".to_string(),
+            description: None,
+            priority: None,
+            state: state.to_string(),
+            branch_name: None,
+            url: None,
+            labels: vec![],
+            blocked_by: vec![],
+            created_at: Some(Utc.with_ymd_and_hms(2026, 5, 5, 0, 0, 0).unwrap()),
+            updated_at: None,
+        }
     }
 
     #[test]
-    fn linear_graphql_definition_is_exposed_when_configured() {
-        let tools = DynamicTools::from_tracker_config(&linear_tracker_config());
-        let definitions = tools.definitions();
-        assert_eq!(definitions[0]["name"], LINEAR_GRAPHQL_TOOL);
-        assert_eq!(
-            definitions[0].pointer("/inputSchema/required/0"),
-            Some(&json!("query"))
+    fn tracker_tool_definitions_are_exposed_when_configured() {
+        let definitions = tools().definitions();
+
+        assert_eq!(definitions[0]["name"], GET_ISSUE_TOOL);
+        assert!(
+            definitions
+                .iter()
+                .any(|definition| definition["name"] == UPDATE_ISSUE_TOOL)
+        );
+        assert!(
+            definitions
+                .iter()
+                .any(|definition| definition["name"] == LINK_PR_TOOL)
         );
     }
 
     #[test]
-    fn linear_graphql_definition_is_hidden_for_github_tracker() {
-        let mut config = linear_tracker_config();
-        config.kind = TrackerKind::GitHub(GitHubTrackerConfig::new(
-            "https://api.github.com",
-            "gh_token",
-            "yii-labs/vik",
-        ));
-        let tools = DynamicTools::from_tracker_config(&config);
-
-        assert!(tools.definitions().is_empty());
+    fn tracker_tool_definitions_are_hidden_without_tracker() {
+        assert!(DynamicTools::default().definitions().is_empty());
     }
 
     #[test]
     fn app_server_tool_call_shape_is_extracted() {
         let params = json!({
-            "tool": LINEAR_GRAPHQL_TOOL,
-            "arguments": { "query": "query { viewer { id } }" }
+            "tool": UPDATE_ISSUE_TOOL,
+            "arguments": { "issue_id": "1", "state": "Done" }
         });
         assert_eq!(
             extract_tool_name(&params).as_deref(),
-            Some(LINEAR_GRAPHQL_TOOL)
+            Some(UPDATE_ISSUE_TOOL)
         );
-        assert_eq!(
-            extract_tool_arguments(&params).unwrap()["query"],
-            "query { viewer { id } }"
-        );
+        assert_eq!(extract_tool_arguments(&params).unwrap()["state"], "Done");
     }
 
     #[test]
     fn string_arguments_are_parsed() {
         let params = json!({
-            "tool": LINEAR_GRAPHQL_TOOL,
-            "arguments": "{\"query\":\"query { viewer { id } }\"}"
+            "tool": UPDATE_ISSUE_TOOL,
+            "arguments": "{\"issue_id\":\"1\",\"state\":\"Done\"}"
         });
+        assert_eq!(extract_tool_arguments(&params).unwrap()["issue_id"], "1");
+    }
+
+    #[tokio::test]
+    async fn update_issue_routes_to_configured_tracker() {
+        let result = tools()
+            .handle_call(&json!({
+                "tool": UPDATE_ISSUE_TOOL,
+                "arguments": { "issue_id": "42", "state": "Done" }
+            }))
+            .await;
+
+        assert_eq!(result["success"], true);
+        let body: Value = serde_json::from_str(
+            result
+                .pointer("/contentItems/0/text")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["id"], "42");
+        assert_eq!(body["state"], "Done");
+    }
+
+    #[tokio::test]
+    async fn missing_issue_id_returns_tool_failure_without_network() {
+        let result = tools()
+            .handle_call(&json!({
+                "tool": UPDATE_ISSUE_TOOL,
+                "arguments": { "state": "Done" }
+            }))
+            .await;
+
+        assert_eq!(result["success"], false);
         assert_eq!(
-            extract_tool_arguments(&params).unwrap()["query"],
-            "query { viewer { id } }"
+            result.pointer("/contentItems/0/text"),
+            Some(&json!("issue_id is required"))
         );
     }
 
     #[tokio::test]
-    async fn missing_query_returns_tool_failure_without_network() {
-        let tools = DynamicTools::from_tracker_config(&linear_tracker_config());
+    async fn upload_attachment_rejects_paths_outside_workspace() {
+        let dir = tempdir().unwrap();
+        let outside_dir = tempdir().unwrap();
+        let outside_file = outside_dir.path().join("artifact.txt");
+        std::fs::write(&outside_file, "artifact").unwrap();
+        let tracker: Arc<dyn IssueTracker> = Arc::new(TestTracker);
+        let tools = DynamicTools::from_tracker(tracker).with_workspace_root(dir.path());
         let result = tools
             .handle_call(&json!({
-                "tool": LINEAR_GRAPHQL_TOOL,
-                "arguments": {}
+                "tool": UPLOAD_ATTACHMENT_TOOL,
+                "arguments": {
+                    "issue_id": "42",
+                    "path": outside_file.to_string_lossy(),
+                    "content_type": "text/plain"
+                }
             }))
             .await;
+
         assert_eq!(result["success"], false);
         assert_eq!(
             result.pointer("/contentItems/0/text"),
-            Some(&json!("linear_graphql.query is required"))
+            Some(&json!(
+                "attachment path must stay inside the issue workspace"
+            ))
         );
     }
 }

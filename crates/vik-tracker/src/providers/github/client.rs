@@ -6,9 +6,9 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use reqwest::{Method, Url};
 use serde_json::{Map, Value, json};
-use vik_core::{Issue, TrackerError, normalize_state};
-
-use crate::providers::{IssueAttachment, IssueComment, IssueUpdate, Tracker};
+use vik_core::{
+    Issue, IssueAttachment, IssueComment, IssueTracker, IssueUpdate, TrackerError, normalize_state,
+};
 
 use super::queries::{
     SEARCH_ISSUES_PATH, issue_comment_path, issue_comments_path, issue_path, pull_path,
@@ -440,7 +440,7 @@ impl GitHubClient {
 }
 
 #[async_trait]
-impl Tracker for GitHubClient {
+impl IssueTracker for GitHubClient {
     async fn fetch_candidates(&self) -> Result<Vec<Issue>, TrackerError> {
         self.search_issues(&self.active_states, true).await
     }

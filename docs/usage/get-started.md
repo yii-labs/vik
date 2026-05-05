@@ -200,9 +200,9 @@ Steps:
 
 ### Linear
 
-Why: With `tracker.kind: linear`, Vik reads candidate issues from Linear,
-updates issue metadata during workflow execution, and exposes a `linear_graphql`
-tool to Codex sessions.
+Why: With `tracker.kind: linear`, Vik reads candidate issues from Linear and
+routes Codex app-server tracker tools through the configured Linear API
+credentials.
 
 Official links:
 

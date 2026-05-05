@@ -66,6 +66,11 @@ Tracker reference:
 - [Linear](trackers/linear.md)
 - [GitHub](trackers/github.md)
 
+During agent runs, Vik exposes tracker-agnostic Codex app-server tools for
+common issue operations: `get_issue`, `update_issue`, `create_comment`,
+`update_comment`, `upload_attachment`, and `link_pr`. Each tool call is routed
+to the configured tracker provider.
+
 ## Polling
 
 `polling.interval_ms` controls the main poll loop. Default: `30000`.

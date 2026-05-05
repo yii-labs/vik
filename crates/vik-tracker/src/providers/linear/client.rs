@@ -4,9 +4,7 @@ use std::path::Path;
 use async_trait::async_trait;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::{Map, Value, json};
-use vik_core::{Issue, TrackerError};
-
-use crate::providers::{IssueAttachment, IssueComment, IssueUpdate, Tracker};
+use vik_core::{Issue, IssueAttachment, IssueComment, IssueTracker, IssueUpdate, TrackerError};
 
 use super::normalize::normalize_issue;
 use super::queries::{
@@ -460,7 +458,7 @@ pub(crate) fn issue_has_attachment_url(issue: &Value, url: &str) -> bool {
 }
 
 #[async_trait]
-impl Tracker for LinearClient {
+impl IssueTracker for LinearClient {
     async fn fetch_candidates(&self) -> Result<Vec<Issue>, TrackerError> {
         self.fetch_paginated(CANDIDATE_QUERY, &self.config.active_states)
             .await

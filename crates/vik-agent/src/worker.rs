@@ -61,7 +61,8 @@ where
         manager.validate_agent_cwd(&workspace.path, &workspace.path)?;
         manager.before_run(&workspace.path).await?;
         let prompt = render_prompt(&request.workflow, &request.issue, request.attempt)?;
-        let tools = DynamicTools::from_tracker_config(&request.config.tracker);
+        let tracker_tools: Arc<dyn IssueTracker> = self.tracker.clone();
+        let tools = DynamicTools::from_tracker(tracker_tools);
         let client =
             CodexAppServerClient::new(request.config.codex.clone()).with_dynamic_tools(tools);
         let active_states = request.config.tracker.active_states().to_vec();
@@ -84,7 +85,7 @@ where
                     let terminal_states = terminal_states.clone();
                     async move {
                         let states = tracker
-                            .fetch_issue_states_by_ids(std::slice::from_ref(&issue_id))
+                            .fetch_states_by_ids(std::slice::from_ref(&issue_id))
                             .await?;
                         let Some(issue) = states.first() else {
                             return Ok(false);

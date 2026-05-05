@@ -11,12 +11,14 @@ This document maps Vik draft v1 required behavior to this workspace.
 - Invalid workflow reload handling: reconciliation keeps last-good config, new dispatch/retry launch is
   blocked until reload succeeds.
 - Polling orchestrator state authority: `vik-orchestrator::OrchestratorState`.
-- Tracker candidate, terminal, and state refresh reads:
+- Tracker candidate, terminal, state refresh, issue update, comment, attachment,
+  and PR-link operations: `vik_core::IssueTracker` with
   `vik-tracker::TrackerClient`.
 - Sanitized per-issue workspaces: `vik-workspace::WorkspaceManager`.
 - Workspace hooks and timeout: `vik-workspace::WorkspaceManager`.
 - Codex JSONL app-server client: `vik-agent::CodexAppServerClient`.
-- `linear_graphql` client-side dynamic tool extension.
+- Tracker-agnostic Codex app-server dynamic tools route through the configured
+  `vik_core::IssueTracker`.
 - Strict prompt rendering: `vik-workflow::render_prompt`.
 - Retry queue and backoff: `vik-orchestrator::failure_backoff_ms`.
 - Terminal/non-active reconciliation: `vik-orchestrator::Orchestrator`.

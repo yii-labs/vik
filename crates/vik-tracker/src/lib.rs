@@ -1,8 +1,10 @@
 pub mod providers;
 
+pub use vik_core::{IssueAttachment, IssueComment, IssueTracker, IssueUpdate};
+
 pub use providers::{
-    CommonTrackerConfig, IssueAttachment, IssueComment, IssueUpdate, Tracker, TrackerClient,
-    TrackerConfig, TrackerConfigError, TrackerFilterConfig, TrackerKind,
+    CommonTrackerConfig, TrackerClient, TrackerConfig, TrackerConfigError, TrackerFilterConfig,
+    TrackerKind,
     github::{
         DEFAULT_GITHUB_ENDPOINT, GitHubClient, GitHubClientConfig, GitHubIssueFilterConfig,
         GitHubTrackerConfig,

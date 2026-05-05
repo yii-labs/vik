@@ -20,7 +20,7 @@ where
         if running_ids.is_empty() {
             return;
         }
-        let refreshed = match self.tracker.fetch_issue_states_by_ids(&running_ids).await {
+        let refreshed = match self.tracker.fetch_states_by_ids(&running_ids).await {
             Ok(issues) => issues,
             Err(err) => {
                 tracing::debug!(error=%err, "reconcile_state_refresh outcome=failed keeping_workers=true");

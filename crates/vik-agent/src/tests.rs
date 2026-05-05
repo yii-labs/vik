@@ -1,8 +1,11 @@
 use serde_json::json;
 use std::path::Path;
+use std::sync::Arc;
 use tempfile::TempDir;
-use vik_core::HostPlatform;
-use vik_workflow::{CodexConfig, CommonTrackerConfig, LinearTrackerConfig, TrackerConfig};
+use vik_core::{
+    HostPlatform, Issue, IssueAttachment, IssueComment, IssueTracker, IssueUpdate, TrackerError,
+};
+use vik_workflow::CodexConfig;
 
 use crate::client::{
     codex_spawn_command, codex_spawn_process_command_for_platform, message_belongs_to_turn,
@@ -11,6 +14,93 @@ use crate::event::extract_usage;
 use crate::process::{permission_approval_result, thread_start_params, turn_start_params};
 use crate::session_log::{SessionLog, session_log_dir, session_log_path};
 use crate::tools::DynamicTools;
+
+#[derive(Debug)]
+struct TestTracker;
+
+#[async_trait::async_trait]
+impl IssueTracker for TestTracker {
+    async fn fetch_candidates(&self) -> Result<Vec<Issue>, TrackerError> {
+        Ok(vec![])
+    }
+
+    async fn fetch_by_states(&self, _state_names: &[String]) -> Result<Vec<Issue>, TrackerError> {
+        Ok(vec![])
+    }
+
+    async fn fetch_states_by_ids(&self, _issue_ids: &[String]) -> Result<Vec<Issue>, TrackerError> {
+        Ok(vec![])
+    }
+
+    async fn get_issue(&self, issue_id: &str) -> Result<Issue, TrackerError> {
+        Ok(test_issue(issue_id))
+    }
+
+    async fn update_issue(
+        &self,
+        issue_id: &str,
+        _update: IssueUpdate,
+    ) -> Result<Issue, TrackerError> {
+        Ok(test_issue(issue_id))
+    }
+
+    async fn create_comment(
+        &self,
+        _issue_id: &str,
+        body: &str,
+    ) -> Result<IssueComment, TrackerError> {
+        Ok(IssueComment {
+            id: "comment-1".to_string(),
+            body: body.to_string(),
+            url: None,
+        })
+    }
+
+    async fn update_comment(
+        &self,
+        comment_id: &str,
+        body: &str,
+    ) -> Result<IssueComment, TrackerError> {
+        Ok(IssueComment {
+            id: comment_id.to_string(),
+            body: body.to_string(),
+            url: None,
+        })
+    }
+
+    async fn upload_attachment(
+        &self,
+        _issue_id: &str,
+        path: &Path,
+        _content_type: &str,
+    ) -> Result<IssueAttachment, TrackerError> {
+        Ok(IssueAttachment {
+            url: path.display().to_string(),
+            comment: None,
+        })
+    }
+
+    async fn link_pr(&self, _issue_id: &str, _title: &str, _url: &str) -> Result<(), TrackerError> {
+        Ok(())
+    }
+}
+
+fn test_issue(id: &str) -> Issue {
+    Issue {
+        id: id.to_string(),
+        identifier: format!("ISSUE-{id}"),
+        title: "Title".to_string(),
+        description: None,
+        priority: None,
+        state: "Todo".to_string(),
+        branch_name: None,
+        url: None,
+        labels: vec![],
+        blocked_by: vec![],
+        created_at: None,
+        updated_at: None,
+    }
+}
 
 #[test]
 fn token_usage_prefers_absolute_totals() {
@@ -147,18 +237,8 @@ fn thread_start_payload_uses_workspace_cwd() {
 
 #[test]
 fn thread_start_payload_includes_configured_dynamic_tools() {
-    let tools = DynamicTools::from_tracker_config(&TrackerConfig {
-        common: CommonTrackerConfig {
-            active_states: vec!["Todo".to_string()],
-            terminal_states: vec!["Done".to_string()],
-            filter: Default::default(),
-        },
-        kind: vik_workflow::TrackerKind::Linear(LinearTrackerConfig::new(
-            "https://api.linear.app/graphql",
-            "lin_api_key",
-            "VIK",
-        )),
-    });
+    let tracker: Arc<dyn IssueTracker> = Arc::new(TestTracker);
+    let tools = DynamicTools::from_tracker(tracker);
     let payload = thread_start_params(
         Path::new("/tmp/workspace"),
         "VIK-7: optimize workflow codex config",
@@ -167,7 +247,7 @@ fn thread_start_payload_includes_configured_dynamic_tools() {
     );
     assert_eq!(
         payload.pointer("/dynamicTools/0/name"),
-        Some(&json!("linear_graphql"))
+        Some(&json!("get_issue"))
     );
 }
 

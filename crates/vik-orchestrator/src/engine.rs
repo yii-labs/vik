@@ -155,7 +155,7 @@ where
             tracing::error!(error=%err, "dispatch_preflight outcome=failed");
             return;
         }
-        let issues = match self.tracker.fetch_candidate_issues().await {
+        let issues = match self.tracker.fetch_candidates().await {
             Ok(issues) => issues,
             Err(err) => {
                 tracing::error!(error=%err, "tracker_fetch_candidates outcome=failed");
