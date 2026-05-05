@@ -32,11 +32,12 @@ Fields:
 
 ## Credentials
 
-Set a token with repository issue access:
+`vik check` does not contact GitHub and reports a warning if credentials are
+missing. Set a token with repository issue access before starting the daemon:
 
 ```sh
 export GH_TOKEN=github_pat_xxx
-vik check ./WORKFLOW.md
+vik start ./WORKFLOW.md
 ```
 
 For private repositories, grant at least repository metadata read access and

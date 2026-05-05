@@ -165,6 +165,42 @@ fn accepts_github_tracker_config() {
 }
 
 #[test]
+fn check_validation_warns_for_missing_linear_api_key() {
+    let def = parse_workflow_content(
+        PathBuf::from("WORKFLOW.md"),
+        "---\ntracker:\n  kind: linear\n  api_key: \"\"\n  project_slug: proj\nworkspace:\n  root: work\n---\nBody",
+    )
+    .unwrap();
+    let config = ServiceConfig::from_definition(&def).unwrap();
+
+    let warnings = config.validate_for_check().unwrap();
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("LINEAR_API_KEY is not set"));
+    assert!(matches!(
+        config.validate_for_dispatch().unwrap_err(),
+        WorkflowError::MissingTrackerApiKey
+    ));
+}
+
+#[test]
+fn check_validation_warns_for_missing_github_api_key() {
+    let def = parse_workflow_content(
+        PathBuf::from("WORKFLOW.md"),
+        "---\ntracker:\n  kind: github\n  api_key: \"\"\n  repository: yii-labs/vik\nworkspace:\n  root: work\n---\nBody",
+    )
+    .unwrap();
+    let config = ServiceConfig::from_definition(&def).unwrap();
+
+    let warnings = config.validate_for_check().unwrap();
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("GH_TOKEN or GITHUB_TOKEN is not set"));
+    assert!(matches!(
+        config.validate_for_dispatch().unwrap_err(),
+        WorkflowError::MissingTrackerApiKey
+    ));
+}
+
+#[test]
 fn github_tracker_requires_repository() {
     let def = parse_workflow_content(
         PathBuf::from("WORKFLOW.md"),
@@ -186,6 +222,19 @@ fn github_tracker_rejects_malformed_repository() {
     .unwrap();
     let config = ServiceConfig::from_definition(&def).unwrap();
     let err = config.validate_for_dispatch().unwrap_err();
+
+    assert!(matches!(err, WorkflowError::InvalidTrackerRepository(_)));
+}
+
+#[test]
+fn check_validation_rejects_malformed_github_repository_without_api_key() {
+    let def = parse_workflow_content(
+        PathBuf::from("WORKFLOW.md"),
+        "---\ntracker:\n  kind: github\n  api_key: \"\"\n  repository: yii-labs\n---\nBody",
+    )
+    .unwrap();
+    let config = ServiceConfig::from_definition(&def).unwrap();
+    let err = config.validate_for_check().unwrap_err();
 
     assert!(matches!(err, WorkflowError::InvalidTrackerRepository(_)));
 }

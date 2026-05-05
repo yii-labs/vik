@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use vik_core::WorkflowDefinition;
 use vik_tracker::{
     CommonTrackerConfig, GitHubTrackerConfig, LinearTrackerConfig, TrackerConfig,
-    TrackerFilterConfig,
+    TrackerFilterConfig, TrackerKind,
 };
 
 use crate::WorkflowError;
@@ -330,6 +330,31 @@ impl ServiceConfig {
             AgentRuntimeConfig::Codex => self.validate_codex_config()?,
         }
         Ok(())
+    }
+
+    pub fn validate_for_check(&self) -> Result<Vec<String>, WorkflowError> {
+        let mut warnings = Vec::new();
+        self.tracker.validate_without_api_key()?;
+        if !self.tracker.has_api_key() {
+            warnings.push(match &self.tracker.kind {
+                TrackerKind::Linear(_) => {
+                    "LINEAR_API_KEY is not set; `vik check` validates configuration only, but `vik start` requires a Linear API key".to_string()
+                }
+                TrackerKind::GitHub(_) => {
+                    "GH_TOKEN or GITHUB_TOKEN is not set; `vik check` validates configuration only, but `vik start` requires a GitHub token".to_string()
+                }
+                TrackerKind::Unsupported(_) => unreachable!("unsupported tracker kind is rejected before warnings"),
+            });
+        }
+        if self.polling.interval_ms == 0 {
+            return Err(WorkflowError::InvalidConfig(
+                "polling.interval_ms must be positive".to_string(),
+            ));
+        }
+        match self.agent.runtime {
+            AgentRuntimeConfig::Codex => self.validate_codex_config()?,
+        }
+        Ok(warnings)
     }
 
     fn validate_codex_config(&self) -> Result<(), WorkflowError> {

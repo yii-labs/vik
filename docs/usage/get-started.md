@@ -56,7 +56,8 @@ workspaces, how to clone the repo, and how to launch Codex.
    workspace.
 9. Confirm `codex.command` launches `codex app-server`.
 
-Validate config parsing after connections are configured:
+Validate config parsing. Missing tracker credentials are reported as warnings
+because `vik check` does not contact the tracker:
 
 ```sh
 vik check ./WORKFLOW.md

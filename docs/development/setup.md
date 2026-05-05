@@ -26,11 +26,12 @@ cp .env.example .env
 
 Replace the tracker token placeholders with real keys. Do not commit `.env`.
 
-For config-only validation, a placeholder environment value is enough because
-`vik check` validates config shape and does not call the tracker:
+For config-only validation, tracker credentials are not required because
+`vik check` validates config shape and does not call the tracker. Missing
+tracker credentials are reported as warnings:
 
 ```sh
-LINEAR_API_KEY=ci-placeholder cargo run --locked -p vik-cli -- check ./WORKFLOW.md
+cargo run --locked -p vik-cli -- check ./WORKFLOW.md
 ```
 
 ## Local Smoke Run
@@ -49,8 +50,7 @@ perl -0pi -e "s/project_slug: \"[^\"]+\"/project_slug: \"$VIK_LINEAR_PROJECT_SLU
   .tests/WORKFLOW.local.md
 perl -0pi -e "s|root: .*|root: ~/code/vik-workspaces-local|" \
   .tests/WORKFLOW.local.md
-LINEAR_API_KEY=ci-placeholder cargo run --locked -p vik-cli -- \
-  check .tests/WORKFLOW.local.md
+cargo run --locked -p vik-cli -- check .tests/WORKFLOW.local.md
 cargo run --locked -p vik-cli -- start .tests/WORKFLOW.local.md --port 3000
 ```
 

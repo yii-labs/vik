@@ -44,12 +44,20 @@ impl GitHubTrackerConfig {
         if self.api_key.trim().is_empty() {
             return Err(TrackerConfigError::MissingApiKey);
         }
+        self.validate_without_api_key()
+    }
+
+    pub fn validate_without_api_key(&self) -> Result<(), TrackerConfigError> {
         if self.repository.trim().is_empty() {
             return Err(TrackerConfigError::MissingRepository);
         }
         client::GitHubRepository::parse(&self.repository)
             .map(|_| ())
             .map_err(|_| TrackerConfigError::InvalidRepository(self.repository.clone()))
+    }
+
+    pub fn has_api_key(&self) -> bool {
+        !self.api_key.trim().is_empty()
     }
 }
 

@@ -35,15 +35,12 @@ workspace:
 
 ## Config Check
 
-Pass required secrets as environment variables. Docker does not copy local
-config files unless you mount them. Use `LINEAR_API_KEY` for a Linear tracker or
-`GH_TOKEN`/`GITHUB_TOKEN` for a GitHub tracker.
+`vik check` validates config shape and does not call the tracker. Missing
+tracker credentials are reported as warnings, so no secrets are required for a
+config-only Docker check.
 
 ```sh
 docker run --rm \
-  --env LINEAR_API_KEY \
-  --env GH_TOKEN \
-  --env OPENAI_API_KEY \
   -v "$PWD:/vik-workspace" \
   vik:local vik check
 ```
@@ -84,13 +81,11 @@ docker run --rm \
 
 ## GitHub Auth
 
-Token auth is simplest in Docker:
+Token auth is simplest in Docker for daemon runs. It is not required for
+`vik check`:
 
 ```sh
 docker run --rm \
-  --env GH_TOKEN \
-  --env LINEAR_API_KEY \
-  --env OPENAI_API_KEY \
   -v "$PWD:/vik-workspace" \
   vik:local vik check
 ```
@@ -111,9 +106,6 @@ owner, pass a matching user:
 
 ```sh
 docker run --rm --user "$(id -u):$(id -g)" \
-  --env LINEAR_API_KEY \
-  --env GH_TOKEN \
-  --env OPENAI_API_KEY \
   -v "$PWD:/vik-workspace" \
   vik:local vik check
 ```
