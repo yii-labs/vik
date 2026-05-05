@@ -23,6 +23,7 @@ hooks:
   before_run: |
     git status .
 agent:
+  runtime: codex
   max_concurrent_agents: 10
   max_turns: 20
 codex:

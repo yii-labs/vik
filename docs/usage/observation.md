@@ -68,7 +68,7 @@ curl -fsS -X POST http://127.0.0.1:3000/api/v1/refresh | jq .
 - counts by runtime bucket
 - running issue rows
 - retry rows
-- aggregate Codex token totals
+- aggregate agent token totals
 - rate-limit data when available
 
 Running rows include issue ID, issue identifier, state, optional session ID,
@@ -76,11 +76,11 @@ turn count, last event, last message, workspace path, and token usage.
 
 ## Sessions
 
-Persisted Codex app-server session logs require VIK-11. Builds that include
-VIK-11 append raw Codex app-server JSONL messages under:
+Persisted agent session logs require VIK-11. When the Codex runtime is in use,
+builds that include VIK-11 append raw Codex app-server JSONL messages under:
 
 ```text
-<workspace.root>/sessions/<issue-identifier>-<codex-session-id>.jsonl
+<workspace.root>/sessions/<issue-identifier>-<agent-session-id>.jsonl
 ```
 
 The issue identifier is the human-facing key such as `VIK-16`. Filename
@@ -102,8 +102,9 @@ Inspect one session:
 jq . "$HOME/code/vik-workspaces/sessions/<file>.jsonl" | less
 ```
 
-Session files contain raw Codex app-server messages for the session. They do
-not replace Vik daemon logs, HTTP snapshots, or tracker workpad notes.
+With the Codex runtime, session files contain raw Codex app-server messages for
+the session. They do not replace Vik daemon logs, HTTP snapshots, or tracker
+workpad notes.
 
 For builds before VIK-11, use `/api/v1/state`, `/api/v1/{issue_identifier}`,
 and JSON daemon logs only. Durable per-session JSONL files are unavailable in

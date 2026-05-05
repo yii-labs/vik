@@ -15,8 +15,10 @@ pub struct RuntimeStateView {
     pub claimed: HashSet<String>,
     pub retry_attempts: HashMap<String, RetryEntry>,
     pub completed: HashSet<String>,
-    pub codex_totals: TokenTotals,
-    pub codex_rate_limits: Option<Value>,
+    #[serde(rename = "codex_totals", alias = "token_totals")]
+    pub token_totals: TokenTotals,
+    #[serde(rename = "codex_rate_limits", alias = "rate_limits")]
+    pub rate_limits: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -49,7 +51,9 @@ pub struct RuntimeSnapshot {
     pub counts: BTreeMap<String, usize>,
     pub running: Vec<RunningRow>,
     pub retrying: Vec<RetryRow>,
-    pub codex_totals: TokenTotals,
+    #[serde(rename = "codex_totals", alias = "token_totals")]
+    pub token_totals: TokenTotals,
+    #[serde(alias = "codex_rate_limits")]
     pub rate_limits: Option<Value>,
 }
 

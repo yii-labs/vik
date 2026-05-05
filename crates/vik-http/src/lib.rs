@@ -84,9 +84,9 @@ async fn dashboard(State(state): State<HttpState>) -> Html<String> {
 </html>"#,
         snapshot.counts.get("running").copied().unwrap_or(0),
         snapshot.counts.get("retrying").copied().unwrap_or(0),
-        snapshot.codex_totals.input_tokens,
-        snapshot.codex_totals.output_tokens,
-        snapshot.codex_totals.total_tokens,
+        snapshot.token_totals.input_tokens,
+        snapshot.token_totals.output_tokens,
+        snapshot.token_totals.total_tokens,
         rows
     ))
 }

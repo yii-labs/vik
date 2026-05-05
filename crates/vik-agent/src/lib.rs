@@ -1,14 +1,8 @@
-mod client;
+mod codex;
 mod error;
-mod event;
-mod process;
-mod session_log;
-mod tools;
+mod runtime;
 mod worker;
 
-#[cfg(test)]
-mod tests;
-
-pub use client::{CodexAppServerClient, CodexIssueContext};
 pub use error::AgentError;
+pub use runtime::AgentRuntime;
 pub use worker::LocalAgentWorker;

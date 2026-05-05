@@ -32,7 +32,7 @@ impl OrchestratorState {
             .values()
             .map(|entry| (now - entry.started_at).num_milliseconds().max(0) as f64 / 1000.0)
             .sum();
-        let mut totals = self.codex_totals.clone();
+        let mut totals = self.token_totals.clone();
         totals.seconds_running += active_seconds;
         RuntimeSnapshot {
             generated_at: now,
@@ -42,8 +42,8 @@ impl OrchestratorState {
             ]),
             running,
             retrying,
-            codex_totals: totals,
-            rate_limits: self.codex_rate_limits.clone(),
+            token_totals: totals,
+            rate_limits: self.rate_limits.clone(),
         }
     }
 

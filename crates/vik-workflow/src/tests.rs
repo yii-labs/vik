@@ -58,6 +58,7 @@ fn applies_defaults_and_path_resolution() {
     let def = parse_workflow_file(&path).unwrap();
     let config = ServiceConfig::from_definition(&def).unwrap();
     assert_eq!(config.polling.interval_ms, 30_000);
+    assert_eq!(config.agent.runtime, AgentRuntimeConfig::Codex);
     assert_eq!(config.codex.read_timeout_ms, 30_000);
     assert_eq!(config.workspace.root, dir.path().join("work"));
     assert_eq!(config.logging.dir, dir.path().join("work").join("logs"));
@@ -78,6 +79,33 @@ fn applies_defaults_and_path_resolution() {
             .max_concurrent_agents_by_state
             .contains_key("bad")
     );
+}
+
+#[test]
+fn parses_agent_runtime() {
+    let def = parse_workflow_content(
+        PathBuf::from("WORKFLOW.md"),
+        "---\ntracker:\n  kind: linear\nagent:\n  runtime: codex\n---\nBody",
+    )
+    .unwrap();
+    let config = ServiceConfig::from_definition(&def).unwrap();
+
+    assert_eq!(config.agent.runtime, AgentRuntimeConfig::Codex);
+}
+
+#[test]
+fn rejects_unsupported_agent_runtime() {
+    let def = parse_workflow_content(
+        PathBuf::from("WORKFLOW.md"),
+        "---\ntracker:\n  kind: linear\nagent:\n  runtime: other\n---\nBody",
+    )
+    .unwrap();
+    let err = ServiceConfig::from_definition(&def).unwrap_err();
+
+    assert!(matches!(
+        err,
+        WorkflowError::InvalidConfig(message) if message == "unsupported agent.runtime: other"
+    ));
 }
 
 #[test]
