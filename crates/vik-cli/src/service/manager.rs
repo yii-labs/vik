@@ -152,14 +152,14 @@ impl ServiceManager {
     }
 
     pub fn print_logs(&self, args: LogsArgs) -> Result<(), Box<dyn Error>> {
-        let path = self
+        let source = self
             .read_state()?
             .map(|state| state.log_dir)
             .unwrap_or_else(|| self.log_dir.clone());
-        if !path.exists() {
-            println!("service logs not found: {}", path.display());
+        let Some(path) = self.log_file_for_reading(&source)? else {
+            println!("service logs not found: {}", source.display());
             return Ok(());
-        }
+        };
 
         self.print_recent_lines(&path, args.lines)?;
         if args.follow {
@@ -207,6 +207,7 @@ impl ServiceManager {
     ) -> Result<u32, Box<dyn Error>> {
         let cwd = self.effective_cwd(previous_state);
         fs::create_dir_all(&self.service_dir)?;
+        fs::create_dir_all(&self.log_dir)?;
         let executable = env::current_exe()?;
         let mut command = Command::new(&executable);
         for arg in self.daemon_args(args) {
@@ -215,10 +216,14 @@ impl ServiceManager {
         command.current_dir(&cwd);
         self.detach_command(&mut command);
 
+        let err_log = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.service_stderr_log_path(&self.log_dir))?;
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(Stdio::from(err_log));
 
         let child = command.spawn()?;
         let pid = child.id();
@@ -429,6 +434,30 @@ impl ServiceManager {
             self.state_path.display(),
             self.log_dir.display()
         );
+    }
+
+    fn service_stderr_log_path(&self, log_dir: &Path) -> PathBuf {
+        log_dir.join("vik-service.log")
+    }
+
+    fn log_file_for_reading(&self, source: &Path) -> io::Result<Option<PathBuf>> {
+        if source.is_file() {
+            return Ok(Some(source.to_path_buf()));
+        }
+        if !source.is_dir() {
+            return Ok(None);
+        }
+
+        if let Some(path) = latest_file_with_prefix(source, "vik.log")? {
+            return Ok(Some(path));
+        }
+
+        let service_log = self.service_stderr_log_path(source);
+        if service_log.is_file() {
+            return Ok(Some(service_log));
+        }
+
+        Ok(None)
     }
 
     fn print_recent_lines(&self, path: &Path, lines: usize) -> io::Result<()> {
@@ -721,6 +750,33 @@ fn normalize_path(path: PathBuf) -> PathBuf {
     normalized
 }
 
+fn latest_file_with_prefix(dir: &Path, prefix: &str) -> io::Result<Option<PathBuf>> {
+    let mut latest: Option<(SystemTime, PathBuf)> = None;
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if !name.starts_with(prefix) {
+            continue;
+        }
+        let metadata = entry.metadata()?;
+        if !metadata.is_file() {
+            continue;
+        }
+        let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
+        if latest
+            .as_ref()
+            .map(|(latest_modified, _)| modified > *latest_modified)
+            .unwrap_or(true)
+        {
+            latest = Some((modified, path));
+        }
+    }
+    Ok(latest.map(|(_, path)| path))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ServiceState {
     version: u32,
@@ -965,6 +1021,31 @@ mod tests {
         let lines = manager.recent_log_lines(&path, 0).unwrap();
 
         assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn log_file_for_reading_uses_rolling_log_file() {
+        let manager = temp_manager().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vik.log.2026-05-05");
+        fs::write(&path, "service log\n").unwrap();
+        fs::write(dir.path().join("vik-error.log.2026-05-05"), "error log\n").unwrap();
+
+        let selected = manager.log_file_for_reading(dir.path()).unwrap();
+
+        assert_eq!(selected, Some(path));
+    }
+
+    #[test]
+    fn log_file_for_reading_falls_back_to_service_stderr_log() {
+        let manager = temp_manager().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = manager.service_stderr_log_path(dir.path());
+        fs::write(&path, "startup error\n").unwrap();
+
+        let selected = manager.log_file_for_reading(dir.path()).unwrap();
+
+        assert_eq!(selected, Some(path));
     }
 
     #[cfg(unix)]
