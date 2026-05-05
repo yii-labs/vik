@@ -4,7 +4,7 @@ use std::error::Error;
 use std::fs::{self, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::thread;
@@ -43,6 +43,7 @@ impl ServiceManager {
         } else {
             env::current_dir()?.join(selected)
         };
+        let workflow_path = normalize_workflow_path(workflow_path);
         let cwd = workflow_path
             .parent()
             .unwrap_or_else(|| Path::new("."))
@@ -731,6 +732,20 @@ fn build_tracker(config: &ServiceConfig) -> Result<TrackerClient, Box<dyn Error>
     Ok(tracker)
 }
 
+fn normalize_workflow_path(path: PathBuf) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ServiceState {
     version: u32,
@@ -818,6 +833,20 @@ mod tests {
 
         assert_eq!(first.state_path, second.state_path);
         assert_eq!(first.service_dir, dir.path().join(".vik").join("service"));
+    }
+
+    #[test]
+    fn manager_state_path_normalizes_equivalent_workflow_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let workflow_path = dir.path().join("WORKFLOW.md");
+        let dotted_workflow_path = dir.path().join(".").join("WORKFLOW.md");
+        write_workflow(&workflow_path, "work");
+
+        let first = ServiceManager::new(Some(workflow_path.clone())).unwrap();
+        let second = ServiceManager::new(Some(dotted_workflow_path)).unwrap();
+
+        assert_eq!(first.workflow_path, workflow_path);
+        assert_eq!(first.state_path, second.state_path);
     }
 
     #[cfg(unix)]
