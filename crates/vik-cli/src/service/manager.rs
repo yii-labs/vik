@@ -784,9 +784,13 @@ struct ServiceState {
     workflow_path: PathBuf,
     pid: Option<u32>,
     status: StoredStatus,
+    #[serde(alias = "started_at_unix")]
     started_at: Option<u64>,
+    #[serde(alias = "stopped_at_unix")]
     stopped_at: Option<u64>,
+    #[serde(alias = "log_path")]
     log_dir: PathBuf,
+    #[serde(default)]
     session_dir: PathBuf,
     port: Option<u16>,
     command: Vec<String>,
@@ -990,6 +994,29 @@ mod tests {
         };
 
         assert_eq!(manager.classify_state(&state), RuntimeStatus::Stopped);
+    }
+
+    #[test]
+    fn service_state_reads_legacy_log_schema() {
+        let body = r#"{
+            "version": 1,
+            "workflow_path": "/tmp/vik/WORKFLOW.md",
+            "cwd": "/tmp/vik",
+            "pid": null,
+            "status": "stopped",
+            "started_at_unix": 1,
+            "stopped_at_unix": 2,
+            "log_path": "/tmp/vik/service.log",
+            "port": null,
+            "command": []
+        }"#;
+
+        let state: ServiceState = serde_json::from_str(body).unwrap();
+
+        assert_eq!(state.started_at, Some(1));
+        assert_eq!(state.stopped_at, Some(2));
+        assert_eq!(state.log_dir, PathBuf::from("/tmp/vik/service.log"));
+        assert!(state.session_dir.as_os_str().is_empty());
     }
 
     #[test]
