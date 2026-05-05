@@ -4,32 +4,16 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use vik_core::WorkflowDefinition;
+use vik_tracker::{
+    CommonTrackerConfig, GitHubTrackerConfig, LinearTrackerConfig, TrackerConfig,
+    TrackerFilterConfig,
+};
 
 use crate::WorkflowError;
 use crate::yaml::{
     concurrency_map, expand_path_value, get_map, i64_value, json_value, nested_map,
     resolve_exact_env, string_value, string_vec, u32_value, u64_value, usize_value,
 };
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TrackerConfig {
-    pub kind: String,
-    pub endpoint: String,
-    pub api_key: String,
-    pub project_slug: String,
-    pub active_states: Vec<String>,
-    pub terminal_states: Vec<String>,
-    #[serde(default)]
-    pub filter: TrackerFilterConfig,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TrackerFilterConfig {
-    #[serde(default)]
-    pub assignees: Vec<String>,
-    #[serde(default)]
-    pub tags: Vec<String>,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PollingConfig {
@@ -191,19 +175,8 @@ impl ServiceConfig {
         let server_map = get_map(&definition.config, "server");
 
         let tracker_kind = string_value(tracker_map, "kind").unwrap_or_default();
-        let endpoint = string_value(tracker_map, "endpoint").unwrap_or_else(|| {
-            if tracker_kind == "linear" {
-                "https://api.linear.app/graphql".to_string()
-            } else {
-                String::new()
-            }
-        });
-        let api_key = string_value(tracker_map, "api_key")
-            .or_else(|| env::var("LINEAR_API_KEY").ok())
-            .map(resolve_exact_env)
-            .transpose()?
-            .unwrap_or_default();
         let project_slug = string_value(tracker_map, "project_slug").unwrap_or_default();
+        let repository = string_value(tracker_map, "repository").unwrap_or_default();
         let active_states = string_vec(tracker_map, "active_states")
             .unwrap_or_else(|| vec!["Todo".to_string(), "In Progress".to_string()]);
         let terminal_states = string_vec(tracker_map, "terminal_states").unwrap_or_else(|| {
@@ -219,6 +192,30 @@ impl ServiceConfig {
         let filter = TrackerFilterConfig {
             assignees: string_vec(tracker_filter_map, "assignees").unwrap_or_default(),
             tags: string_vec(tracker_filter_map, "tags").unwrap_or_default(),
+        };
+        let common_tracker = CommonTrackerConfig {
+            active_states,
+            terminal_states,
+            filter,
+        };
+        let tracker = match tracker_kind.as_str() {
+            "linear" => TrackerConfig::linear(
+                common_tracker,
+                LinearTrackerConfig::new(
+                    provider_endpoint(tracker_map, LinearTrackerConfig::default_endpoint()),
+                    provider_api_key(tracker_map, LinearTrackerConfig::api_key_from_env)?,
+                    project_slug,
+                ),
+            ),
+            "github" => TrackerConfig::github(
+                common_tracker,
+                GitHubTrackerConfig::new(
+                    provider_endpoint(tracker_map, GitHubTrackerConfig::default_endpoint()),
+                    provider_api_key(tracker_map, GitHubTrackerConfig::api_key_from_env)?,
+                    repository,
+                ),
+            ),
+            _ => TrackerConfig::unsupported(common_tracker, tracker_kind),
         };
 
         let workspace_root = string_value(workspace_map, "root")
@@ -274,15 +271,7 @@ impl ServiceConfig {
 
         Ok(Self {
             workflow_path: definition.path.clone(),
-            tracker: TrackerConfig {
-                kind: tracker_kind,
-                endpoint,
-                api_key,
-                project_slug,
-                active_states,
-                terminal_states,
-                filter,
-            },
+            tracker,
             polling: PollingConfig {
                 interval_ms: u64_value(polling_map, "interval_ms").unwrap_or(30_000),
             },
@@ -303,15 +292,7 @@ impl ServiceConfig {
     }
 
     pub fn validate_for_dispatch(&self) -> Result<(), WorkflowError> {
-        if self.tracker.kind != "linear" {
-            return Err(WorkflowError::UnsupportedTrackerKind);
-        }
-        if self.tracker.api_key.trim().is_empty() {
-            return Err(WorkflowError::MissingTrackerApiKey);
-        }
-        if self.tracker.project_slug.trim().is_empty() {
-            return Err(WorkflowError::MissingTrackerProjectSlug);
-        }
+        self.tracker.validate()?;
         if self.polling.interval_ms == 0 {
             return Err(WorkflowError::InvalidConfig(
                 "polling.interval_ms must be positive".to_string(),
@@ -349,4 +330,19 @@ impl ServiceConfig {
         }
         Ok(())
     }
+}
+
+fn provider_endpoint(tracker_map: Option<&serde_yaml::Mapping>, default_endpoint: &str) -> String {
+    string_value(tracker_map, "endpoint").unwrap_or_else(|| default_endpoint.to_string())
+}
+
+fn provider_api_key(
+    tracker_map: Option<&serde_yaml::Mapping>,
+    from_env: fn() -> Option<String>,
+) -> Result<String, WorkflowError> {
+    Ok(string_value(tracker_map, "api_key")
+        .or_else(from_env)
+        .map(resolve_exact_env)
+        .transpose()?
+        .unwrap_or_default())
 }

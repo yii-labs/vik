@@ -171,10 +171,10 @@ Use the configured `logging.dir` from `WORKFLOW.md`. If it is omitted, use
   - `workflow_reload outcome=failed`
   - invalid `WORKFLOW.md`
   - reload keeps last-good config
-- Tracker or Linear:
+- Tracker:
   - `tracker_fetch_candidates outcome=failed`
-  - `linear_graphql` tool failure
-  - missing Linear credentials
+  - `vik_issue` tool failure
+  - missing tracker credentials
 - Workspace:
   - `hook_failed`
   - `hook_timeout`

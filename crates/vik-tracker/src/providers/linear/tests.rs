@@ -1,11 +1,34 @@
 use serde_json::json;
 
-use crate::{
-    ATTACHMENT_CREATE_MUTATION, CANDIDATE_QUERY, ISSUE_BY_IDENTIFIER_QUERY,
-    ISSUE_STATES_BY_IDS_QUERY,
+use crate::providers::TrackerConfigError;
+
+use super::{
+    LinearTrackerConfig,
     client::{LinearIssueFilterConfig, issue_has_attachment_url},
-    normalize_issue,
+    normalize::normalize_issue,
+    queries::{
+        ATTACHMENT_CREATE_MUTATION, CANDIDATE_QUERY, ISSUE_BY_ID_QUERY, ISSUE_STATES_BY_IDS_QUERY,
+    },
 };
+
+#[test]
+fn provider_config_owns_endpoint_key_and_validation() {
+    let config = LinearTrackerConfig::new(
+        super::DEFAULT_LINEAR_ENDPOINT,
+        "lin_api_key",
+        "vik-08c9cf588aa7",
+    );
+
+    assert_eq!(config.endpoint, super::DEFAULT_LINEAR_ENDPOINT);
+    assert_eq!(config.api_key, "lin_api_key");
+    config.validate().unwrap();
+
+    let missing_key = LinearTrackerConfig::new(super::DEFAULT_LINEAR_ENDPOINT, "", "proj");
+    assert!(matches!(
+        missing_key.validate(),
+        Err(TrackerConfigError::MissingApiKey)
+    ));
+}
 
 #[test]
 fn candidate_query_uses_project_slug_filter() {
@@ -65,10 +88,17 @@ fn state_refresh_uses_graphql_id_list_type() {
 }
 
 #[test]
+fn issue_update_metadata_query_includes_state_and_label_ids() {
+    assert!(super::queries::ISSUE_STATES_FOR_ISSUE_QUERY.contains("states"));
+    assert!(super::queries::ISSUE_STATES_FOR_ISSUE_QUERY.contains("labels"));
+    assert!(super::queries::ISSUE_UPDATE_MUTATION.contains("IssueUpdateInput"));
+}
+
+#[test]
 fn attachment_queries_support_pr_link_sync() {
-    assert!(ISSUE_BY_IDENTIFIER_QUERY.contains("issue(id: $id)"));
-    assert!(ISSUE_BY_IDENTIFIER_QUERY.contains("attachments(first: 50)"));
-    assert!(ISSUE_BY_IDENTIFIER_QUERY.contains("url"));
+    assert!(ISSUE_BY_ID_QUERY.contains("issue(id: $id)"));
+    assert!(ISSUE_BY_ID_QUERY.contains("attachments(first: 50)"));
+    assert!(ISSUE_BY_ID_QUERY.contains("url"));
     assert!(ATTACHMENT_CREATE_MUTATION.contains("attachmentCreate(input: $input)"));
 }
 

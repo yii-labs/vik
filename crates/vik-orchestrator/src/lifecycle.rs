@@ -17,8 +17,8 @@ where
 {
     pub(crate) async fn startup_cleanup(&self) {
         let loaded = self.current_loaded().await;
-        let terminal_states = loaded.config.tracker.terminal_states.clone();
-        match self.tracker.fetch_issues_by_states(&terminal_states).await {
+        let terminal_states = loaded.config.tracker.terminal_states().to_vec();
+        match self.tracker.fetch_by_states(&terminal_states).await {
             Ok(issues) => {
                 let manager =
                     WorkspaceManager::new(loaded.config.workspace.root, loaded.config.hooks);

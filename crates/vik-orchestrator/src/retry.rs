@@ -27,7 +27,7 @@ where
         if due.is_empty() {
             return;
         }
-        let candidates = match self.tracker.fetch_candidate_issues().await {
+        let candidates = match self.tracker.fetch_candidates().await {
             Ok(candidates) => candidates,
             Err(err) => {
                 let mut state = self.state.lock().await;

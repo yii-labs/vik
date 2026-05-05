@@ -13,3 +13,7 @@ pub use error::*;
 pub use parser::*;
 pub use prompt::*;
 pub use reloader::*;
+pub use vik_tracker::{
+    CommonTrackerConfig, GitHubTrackerConfig, LinearTrackerConfig, TrackerConfig,
+    TrackerConfigError, TrackerFilterConfig, TrackerKind,
+};

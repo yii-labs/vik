@@ -64,6 +64,7 @@ impl JsonlRpcProcess {
         cwd: &Path,
         tools: DynamicTools,
     ) -> Result<Self, AgentError> {
+        let tools = tools.with_workspace_root(cwd.to_path_buf());
         let mut process = Command::new(command.program());
         process
             .args(command.args())

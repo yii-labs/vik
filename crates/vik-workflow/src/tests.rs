@@ -69,8 +69,9 @@ fn applies_defaults_and_path_resolution() {
         config.codex.approvals_reviewer,
         Some(serde_json::Value::String("auto_review".to_string()))
     );
-    assert!(config.tracker.filter.assignees.is_empty());
-    assert!(config.tracker.filter.tags.is_empty());
+    assert!(config.tracker.filter().assignees.is_empty());
+    assert!(config.tracker.filter().tags.is_empty());
+    assert!(config.tracker.github_provider().is_none());
     assert!(
         !config
             .agent
@@ -92,8 +93,8 @@ fn parses_tracker_filter() {
     let def = parse_workflow_file(&path).unwrap();
     let config = ServiceConfig::from_definition(&def).unwrap();
 
-    assert_eq!(config.tracker.filter.assignees, vec!["user-a", "user-b"]);
-    assert_eq!(config.tracker.filter.tags, vec!["agent", "codex"]);
+    assert_eq!(config.tracker.filter().assignees, vec!["user-a", "user-b"]);
+    assert_eq!(config.tracker.filter().tags, vec!["agent", "codex"]);
 }
 
 #[test]
@@ -109,8 +110,69 @@ fn empty_tracker_filter_lists_match_all_issues() {
     let def = parse_workflow_file(&path).unwrap();
     let config = ServiceConfig::from_definition(&def).unwrap();
 
-    assert!(config.tracker.filter.assignees.is_empty());
-    assert!(config.tracker.filter.tags.is_empty());
+    assert!(config.tracker.filter().assignees.is_empty());
+    assert!(config.tracker.filter().tags.is_empty());
+}
+
+#[test]
+fn accepts_github_tracker_config() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("WORKFLOW.md");
+    fs::write(
+        &path,
+        "---\ntracker:\n  kind: github\n  api_key: gh_token\n  repository: yii-labs/vik\n  active_states: [Todo, In Progress]\n  terminal_states: [Done, Closed]\nworkspace:\n  root: work\n---\nBody",
+    )
+    .unwrap();
+
+    let def = parse_workflow_file(&path).unwrap();
+    let config = ServiceConfig::from_definition(&def).unwrap();
+
+    assert_eq!(config.tracker.kind_name(), "github");
+    let provider = config.tracker.github_provider().unwrap();
+    assert_eq!(provider.endpoint, "https://api.github.com");
+    assert_eq!(provider.api_key, "gh_token");
+    assert_eq!(provider.repository, "yii-labs/vik");
+    assert!(config.tracker.linear_provider().is_none());
+    config.validate_for_dispatch().unwrap();
+}
+
+#[test]
+fn github_tracker_requires_repository() {
+    let def = parse_workflow_content(
+        PathBuf::from("WORKFLOW.md"),
+        "---\ntracker:\n  kind: github\n  api_key: gh_token\n---\nBody",
+    )
+    .unwrap();
+    let config = ServiceConfig::from_definition(&def).unwrap();
+    let err = config.validate_for_dispatch().unwrap_err();
+
+    assert!(matches!(err, WorkflowError::MissingTrackerRepository));
+}
+
+#[test]
+fn github_tracker_rejects_malformed_repository() {
+    let def = parse_workflow_content(
+        PathBuf::from("WORKFLOW.md"),
+        "---\ntracker:\n  kind: github\n  api_key: gh_token\n  repository: yii-labs\n---\nBody",
+    )
+    .unwrap();
+    let config = ServiceConfig::from_definition(&def).unwrap();
+    let err = config.validate_for_dispatch().unwrap_err();
+
+    assert!(matches!(err, WorkflowError::InvalidTrackerRepository(_)));
+}
+
+#[test]
+fn unsupported_tracker_kind_is_rejected_for_dispatch() {
+    let def = parse_workflow_content(
+        PathBuf::from("WORKFLOW.md"),
+        "---\ntracker:\n  kind: jira\n  api_key: token\n---\nBody",
+    )
+    .unwrap();
+    let config = ServiceConfig::from_definition(&def).unwrap();
+    let err = config.validate_for_dispatch().unwrap_err();
+
+    assert!(matches!(err, WorkflowError::UnsupportedTrackerKind));
 }
 
 #[test]

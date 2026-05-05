@@ -4,8 +4,8 @@ use chrono::{TimeZone, Utc};
 use serde_json::json;
 use vik_core::{AgentEvent, BlockerRef, Issue, TokenUsage, WorkerOutcome};
 use vik_workflow::{
-    AgentConfig, CodexConfig, HooksConfig, LoggingConfig, PollingConfig, ServiceConfig,
-    TrackerConfig, WorkspaceConfig,
+    AgentConfig, CodexConfig, CommonTrackerConfig, HooksConfig, LinearTrackerConfig, LoggingConfig,
+    PollingConfig, ServiceConfig, TrackerConfig, WorkspaceConfig,
 };
 
 use crate::state_events::should_log_agent_event_to_service;
@@ -16,15 +16,14 @@ use crate::{
 fn config() -> ServiceConfig {
     ServiceConfig {
         workflow_path: "WORKFLOW.md".into(),
-        tracker: TrackerConfig {
-            kind: "linear".into(),
-            endpoint: "https://api.linear.app/graphql".into(),
-            api_key: "token".into(),
-            project_slug: "proj".into(),
-            active_states: vec!["Todo".into(), "In Progress".into()],
-            terminal_states: vec!["Done".into(), "Closed".into()],
-            filter: Default::default(),
-        },
+        tracker: TrackerConfig::linear(
+            CommonTrackerConfig {
+                active_states: vec!["Todo".into(), "In Progress".into()],
+                terminal_states: vec!["Done".into(), "Closed".into()],
+                filter: Default::default(),
+            },
+            LinearTrackerConfig::new("https://api.linear.app/graphql", "token", "proj"),
+        ),
         polling: PollingConfig {
             interval_ms: 30_000,
         },

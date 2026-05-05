@@ -39,7 +39,7 @@ docker run --rm \
 ```
 
 Pass real `GH_TOKEN`, `OPENAI_API_KEY`, and `LINEAR_API_KEY` only for an
-end-to-end daemon run against an isolated project.
+end-to-end daemon run against an isolated tracker target.
 
 ## Runtime Gate
 
@@ -50,5 +50,5 @@ cargo run --locked -p vik-cli -- start ./WORKFLOW.md --port 3000
 curl -fsS http://127.0.0.1:3000/api/v1/state | jq .
 ```
 
-Record the issue state, PR link, and final Linear state when using Vik itself to
-drive a ticket.
+Record the issue state, PR link, and final tracker state when using Vik itself
+to drive a ticket.

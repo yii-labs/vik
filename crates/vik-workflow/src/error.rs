@@ -18,6 +18,24 @@ pub enum WorkflowError {
     MissingTrackerApiKey,
     #[error("missing_tracker_project_slug")]
     MissingTrackerProjectSlug,
+    #[error("missing_tracker_repository")]
+    MissingTrackerRepository,
+    #[error("invalid_tracker_repository: {0}")]
+    InvalidTrackerRepository(String),
     #[error("invalid_config: {0}")]
     InvalidConfig(String),
+}
+
+impl From<vik_tracker::TrackerConfigError> for WorkflowError {
+    fn from(value: vik_tracker::TrackerConfigError) -> Self {
+        match value {
+            vik_tracker::TrackerConfigError::UnsupportedTrackerKind => Self::UnsupportedTrackerKind,
+            vik_tracker::TrackerConfigError::MissingApiKey => Self::MissingTrackerApiKey,
+            vik_tracker::TrackerConfigError::MissingProjectSlug => Self::MissingTrackerProjectSlug,
+            vik_tracker::TrackerConfigError::MissingRepository => Self::MissingTrackerRepository,
+            vik_tracker::TrackerConfigError::InvalidRepository(repository) => {
+                Self::InvalidTrackerRepository(repository)
+            }
+        }
+    }
 }

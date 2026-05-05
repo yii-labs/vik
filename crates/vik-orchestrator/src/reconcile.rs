@@ -20,7 +20,7 @@ where
         if running_ids.is_empty() {
             return;
         }
-        let refreshed = match self.tracker.fetch_issue_states_by_ids(&running_ids).await {
+        let refreshed = match self.tracker.fetch_states_by_ids(&running_ids).await {
             Ok(issues) => issues,
             Err(err) => {
                 tracing::debug!(error=%err, "reconcile_state_refresh outcome=failed keeping_workers=true");
@@ -39,13 +39,13 @@ where
             let terminal = loaded
                 .config
                 .tracker
-                .terminal_states
+                .terminal_states()
                 .iter()
                 .any(|state| normalize_state(state) == state_name);
             let active = loaded
                 .config
                 .tracker
-                .active_states
+                .active_states()
                 .iter()
                 .any(|state| normalize_state(state) == state_name);
             if terminal {

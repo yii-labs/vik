@@ -1,8 +1,8 @@
 # Vik
 
-Vik is a Rust service for unattended coding-agent orchestration. It reads Linear
-issues, creates one isolated workspace per issue, and runs Codex app-server
-sessions inside those workspaces.
+Vik is a Rust service for unattended coding-agent orchestration. It reads issue
+tracker issues, creates one isolated workspace per issue, and runs Codex
+app-server sessions inside those workspaces.
 
 Vik is adapted from OpenAI's
 [Symphony](https://github.com/openai/symphony) workflow and harness patterns.
@@ -14,6 +14,8 @@ Vik is adapted from OpenAI's
 - Run as a detached local process through
   [Service Daemon](docs/usage/service-daemon.md).
 - Tune workflow settings through [Configuration](docs/usage/configuration.md).
+- Configure trackers through [Linear](docs/usage/trackers/linear.md) or
+  [GitHub](docs/usage/trackers/github.md).
 - Inspect runtime state through [Observation](docs/usage/observation.md).
 
 ## Development

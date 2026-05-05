@@ -50,13 +50,13 @@ Add the `vik` label.
 
 ## Review Loop
 
-Before moving Linear to human review:
+Before moving the tracker issue to human review:
 
 1. Push latest branch.
 2. Check PR comments, inline comments, and review summaries.
 3. Address every actionable item or reply with clear pushback.
 4. Rerun required checks.
 5. Confirm CI is green.
-6. Confirm PR is linked to Linear.
+6. Confirm PR is linked to the tracker issue.
 
 Do not leave stale workpad or PR body text after scope changes.

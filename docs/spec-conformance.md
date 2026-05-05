@@ -11,11 +11,14 @@ This document maps Vik draft v1 required behavior to this workspace.
 - Invalid workflow reload handling: reconciliation keeps last-good config, new dispatch/retry launch is
   blocked until reload succeeds.
 - Polling orchestrator state authority: `vik-orchestrator::OrchestratorState`.
-- Linear candidate, terminal, and state refresh reads: `vik-tracker::LinearClient`.
+- Tracker candidate, terminal, state refresh, issue update, comment, attachment,
+  and PR-link operations: `vik_core::IssueTracker` with
+  `vik-tracker::TrackerClient`.
 - Sanitized per-issue workspaces: `vik-workspace::WorkspaceManager`.
 - Workspace hooks and timeout: `vik-workspace::WorkspaceManager`.
 - Codex JSONL app-server client: `vik-agent::CodexAppServerClient`.
-- `linear_graphql` client-side dynamic tool extension.
+- Tracker-agnostic Codex app-server `vik_issue` dynamic tool routes through the
+  configured `vik_core::IssueTracker`.
 - Strict prompt rendering: `vik-workflow::render_prompt`.
 - Retry queue and backoff: `vik-orchestrator::failure_backoff_ms`.
 - Terminal/non-active reconciliation: `vik-orchestrator::Orchestrator`.
@@ -26,15 +29,15 @@ Not implemented:
 
 - SSH worker extension.
 - Durable retry/session persistence.
-- Pluggable non-Linear trackers.
+- Trackers beyond Linear and GitHub.
 
 ## Production Validation
 
-Run with real Linear and Codex credentials before production use:
+Run with real tracker and Codex credentials before production use:
 
 ```sh
 cargo run -p vik-cli -- check ./WORKFLOW.md
 cargo test --workspace
 ```
 
-Then start the daemon against an isolated Linear project and workspace root.
+Then start the daemon against an isolated tracker target and workspace root.
