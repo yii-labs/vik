@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::env;
 use std::error::Error;
 use std::fmt;
@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use inquire::Confirm;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Value;
 use tracing::field::{Field, Visit};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::filter::filter_fn;
@@ -79,22 +79,23 @@ where
         let metadata = event.metadata();
         visitor.fields.insert(
             "level".to_string(),
-            Value::String(metadata.level().as_str().to_string()),
+            SessionFieldValue::Json(Value::String(metadata.level().as_str().to_string())),
         );
         visitor.fields.insert(
             "target".to_string(),
-            Value::String(metadata.target().to_string()),
+            SessionFieldValue::Json(Value::String(metadata.target().to_string())),
         );
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_secs_f64())
             .unwrap_or_default();
-        visitor
-            .fields
-            .insert("timestamp".to_string(), json_number(timestamp));
+        visitor.fields.insert(
+            "timestamp".to_string(),
+            SessionFieldValue::Json(json_number(timestamp)),
+        );
 
         let mut writer = self.writer.make_writer();
-        if serde_json::to_writer(&mut writer, &Value::Object(visitor.fields)).is_ok() {
+        if write_session_json_line(&mut writer, &visitor.fields).is_ok() {
             let _ = writer.write_all(b"\n");
         }
     }
@@ -102,7 +103,12 @@ where
 
 #[derive(Default)]
 struct SessionFieldVisitor {
-    fields: Map<String, Value>,
+    fields: BTreeMap<String, SessionFieldValue>,
+}
+
+enum SessionFieldValue {
+    Json(Value),
+    RawJson(String),
 }
 
 impl Visit for SessionFieldVisitor {
@@ -134,21 +140,75 @@ impl SessionFieldVisitor {
 
     fn insert_named_field(&mut self, name: &str, value: Value) {
         if name == "params_json" {
-            let params = match value {
-                Value::String(raw) => serde_json::from_str(&raw).unwrap_or(Value::String(raw)),
-                other => other,
+            let value = match value {
+                Value::String(raw) => SessionFieldValue::RawJson(raw),
+                other => SessionFieldValue::Json(other),
             };
-            self.fields.insert("params".to_string(), params);
+            self.fields.insert("params".to_string(), value);
             return;
         }
-        self.fields.insert(name.to_string(), value);
+        self.fields
+            .insert(name.to_string(), SessionFieldValue::Json(value));
     }
+}
+
+fn write_session_json_line(
+    writer: &mut impl Write,
+    fields: &BTreeMap<String, SessionFieldValue>,
+) -> io::Result<()> {
+    writer.write_all(b"{")?;
+    for (index, (key, value)) in fields.iter().enumerate() {
+        if index > 0 {
+            writer.write_all(b",")?;
+        }
+        serde_json::to_writer(&mut *writer, key)?;
+        writer.write_all(b":")?;
+        match value {
+            SessionFieldValue::Json(value) => serde_json::to_writer(&mut *writer, value)?,
+            SessionFieldValue::RawJson(raw) => writer.write_all(raw.as_bytes())?,
+        }
+    }
+    writer.write_all(b"}")
 }
 
 fn json_number(value: f64) -> Value {
     serde_json::Number::from_f64(value)
         .map(Value::Number)
         .unwrap_or(Value::Null)
+}
+
+fn repair_log_newline_boundaries(log_dir: &Path, prefix: &str) -> io::Result<()> {
+    if !log_dir.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(log_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if name.starts_with(prefix) {
+            repair_file_newline_boundary(&path)?;
+        }
+    }
+    Ok(())
+}
+
+fn repair_file_newline_boundary(path: &Path) -> io::Result<()> {
+    let mut file = OpenOptions::new().read(true).append(true).open(path)?;
+    if file.metadata()?.len() == 0 {
+        return Ok(());
+    }
+    file.seek(SeekFrom::End(-1))?;
+    let mut last = [0_u8; 1];
+    file.read_exact(&mut last)?;
+    if last[0] != b'\n' {
+        file.write_all(b"\n")?;
+    }
+    Ok(())
 }
 
 impl ServiceManager {
@@ -443,6 +503,7 @@ impl ServiceManager {
 
     fn init_logging(&self, log_dir: &Path) -> Result<LogGuards, Box<dyn Error>> {
         fs::create_dir_all(log_dir)?;
+        repair_log_newline_boundaries(log_dir, "session.log")?;
         let service_appender = tracing_appender::rolling::daily(log_dir, "service.log");
         let (service_writer, service_guard) = tracing_appender::non_blocking(service_appender);
         let session_appender = tracing_appender::rolling::daily(log_dir, "session.log");
@@ -941,9 +1002,23 @@ mod tests {
             "params_json",
             Value::String(r#"{"threadId":"thread-1","turn":{"id":"turn-1"}}"#.to_string()),
         );
+        let mut line = Vec::new();
+        write_session_json_line(&mut line, &visitor.fields).unwrap();
+        let value: Value = serde_json::from_slice(&line).unwrap();
 
-        assert_eq!(visitor.fields["params"]["threadId"], "thread-1");
-        assert_eq!(visitor.fields["params"]["turn"]["id"], "turn-1");
+        assert_eq!(value["params"]["threadId"], "thread-1");
+        assert_eq!(value["params"]["turn"]["id"], "turn-1");
+    }
+
+    #[test]
+    fn repair_log_newline_boundaries_separates_torn_session_jsonl() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.log.2026-05-05");
+        fs::write(&path, b"{\"partial\":true").unwrap();
+
+        repair_log_newline_boundaries(dir.path(), "session.log").unwrap();
+
+        assert_eq!(fs::read(&path).unwrap(), b"{\"partial\":true\n");
     }
 
     #[test]
