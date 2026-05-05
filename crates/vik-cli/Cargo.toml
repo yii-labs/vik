@@ -8,6 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 async-trait = "0.1.89"
+chrono = "0.4.44"
 clap = { version = "4.6.1", features = ["derive", "env"] }
 dotenvy = "0.15.7"
 libc = "0.2.186"
@@ -34,5 +35,4 @@ name = "vik"
 path = "src/main.rs"
 
 [dev-dependencies]
-chrono = "0.4.44"
 tempfile = "3.23.0"

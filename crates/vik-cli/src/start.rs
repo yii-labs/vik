@@ -1,13 +1,23 @@
 use std::error::Error;
 use std::fs;
+use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use chrono::Utc;
 use clap::Args;
-use tracing_appender::non_blocking::WorkerGuard;
+use serde_json::{Map, Value};
+use tracing::{
+    Event, Subscriber,
+    field::{Field, Visit},
+};
+use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
 use tracing_subscriber::{
-    EnvFilter, Layer, filter::filter_fn, layer::SubscriberExt, util::SubscriberInitExt,
+    EnvFilter, Layer,
+    filter::filter_fn,
+    layer::{Context, SubscriberExt},
+    util::SubscriberInitExt,
 };
 use vik_agent::LocalAgentWorker;
 use vik_http::{HttpState, serve};
@@ -106,12 +116,7 @@ fn init_logging(log_dir: &Path) -> Result<Vec<WorkerGuard>, Box<dyn Error>> {
         .with_current_span(false)
         .with_span_list(false)
         .with_filter(filter_fn(is_service_log));
-    let session_layer = tracing_subscriber::fmt::layer()
-        .with_writer(session_writer)
-        .json()
-        .with_current_span(false)
-        .with_span_list(false)
-        .with_filter(filter_fn(is_session_log));
+    let session_layer = SessionJsonLayer::new(session_writer);
 
     tracing_subscriber::registry()
         .with(filter)
@@ -122,12 +127,100 @@ fn init_logging(log_dir: &Path) -> Result<Vec<WorkerGuard>, Box<dyn Error>> {
     Ok(vec![service_guard, session_guard])
 }
 
-fn is_service_log(metadata: &tracing::Metadata<'_>) -> bool {
-    !is_session_target(metadata.target())
+struct SessionJsonLayer {
+    writer: NonBlocking,
 }
 
-fn is_session_log(metadata: &tracing::Metadata<'_>) -> bool {
-    is_session_target(metadata.target())
+impl SessionJsonLayer {
+    fn new(writer: NonBlocking) -> Self {
+        Self { writer }
+    }
+}
+
+impl<S> Layer<S> for SessionJsonLayer
+where
+    S: Subscriber,
+{
+    fn enabled(&self, metadata: &tracing::Metadata<'_>, _ctx: Context<'_, S>) -> bool {
+        is_session_target(metadata.target())
+    }
+
+    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+        if !is_session_target(event.metadata().target()) {
+            return;
+        }
+
+        let mut fields = SessionJsonVisitor::default();
+        event.record(&mut fields);
+
+        let mut record = Map::new();
+        record.insert(
+            "timestamp".to_string(),
+            Value::String(Utc::now().to_rfc3339()),
+        );
+        record.insert(
+            "level".to_string(),
+            Value::String(event.metadata().level().to_string()),
+        );
+        record.insert(
+            "target".to_string(),
+            Value::String(event.metadata().target().to_string()),
+        );
+        record.extend(fields.values);
+
+        if let Ok(mut line) = serde_json::to_vec(&Value::Object(record)) {
+            line.push(b'\n');
+            let mut writer = self.writer.clone();
+            let _ = writer.write_all(&line);
+        }
+    }
+}
+
+#[derive(Default)]
+struct SessionJsonVisitor {
+    values: Map<String, Value>,
+}
+
+impl SessionJsonVisitor {
+    fn insert(&mut self, field: &Field, value: Value) {
+        self.values.insert(field.name().to_string(), value);
+    }
+}
+
+impl Visit for SessionJsonVisitor {
+    fn record_f64(&mut self, field: &Field, value: f64) {
+        self.insert(field, Value::from(value));
+    }
+
+    fn record_i64(&mut self, field: &Field, value: i64) {
+        self.insert(field, Value::from(value));
+    }
+
+    fn record_u64(&mut self, field: &Field, value: u64) {
+        self.insert(field, Value::from(value));
+    }
+
+    fn record_bool(&mut self, field: &Field, value: bool) {
+        self.insert(field, Value::from(value));
+    }
+
+    fn record_str(&mut self, field: &Field, value: &str) {
+        if field.name() == "params_json" {
+            let params =
+                serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.into()));
+            self.values.insert("params".to_string(), params);
+            return;
+        }
+        self.insert(field, Value::String(value.to_string()));
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        self.insert(field, Value::String(format!("{value:?}")));
+    }
+}
+
+fn is_service_log(metadata: &tracing::Metadata<'_>) -> bool {
+    !is_session_target(metadata.target())
 }
 
 fn is_session_target(target: &str) -> bool {
@@ -162,5 +255,29 @@ mod tests {
     fn log_filters_split_service_and_session_targets() {
         assert!(is_session_target(vik_agent::SESSION_LOG_TARGET));
         assert!(!is_session_target("vik_orchestrator::engine"));
+    }
+
+    #[test]
+    fn session_json_layer_preserves_structured_params() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let appender = tracing_appender::rolling::never(dir.path(), "session.log");
+        let (writer, guard) = tracing_appender::non_blocking(appender);
+        let subscriber = tracing_subscriber::registry().with(SessionJsonLayer::new(writer));
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(
+                target: vik_agent::SESSION_LOG_TARGET,
+                agent = "codex",
+                event = "turn/start",
+                params_json = r#"{"threadId":"thread-1","turn":{"id":"turn-1"}}"#,
+                "agent_session_message"
+            );
+        });
+        drop(guard);
+
+        let contents = std::fs::read_to_string(dir.path().join("session.log")).unwrap();
+        let record: serde_json::Value = serde_json::from_str(contents.trim()).unwrap();
+        assert_eq!(record["params"]["threadId"], "thread-1");
+        assert_eq!(record["params"]["turn"]["id"], "turn-1");
     }
 }

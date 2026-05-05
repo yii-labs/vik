@@ -253,17 +253,21 @@ fn session_log_fields_extract_method_params_and_rpc_results() {
         "method": "turn/start",
         "params": { "threadId": "thread-1", "input": [] }
     });
-    let (event, params) = session_log_fields(&request);
-    assert_eq!(event, "turn/start");
-    assert_eq!(params["threadId"], "thread-1");
+    let fields = session_log_fields(&request, None);
+    assert_eq!(fields.event, "turn/start");
+    assert_eq!(fields.message_kind, "method");
+    assert_eq!(fields.rpc_id.as_deref(), Some("4"));
+    assert_eq!(fields.params["threadId"], "thread-1");
 
     let response = json!({
         "id": 4,
         "result": { "turn": { "id": "turn-1" } }
     });
-    let (event, params) = session_log_fields(&response);
-    assert_eq!(event, "rpc_response");
-    assert_eq!(params["turn"]["id"], "turn-1");
+    let fields = session_log_fields(&response, Some("turn/start"));
+    assert_eq!(fields.event, "turn/start");
+    assert_eq!(fields.message_kind, "rpc_response");
+    assert_eq!(fields.rpc_id.as_deref(), Some("4"));
+    assert_eq!(fields.params["turn"]["id"], "turn-1");
 }
 
 #[test]

@@ -27,7 +27,7 @@ vik service logs --lines 100
 vik service logs --follow
 ```
 
-Adjust the first command when `workspace.root` or `logging.dir` differs from
+Adjust the first two commands when `workspace.root` or `logging.dir` differs from
 the checked-in `WORKFLOW.md`.
 
 ## HTTP Server
@@ -80,7 +80,7 @@ turn count, last event, last message, workspace path, and token usage.
 Codex app-server session traffic is emitted through tracing to the session log:
 
 ```text
-<workspace.root>/logs/session.log.<date>
+<logging.dir>/session.log.<date>
 ```
 
 Inspect session events:
@@ -89,5 +89,8 @@ Inspect session events:
 jq . "$HOME/code/vik-workspaces/logs"/session.log.* | less
 ```
 
-Session log records contain `agent`, `event`, and `params` fields. Service
-events stay in `service.log.<date>` and do not include Codex message payloads.
+Session log records contain `agent`, `event`, `params`, `issue_id`,
+`issue_identifier`, `session_id`, `thread_id`, `turn_id`, and `rpc_id` fields.
+`params` is structured JSON, so nested values can be filtered with `jq`. Service
+events stay in `<logging.dir>/service.log.<date>` and do not include Codex
+message payloads.

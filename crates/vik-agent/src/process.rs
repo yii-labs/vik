@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
@@ -49,10 +50,55 @@ pub(crate) struct JsonlRpcProcess {
     read_timeout: Duration,
     turn_timeout: Duration,
     tools: DynamicTools,
+    pub(crate) session_log_context: SessionLogContext,
+    pending_methods: HashMap<u64, String>,
 }
 
 pub(crate) struct TurnStartResponse {
     pub(crate) turn_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SessionLogContext {
+    issue_id: String,
+    issue_identifier: String,
+    session_id: Option<String>,
+    thread_id: Option<String>,
+    turn_id: Option<String>,
+}
+
+impl SessionLogContext {
+    pub(crate) fn new(issue_id: String, issue_identifier: String) -> Self {
+        Self {
+            issue_id,
+            issue_identifier,
+            session_id: None,
+            thread_id: None,
+            turn_id: None,
+        }
+    }
+
+    fn set_thread(&mut self, thread_id: String) {
+        self.thread_id = Some(thread_id);
+    }
+
+    pub(crate) fn set_live_session(&mut self, session: &LiveSession) {
+        self.session_id = Some(session.session_id.clone());
+        self.thread_id = Some(session.thread_id.clone());
+        self.turn_id = Some(session.turn_id.clone());
+    }
+
+    pub(crate) fn clear_live_session(&mut self) {
+        self.session_id = None;
+        self.turn_id = None;
+    }
+}
+
+pub(crate) struct SessionLogFields {
+    pub(crate) event: String,
+    pub(crate) message_kind: &'static str,
+    pub(crate) rpc_id: Option<String>,
+    pub(crate) params: Value,
 }
 
 impl JsonlRpcProcess {
@@ -60,6 +106,7 @@ impl JsonlRpcProcess {
         command: &ProcessCommand,
         cwd: &Path,
         tools: DynamicTools,
+        session_log_context: SessionLogContext,
     ) -> Result<Self, AgentError> {
         let mut process = Command::new(command.program());
         process
@@ -91,6 +138,8 @@ impl JsonlRpcProcess {
             read_timeout: Duration::from_millis(5_000),
             turn_timeout: Duration::from_millis(3_600_000),
             tools,
+            session_log_context,
+            pending_methods: HashMap::new(),
         })
     }
 
@@ -128,11 +177,13 @@ impl JsonlRpcProcess {
         self.configure_timeouts(config);
         let params = thread_start_params(cwd, title, config, &self.tools);
         let response = self.request("thread/start", params).await?;
-        response
+        let thread_id = response
             .pointer("/thread/id")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
-            .ok_or_else(|| AgentError::ResponseError("missing thread.id".to_string()))
+            .ok_or_else(|| AgentError::ResponseError("missing thread.id".to_string()))?;
+        self.session_log_context.set_thread(thread_id.clone());
+        Ok(thread_id)
     }
 
     pub(crate) async fn turn_start(
@@ -166,9 +217,11 @@ impl JsonlRpcProcess {
         self.next_id += 1;
         let request = json!({ "id": id, "method": method, "params": params });
         self.write_message(&request).await?;
+        self.pending_methods.insert(id, method.to_string());
         loop {
             let message = self.read_message(self.read_timeout).await?;
             if message.get("id").and_then(Value::as_u64) == Some(id) {
+                self.pending_methods.remove(&id);
                 if let Some(error) = message.get("error") {
                     return Err(AgentError::ResponseError(error.to_string()));
                 }
@@ -296,7 +349,7 @@ impl JsonlRpcProcess {
             .write_all(&line)
             .await
             .map_err(|err| AgentError::ResponseError(err.to_string()))?;
-        log_session_message("sent", message);
+        log_session_message(&self.session_log_context, None, "sent", message);
         Ok(())
     }
 
@@ -306,47 +359,87 @@ impl JsonlRpcProcess {
             .map_err(|_| AgentError::ResponseTimeout)?
             .map_err(|err| AgentError::ResponseError(err.to_string()))?
             .ok_or(AgentError::PortExit)?;
-        let message = serde_json::from_str(&line)
+        let message: Value = serde_json::from_str(&line)
             .map_err(|err| AgentError::ResponseError(err.to_string()))?;
-        log_session_message("received", &message);
+        let pending_method = message
+            .get("id")
+            .and_then(Value::as_u64)
+            .and_then(|id| self.pending_methods.get(&id).map(String::as_str));
+        log_session_message(
+            &self.session_log_context,
+            pending_method,
+            "received",
+            &message,
+        );
         Ok(message)
     }
 }
 
-fn log_session_message(direction: &'static str, message: &Value) {
-    let (event, params) = session_log_fields(message);
+fn log_session_message(
+    context: &SessionLogContext,
+    pending_method: Option<&str>,
+    direction: &'static str,
+    message: &Value,
+) {
+    let fields = session_log_fields(message, pending_method);
+    let rpc_id = fields.rpc_id.as_deref().unwrap_or_default();
+    let session_id = context.session_id.as_deref().unwrap_or_default();
+    let thread_id = context.thread_id.as_deref().unwrap_or_default();
+    let turn_id = context.turn_id.as_deref().unwrap_or_default();
+    let params_json = fields.params.to_string();
     tracing::info!(
         target: SESSION_LOG_TARGET,
         category = "session",
         agent = "codex",
+        issue_id = context.issue_id.as_str(),
+        issue_identifier = context.issue_identifier.as_str(),
+        session_id,
+        thread_id,
+        turn_id,
         direction,
-        event = %event,
-        params = %params,
+        message_kind = fields.message_kind,
+        event = fields.event.as_str(),
+        rpc_id,
+        params_json = params_json.as_str(),
         "agent_session_message"
     );
 }
 
-pub(crate) fn session_log_fields(message: &Value) -> (String, Value) {
-    let event = message
-        .get("method")
-        .and_then(Value::as_str)
+pub(crate) fn session_log_fields(
+    message: &Value,
+    pending_method: Option<&str>,
+) -> SessionLogFields {
+    let method = message.get("method").and_then(Value::as_str);
+    let event = method
+        .or(pending_method)
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| {
-            if message.get("error").is_some() {
-                "rpc_error".to_string()
-            } else if message.get("result").is_some() {
-                "rpc_response".to_string()
-            } else {
-                "message".to_string()
-            }
-        });
+        .unwrap_or_else(|| "message".to_string());
+    let message_kind = if method.is_some() {
+        "method"
+    } else if message.get("error").is_some() {
+        "rpc_error"
+    } else if message.get("result").is_some() {
+        "rpc_response"
+    } else {
+        "message"
+    };
+    let rpc_id = message.get("id").and_then(|id| match id {
+        Value::Number(number) => Some(number.to_string()),
+        Value::String(value) => Some(value.clone()),
+        _ => None,
+    });
     let params = message
         .get("params")
         .or_else(|| message.get("result"))
         .or_else(|| message.get("error"))
         .cloned()
         .unwrap_or_else(|| message.clone());
-    (event, params)
+    SessionLogFields {
+        event,
+        message_kind,
+        rpc_id,
+        params,
+    }
 }
 
 pub(crate) fn thread_start_params(

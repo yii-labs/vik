@@ -7,7 +7,7 @@ use vik_workflow::CodexConfig;
 
 use crate::error::AgentError;
 use crate::event::agent_event;
-use crate::process::{JsonlRpcProcess, ProcessCommand};
+use crate::process::{JsonlRpcProcess, ProcessCommand, SessionLogContext};
 use crate::tools::DynamicTools;
 
 const CONTINUATION_PROMPT: &str = "Continue working on this Linear issue. Check current issue state and proceed only if it is still active.";
@@ -61,8 +61,17 @@ impl CodexAppServerClient {
             "codex_process_starting",
             json!({}),
         );
-        let mut process =
-            JsonlRpcProcess::spawn(&self.command, workspace_path, self.tools.clone()).await?;
+        let session_log_context = SessionLogContext::new(
+            issue.issue_id.clone(),
+            session_issue_identifier(&issue).to_string(),
+        );
+        let mut process = JsonlRpcProcess::spawn(
+            &self.command,
+            workspace_path,
+            self.tools.clone(),
+            session_log_context,
+        )
+        .await?;
         process.configure_timeouts(&self.config);
         emit_lifecycle_event(
             &mut on_event,
@@ -112,6 +121,7 @@ impl CodexAppServerClient {
                 "codex_turn_starting",
                 json!({ "thread_id": &thread_id, "turn_count": turn_count }),
             );
+            process.session_log_context.clear_live_session();
             let turn_start = process
                 .turn_start(&thread_id, workspace_path, prompt, &self.config)
                 .await?;
@@ -119,6 +129,7 @@ impl CodexAppServerClient {
             let mut live = LiveSession::new(thread_id.clone(), turn_id.clone());
             live.turn_count = turn_count;
             live.codex_app_server_pid = process.child.id().map(|pid| pid.to_string());
+            process.session_log_context.set_live_session(&live);
             on_event(agent_event(
                 issue.issue_id.clone(),
                 "session_started",
@@ -283,6 +294,15 @@ fn split_windows_command_line(input: &str) -> Vec<String> {
         args.push(current);
     }
     args
+}
+
+fn session_issue_identifier(issue: &CodexIssueContext) -> &str {
+    issue
+        .title
+        .split_once(':')
+        .map(|(identifier, _)| identifier.trim())
+        .filter(|identifier| !identifier.is_empty())
+        .unwrap_or(&issue.issue_id)
 }
 
 fn toml_string(value: &str) -> String {

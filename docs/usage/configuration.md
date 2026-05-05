@@ -88,7 +88,8 @@ reserved and cannot be used as issue workspace names.
 
 Each run writes service events to stdout and to a daily file named
 `service.log.<date>`. Codex app-server request and response messages are written
-to `session.log.<date>` with `agent`, `event`, and `params` fields.
+to `session.log.<date>` with `agent`, `event`, `params`, issue/session
+identity, and RPC correlation fields.
 
 ## Hooks
 
