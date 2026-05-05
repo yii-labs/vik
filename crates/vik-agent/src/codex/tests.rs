@@ -310,6 +310,21 @@ fn session_log_fields_extract_method_params_and_rpc_results() {
 }
 
 #[test]
+fn session_log_context_derives_session_identity_from_turn_start_response() {
+    let context = SessionLogContext::for_thread("issue-1", "VIK-1", "thread-1");
+    let identity = context.identity_for(&json!({
+        "id": 4,
+        "result": { "turn": { "id": "turn-1" } }
+    }));
+
+    assert_eq!(identity.issue_id, "issue-1");
+    assert_eq!(identity.issue_identifier, "VIK-1");
+    assert_eq!(identity.thread_id, "thread-1");
+    assert_eq!(identity.turn_id, "turn-1");
+    assert_eq!(identity.session_id, "thread-1-turn-1");
+}
+
+#[test]
 fn session_thread_name_uses_sanitized_issue_identifier() {
     assert_eq!(session_thread_name("VIK-51"), "vik-session-VIK-51");
     assert_eq!(
@@ -338,7 +353,7 @@ async fn codex_run_uses_issue_prompt_then_continuation_prompt() {
     );
     assert_eq!(state.unsubscribed_threads, vec!["thread-1"]);
     assert_eq!(state.shutdowns, 1);
-    assert_eq!(state.session_contexts_set, 3);
+    assert_eq!(state.session_contexts_set, 5);
     drop(state);
 
     let events = drain_events(&mut rx);

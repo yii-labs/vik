@@ -354,6 +354,11 @@ where
                     "codex_turn_starting",
                     json!({ "thread_id": &thread_id, "turn_count": turn_count }),
                 );
+                process.set_session_log_context(SessionLogContext::for_thread(
+                    issue.issue_id.clone(),
+                    issue_identifier.clone(),
+                    thread_id.clone(),
+                ));
                 let turn_start = process
                     .turn_start(&thread_id, workspace_path, prompt, config)
                     .await?;

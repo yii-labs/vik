@@ -452,7 +452,10 @@ impl ServiceManager {
         let stdout_layer = tracing_subscriber::fmt::layer()
             .json()
             .with_current_span(false)
-            .with_span_list(false);
+            .with_span_list(false)
+            .with_filter(filter_fn(|metadata| {
+                is_service_log_target(metadata.target())
+            }));
         let service_layer = tracing_subscriber::fmt::layer()
             .with_writer(service_writer)
             .json()

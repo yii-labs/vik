@@ -4,7 +4,8 @@ Vik exposes runtime state through JSON logs and an optional HTTP server.
 
 ## Vik Logs
 
-Foreground runs write JSON logs to stdout and to `logging.dir`.
+Foreground runs write service JSON logs to stdout. Service and session JSON
+files are written under `logging.dir`.
 
 Default log directory:
 
@@ -12,7 +13,7 @@ Default log directory:
 <workspace.root>/logs
 ```
 
-Service runs also write detached stdout and stderr to:
+Service runs also write detached service stdout and stderr to:
 
 ```text
 <workflow-directory>/.vik/service/<workflow-stem>-<path-hash>.log

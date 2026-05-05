@@ -428,7 +428,21 @@ impl SessionLogContext {
         }
     }
 
-    fn identity_for<'a>(&'a self, message: &'a Value) -> SessionLogIdentity {
+    pub(crate) fn for_thread(
+        issue_id: impl Into<String>,
+        issue_identifier: impl Into<String>,
+        thread_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            issue_id: issue_id.into(),
+            issue_identifier: issue_identifier.into(),
+            session_id: None,
+            thread_id: Some(thread_id.into()),
+            turn_id: None,
+        }
+    }
+
+    pub(crate) fn identity_for<'a>(&'a self, message: &'a Value) -> SessionLogIdentity {
         let thread_id = self
             .thread_id
             .as_deref()
@@ -453,12 +467,12 @@ impl SessionLogContext {
     }
 }
 
-struct SessionLogIdentity {
-    issue_id: String,
-    issue_identifier: String,
-    session_id: String,
-    thread_id: String,
-    turn_id: String,
+pub(crate) struct SessionLogIdentity {
+    pub(crate) issue_id: String,
+    pub(crate) issue_identifier: String,
+    pub(crate) session_id: String,
+    pub(crate) thread_id: String,
+    pub(crate) turn_id: String,
 }
 
 fn log_session_message(
