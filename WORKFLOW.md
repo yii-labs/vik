@@ -49,7 +49,7 @@ Continuation context:
   {% endif %}
 
 Issue context:
-Vik ID: {{ issue.identifier }}
+Identifier: {{ issue.identifier }}
 Title: {{ issue.title }}
 Current status: {{ issue.state }}
 Labels: {{ issue.labels }}
