@@ -94,6 +94,37 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 - Operate autonomously end-to-end unless blocked by missing requirements, secrets, or permissions.
 - Use the blocked-access escape hatch only for true external blockers (missing required tools/auth) after exhausting documented fallbacks.
 
+## Role-separated execution model
+
+Run each job as distinct responsibilities, even when one Codex session performs
+multiple responsibilities itself. Use subagents for bounded sidecar work when
+they are available and can run without blocking the immediate critical path.
+The Main agent remains accountable for the ticket state, final decisions, and
+handoff quality.
+
+- `Main / orchestrator`: owns Linear state routing, the single workpad comment,
+  branch/PR metadata, scope control, milestone updates, and final handoff. It
+  decides when to delegate, integrates role outputs, resolves conflicts between
+  findings, and never lets delegated work expand the ticket scope.
+- `Research & Explore`: reads the issue, existing comments, relevant docs, PR
+  context, and code before edits. It captures the reproduction signal, required
+  validation inputs, constraints, prior attempts, and open questions. Its output
+  is concise evidence in the workpad `Notes` section; it should not make code
+  changes.
+- `Plan`: turns the research output into the hierarchical workpad checklist,
+  acceptance criteria, validation design, risks, and stop conditions. It runs a
+  principal-style plan review before implementation and keeps scope narrow
+  enough for a reviewable PR.
+- `Work`: implements only the approved plan after the kickoff pull sync is
+  recorded. It keeps edits scoped, updates the workpad at meaningful milestones,
+  avoids overlapping ownership with other workers, and leaves unrelated files
+  untouched.
+- `Review`: inspects the final diff, checks for scope drift, reruns required
+  validation, performs the full PR feedback sweep, verifies PR metadata, and
+  confirms the completion bar before `Human Review`. If review finds a gap, it
+  records the gap in the workpad and routes back to `Plan` or `Work` instead of
+  lowering the quality bar.
+
 ## Related skills
 
 - `linear`: interact with Linear.
