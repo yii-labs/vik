@@ -1,17 +1,18 @@
 use std::future::Future;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::thread;
 
 use async_trait::async_trait;
 use serde_json::json;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use vik_core::{AgentEvent, AgentRunRequest, AgentSession, IssueTracker, normalize_state};
 use vik_workflow::{CodexConfig, ServiceConfig, render_prompt};
 use vik_workspace::WorkspaceManager;
 
 use crate::codex::command::codex_spawn_process_command;
 use crate::codex::events::agent_event;
-use crate::codex::session_log::{SessionLog, session_log_dir, session_log_path};
+use crate::codex::process::SessionLogContext;
 use crate::codex::tools::DynamicTools;
 use crate::codex::transport::{CodexTransportFactory, ProcessTransportFactory};
 use crate::error::AgentError;
@@ -20,7 +21,6 @@ use crate::runtime::AgentRuntime;
 mod command;
 mod events;
 mod process;
-mod session_log;
 mod tools;
 mod transport;
 
@@ -29,13 +29,24 @@ mod tests;
 
 const CONTINUATION_PROMPT: &str = "Continue working on this tracker issue. Check current issue state and proceed only if it is still active.";
 
-#[derive(Clone)]
 pub(crate) struct Codex<T>
 where
     T: IssueTracker,
 {
     tracker: Arc<T>,
     transport_factory: Arc<dyn CodexTransportFactory>,
+}
+
+impl<T> Clone for Codex<T>
+where
+    T: IssueTracker,
+{
+    fn clone(&self) -> Self {
+        Self {
+            tracker: Arc::clone(&self.tracker),
+            transport_factory: Arc::clone(&self.transport_factory),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -52,6 +63,141 @@ struct RunTurnsInput<'a> {
     max_turns: u32,
     config: &'a CodexConfig,
     tools: DynamicTools,
+}
+
+struct SessionRun<T>
+where
+    T: IssueTracker,
+{
+    codex: Codex<T>,
+    workspace_path: PathBuf,
+    issue: CodexIssue,
+    first_prompt: String,
+    max_turns: u32,
+    config: CodexConfig,
+    tools: DynamicTools,
+    active_states: Vec<String>,
+    terminal_states: Vec<String>,
+    issue_id: String,
+    tracker: Arc<T>,
+    events: mpsc::UnboundedSender<AgentEvent>,
+}
+
+async fn run_session_on_thread<T>(run: SessionRun<T>) -> Result<(), AgentError>
+where
+    T: IssueTracker,
+{
+    let thread_name = session_thread_name(&run.issue.issue_identifier);
+    let (result_tx, result_rx) = oneshot::channel();
+    let (cancel_tx, cancel_rx) = oneshot::channel();
+    let _cancel_on_drop = SessionCancelOnDrop::new(cancel_tx);
+    let handle = thread::Builder::new()
+        .name(thread_name)
+        .spawn(move || {
+            let result = run_session_in_current_thread(run, cancel_rx);
+            let _ = result_tx.send(result);
+        })
+        .map_err(|err| AgentError::SessionThread(err.to_string()))?;
+    let result = result_rx
+        .await
+        .map_err(|_| AgentError::SessionThread("session thread exited without result".into()))?;
+    handle
+        .join()
+        .map_err(|_| AgentError::SessionThread("session thread panicked".into()))?;
+    result
+}
+
+fn run_session_in_current_thread<T>(
+    run: SessionRun<T>,
+    cancel_rx: oneshot::Receiver<()>,
+) -> Result<(), AgentError>
+where
+    T: IssueTracker,
+{
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|err| AgentError::SessionThread(err.to_string()))?;
+    runtime.block_on(async move {
+        tokio::select! {
+            result = run_session(run) => result,
+            _ = cancel_rx => Err(AgentError::TurnCancelled),
+        }
+    })
+}
+
+async fn run_session<T>(run: SessionRun<T>) -> Result<(), AgentError>
+where
+    T: IssueTracker,
+{
+    let SessionRun {
+        codex,
+        workspace_path,
+        issue,
+        first_prompt,
+        max_turns,
+        config,
+        tools,
+        active_states,
+        terminal_states,
+        issue_id,
+        tracker,
+        events,
+    } = run;
+    codex
+        .run_turns(
+            RunTurnsInput {
+                workspace_path: &workspace_path,
+                issue,
+                first_prompt,
+                max_turns,
+                config: &config,
+                tools,
+            },
+            move || {
+                let tracker = Arc::clone(&tracker);
+                let issue_id = issue_id.clone();
+                let active_states = active_states.clone();
+                let terminal_states = terminal_states.clone();
+                async move {
+                    let states = tracker
+                        .fetch_states_by_ids(std::slice::from_ref(&issue_id))
+                        .await?;
+                    let Some(issue) = states.first() else {
+                        return Ok(false);
+                    };
+                    let normalized = normalize_state(&issue.state);
+                    Ok(active_states
+                        .iter()
+                        .any(|state| normalize_state(state) == normalized)
+                        && !terminal_states
+                            .iter()
+                            .any(|state| normalize_state(state) == normalized))
+                }
+            },
+            |event| {
+                let _ = events.send(event);
+            },
+        )
+        .await
+}
+
+struct SessionCancelOnDrop {
+    tx: Option<oneshot::Sender<()>>,
+}
+
+impl SessionCancelOnDrop {
+    fn new(tx: oneshot::Sender<()>) -> Self {
+        Self { tx: Some(tx) }
+    }
+}
+
+impl Drop for SessionCancelOnDrop {
+    fn drop(&mut self) {
+        if let Some(tx) = self.tx.take() {
+            let _ = tx.send(());
+        }
+    }
 }
 
 impl<T> Codex<T>
@@ -97,46 +243,25 @@ where
         let terminal_states = request.config.tracker.terminal_states().to_vec();
         let issue_id = request.issue.id.clone();
         let tracker = Arc::clone(&self.tracker);
-        let result = self
-            .run_turns(
-                RunTurnsInput {
-                    workspace_path: &workspace.path,
-                    issue: CodexIssue {
-                        issue_id: request.issue.id.clone(),
-                        issue_identifier: request.issue.identifier.clone(),
-                        title: format!("{}: {}", request.issue.identifier, request.issue.title),
-                    },
-                    first_prompt: prompt,
-                    max_turns: request.config.agent.max_turns,
-                    config: &request.config.codex,
-                    tools,
-                },
-                move || {
-                    let tracker = Arc::clone(&tracker);
-                    let issue_id = issue_id.clone();
-                    let active_states = active_states.clone();
-                    let terminal_states = terminal_states.clone();
-                    async move {
-                        let states = tracker
-                            .fetch_states_by_ids(std::slice::from_ref(&issue_id))
-                            .await?;
-                        let Some(issue) = states.first() else {
-                            return Ok(false);
-                        };
-                        let normalized = normalize_state(&issue.state);
-                        Ok(active_states
-                            .iter()
-                            .any(|state| normalize_state(state) == normalized)
-                            && !terminal_states
-                                .iter()
-                                .any(|state| normalize_state(state) == normalized))
-                    }
-                },
-                |event| {
-                    let _ = events.send(event);
-                },
-            )
-            .await;
+        let result = run_session_on_thread(SessionRun {
+            codex: self.clone(),
+            workspace_path: workspace.path.clone(),
+            issue: CodexIssue {
+                issue_id: request.issue.id.clone(),
+                issue_identifier: request.issue.identifier.clone(),
+                title: format!("{}: {}", request.issue.identifier, request.issue.title),
+            },
+            first_prompt: prompt,
+            max_turns: request.config.agent.max_turns,
+            config: request.config.codex.clone(),
+            tools,
+            active_states,
+            terminal_states,
+            issue_id,
+            tracker,
+            events,
+        })
+        .await;
         manager.after_run_best_effort(&workspace.path).await;
         result
     }
@@ -162,7 +287,6 @@ where
         if !workspace_path.is_absolute() {
             return Err(AgentError::InvalidWorkspaceCwd);
         }
-        let session_log_dir = session_log_dir(session_workspace_root(workspace_path));
         let issue_identifier = issue.issue_identifier.clone();
         emit_lifecycle_event(
             &mut on_event,
@@ -175,6 +299,10 @@ where
             .transport_factory
             .spawn(&command, workspace_path, config, tools)
             .await?;
+        process.set_session_log_context(SessionLogContext::new(
+            issue.issue_id.clone(),
+            issue.issue_identifier.clone(),
+        ));
         emit_lifecycle_event(
             &mut on_event,
             &issue.issue_id,
@@ -233,42 +361,12 @@ where
                 let mut live = AgentSession::new(thread_id.clone(), turn_id.clone());
                 live.turn_count = turn_count;
                 live.process_id = process.process_id();
-                let session_log_path =
-                    session_log_path(&session_log_dir, &issue_identifier, &live.session_id);
-                match SessionLog::open(session_log_path).await {
-                    Ok(mut session_log) => {
-                        for message in &turn_start.pre_response_messages {
-                            if message_belongs_to_turn(message, &turn_id) {
-                                if let Err(err) = session_log.append_message(message).await {
-                                    tracing::warn!(
-                                        path=%session_log.path().display(),
-                                        error=%err,
-                                        "codex_session_log_append outcome=failed"
-                                    );
-                                }
-                            } else {
-                                process.append_current_session_message(message).await;
-                            }
-                        }
-                        if let Err(err) = session_log.append_message(&turn_start.response).await {
-                            tracing::warn!(
-                                path=%session_log.path().display(),
-                                error=%err,
-                                "codex_session_log_append outcome=failed"
-                            );
-                        }
-                        process.set_session_log(Some(session_log));
-                    }
-                    Err(err) => {
-                        tracing::warn!(error=%err, "codex_session_log_open outcome=failed");
-                        for message in &turn_start.pre_response_messages {
-                            if !message_belongs_to_turn(message, &turn_id) {
-                                process.append_current_session_message(message).await;
-                            }
-                        }
-                        process.set_session_log(None);
-                    }
-                }
+                process.set_session_log_context(SessionLogContext::for_session(
+                    issue.issue_id.clone(),
+                    issue_identifier.clone(),
+                    thread_id.clone(),
+                    turn_id.clone(),
+                ));
                 on_event(agent_event(
                     issue.issue_id.clone(),
                     "session_started",
@@ -314,14 +412,31 @@ where
     }
 }
 
-fn session_workspace_root(workspace_path: &Path) -> &Path {
-    workspace_path.parent().unwrap_or(workspace_path)
+pub(crate) fn session_thread_name(issue_identifier: &str) -> String {
+    let sanitized: String = issue_identifier
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' || ch == '-' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let suffix = if sanitized.is_empty() {
+        "unknown".to_string()
+    } else {
+        sanitized
+    };
+    format!("vik-session-{suffix}")
 }
 
+#[cfg(test)]
 pub(crate) fn message_belongs_to_turn(message: &serde_json::Value, turn_id: &str) -> bool {
     message_turn_id(message).is_none_or(|message_turn_id| message_turn_id == turn_id)
 }
 
+#[cfg(test)]
 fn message_turn_id(message: &serde_json::Value) -> Option<&str> {
     message
         .pointer("/params/turn/id")

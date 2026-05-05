@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::env;
 use std::error::Error;
+use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -12,8 +13,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use inquire::Confirm;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+use tracing::field::{Field, Visit};
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::filter::filter_fn;
+use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::registry::LookupSpan;
+use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt, util::SubscriberInitExt};
 use vik_agent::LocalAgentWorker;
 use vik_http::{HttpState, serve};
 use vik_orchestrator::Orchestrator;
@@ -33,6 +39,116 @@ pub struct ServiceManager {
     state_path: PathBuf,
     log_path: PathBuf,
     cwd: PathBuf,
+}
+
+struct LogGuards {
+    _service: WorkerGuard,
+    _session: WorkerGuard,
+}
+
+fn is_session_log_target(target: &str) -> bool {
+    target == vik_agent::SESSION_LOG_TARGET
+}
+
+fn is_service_log_target(target: &str) -> bool {
+    !is_session_log_target(target)
+}
+
+struct SessionJsonLayer<W> {
+    writer: W,
+}
+
+impl<W> SessionJsonLayer<W> {
+    fn new(writer: W) -> Self {
+        Self { writer }
+    }
+}
+
+impl<S, W> Layer<S> for SessionJsonLayer<W>
+where
+    S: tracing::Subscriber + for<'span> LookupSpan<'span>,
+    W: for<'writer> MakeWriter<'writer> + Send + Sync + 'static,
+{
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let mut visitor = SessionFieldVisitor::default();
+        event.record(&mut visitor);
+        let metadata = event.metadata();
+        visitor.fields.insert(
+            "level".to_string(),
+            Value::String(metadata.level().as_str().to_string()),
+        );
+        visitor.fields.insert(
+            "target".to_string(),
+            Value::String(metadata.target().to_string()),
+        );
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs_f64())
+            .unwrap_or_default();
+        visitor
+            .fields
+            .insert("timestamp".to_string(), json_number(timestamp));
+
+        let mut writer = self.writer.make_writer();
+        if serde_json::to_writer(&mut writer, &Value::Object(visitor.fields)).is_ok() {
+            let _ = writer.write_all(b"\n");
+        }
+    }
+}
+
+#[derive(Default)]
+struct SessionFieldVisitor {
+    fields: Map<String, Value>,
+}
+
+impl Visit for SessionFieldVisitor {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        self.insert_field(field, Value::String(value.to_string()));
+    }
+
+    fn record_bool(&mut self, field: &Field, value: bool) {
+        self.insert_field(field, Value::Bool(value));
+    }
+
+    fn record_i64(&mut self, field: &Field, value: i64) {
+        self.insert_field(field, Value::Number(value.into()));
+    }
+
+    fn record_u64(&mut self, field: &Field, value: u64) {
+        self.insert_field(field, Value::Number(value.into()));
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+        self.insert_field(field, Value::String(format!("{value:?}")));
+    }
+}
+
+impl SessionFieldVisitor {
+    fn insert_field(&mut self, field: &Field, value: Value) {
+        self.insert_named_field(field.name(), value);
+    }
+
+    fn insert_named_field(&mut self, name: &str, value: Value) {
+        if name == "params_json" {
+            let params = match value {
+                Value::String(raw) => serde_json::from_str(&raw).unwrap_or(Value::String(raw)),
+                other => other,
+            };
+            self.fields.insert("params".to_string(), params);
+            return;
+        }
+        self.fields.insert(name.to_string(), value);
+    }
+}
+
+fn json_number(value: f64) -> Value {
+    serde_json::Number::from_f64(value)
+        .map(Value::Number)
+        .unwrap_or(Value::Null)
 }
 
 impl ServiceManager {
@@ -325,28 +441,41 @@ impl ServiceManager {
         Ok(())
     }
 
-    fn init_logging(&self, log_dir: &Path) -> Result<WorkerGuard, Box<dyn Error>> {
+    fn init_logging(&self, log_dir: &Path) -> Result<LogGuards, Box<dyn Error>> {
         fs::create_dir_all(log_dir)?;
-        let file_appender = tracing_appender::rolling::daily(log_dir, "vik.log");
-        let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
+        let service_appender = tracing_appender::rolling::daily(log_dir, "service.log");
+        let (service_writer, service_guard) = tracing_appender::non_blocking(service_appender);
+        let session_appender = tracing_appender::rolling::daily(log_dir, "session.log");
+        let (session_writer, session_guard) = tracing_appender::non_blocking(session_appender);
         let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
         let stdout_layer = tracing_subscriber::fmt::layer()
             .json()
             .with_current_span(false)
             .with_span_list(false);
-        let file_layer = tracing_subscriber::fmt::layer()
-            .with_writer(file_writer)
+        let service_layer = tracing_subscriber::fmt::layer()
+            .with_writer(service_writer)
             .json()
             .with_current_span(false)
-            .with_span_list(false);
+            .with_span_list(false)
+            .with_filter(filter_fn(|metadata| {
+                is_service_log_target(metadata.target())
+            }));
+        let session_layer =
+            SessionJsonLayer::new(session_writer).with_filter(filter_fn(|metadata| {
+                is_session_log_target(metadata.target())
+            }));
 
         tracing_subscriber::registry()
             .with(filter)
             .with(stdout_layer)
-            .with(file_layer)
+            .with(service_layer)
+            .with(session_layer)
             .init();
-        Ok(guard)
+        Ok(LogGuards {
+            _service: service_guard,
+            _session: session_guard,
+        })
     }
 
     fn load_dotenv_from_cwd(&self) -> Result<(), Box<dyn Error>> {
@@ -792,6 +921,26 @@ mod tests {
             name.chars()
                 .all(|ch| { ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' || ch == '-' })
         );
+    }
+
+    #[test]
+    fn log_filters_split_service_and_session_targets() {
+        assert!(is_session_log_target(vik_agent::SESSION_LOG_TARGET));
+        assert!(!is_service_log_target(vik_agent::SESSION_LOG_TARGET));
+        assert!(is_service_log_target("vik_orchestrator::engine"));
+        assert!(!is_session_log_target("vik_orchestrator::engine"));
+    }
+
+    #[test]
+    fn session_field_visitor_preserves_structured_params() {
+        let mut visitor = SessionFieldVisitor::default();
+        visitor.insert_named_field(
+            "params_json",
+            Value::String(r#"{"threadId":"thread-1","turn":{"id":"turn-1"}}"#.to_string()),
+        );
+
+        assert_eq!(visitor.fields["params"]["threadId"], "thread-1");
+        assert_eq!(visitor.fields["params"]["turn"]["id"], "turn-1");
     }
 
     #[test]
