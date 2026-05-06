@@ -35,7 +35,7 @@ vik check ./WORKFLOW.md
 
 ## Tracker
 
-`tracker.kind` must be `linear` or `github`.
+`tracker.kind` must name a supported tracker provider.
 
 Common fields:
 
@@ -52,6 +52,9 @@ Provider-specific fields:
 - Linear requires `project_slug` and uses `LINEAR_API_KEY` by default.
 - GitHub requires `repository` and uses `GH_TOKEN` or `GITHUB_TOKEN` by
   default.
+- Feishu requires `base_token` and `table_id`, can scope list reads with
+  optional `view_id`, and uses the authenticated `lark-cli` profile instead of
+  an API key.
 
 Limit delegation to issues assigned to specific users and tagged with specific
 labels:
@@ -67,6 +70,7 @@ Tracker reference:
 
 - [Linear](trackers/linear.md)
 - [GitHub](trackers/github.md)
+- [Feishu](trackers/feishu.md)
 
 During agent runs, Vik exposes one tracker-agnostic Codex app-server tool named
 `vik_issue`. Its `action` field supports common issue operations including
@@ -191,6 +195,8 @@ bind host.
 - [Observation](observation.md)
 - [Linear Tracker](trackers/linear.md)
 - [GitHub Tracker](trackers/github.md)
+- [Feishu Tracker](trackers/feishu.md)
 - Linear GraphQL API: <https://linear.app/developers/graphql>
 - GitHub CLI auth: <https://cli.github.com/manual/gh_auth>
+- Lark CLI: <https://github.com/larksuite/cli>
 - Codex CLI reference: <https://developers.openai.com/codex/cli/reference>

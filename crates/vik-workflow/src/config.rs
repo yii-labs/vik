@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use vik_core::WorkflowDefinition;
 use vik_tracker::{
-    CommonTrackerConfig, GitHubTrackerConfig, LinearTrackerConfig, TrackerConfig,
-    TrackerFilterConfig,
+    CommonTrackerConfig, FeishuTrackerConfig, GitHubTrackerConfig, LinearTrackerConfig,
+    TrackerConfig, TrackerFilterConfig,
 };
 
 use crate::WorkflowError;
@@ -200,6 +200,8 @@ impl ServiceConfig {
         let tracker_kind = string_value(tracker_map, "kind").unwrap_or_default();
         let project_slug = string_value(tracker_map, "project_slug").unwrap_or_default();
         let repository = string_value(tracker_map, "repository").unwrap_or_default();
+        let base_token = string_value(tracker_map, "base_token").unwrap_or_default();
+        let table_id = string_value(tracker_map, "table_id").unwrap_or_default();
         let active_states = string_vec(tracker_map, "active_states")
             .unwrap_or_else(|| vec!["Todo".to_string(), "In Progress".to_string()]);
         let terminal_states = string_vec(tracker_map, "terminal_states").unwrap_or_else(|| {
@@ -238,6 +240,38 @@ impl ServiceConfig {
                     repository,
                 ),
             ),
+            "feishu" => {
+                let mut provider = FeishuTrackerConfig::new(base_token, table_id);
+                if let Some(cli_path) = string_value(tracker_map, "cli_path") {
+                    provider.cli_path = cli_path;
+                }
+                if let Some(view_id) = string_value(tracker_map, "view_id") {
+                    provider.view_id = view_id;
+                }
+                if let Some(identity) = string_value(tracker_map, "identity") {
+                    provider.identity = identity;
+                }
+                let fields_map = nested_map(tracker_map, "fieldsMap");
+                if let Some(field) = string_value(fields_map, "title") {
+                    provider.fields_map.title = field;
+                }
+                if let Some(field) = string_value(fields_map, "description") {
+                    provider.fields_map.description = field;
+                }
+                if let Some(field) = string_value(fields_map, "state") {
+                    provider.fields_map.state = field;
+                }
+                if let Some(field) = string_value(fields_map, "labels") {
+                    provider.fields_map.labels = field;
+                }
+                if let Some(field) = string_value(fields_map, "comments") {
+                    provider.fields_map.comments = field;
+                }
+                if let Some(field) = string_value(fields_map, "pr_links") {
+                    provider.fields_map.pr_links = field;
+                }
+                TrackerConfig::feishu(common_tracker, provider)
+            }
             _ => TrackerConfig::unsupported(common_tracker, tracker_kind),
         };
 
