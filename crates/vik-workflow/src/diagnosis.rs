@@ -2,6 +2,8 @@ use std::collections::BTreeSet;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use vik_core::WorkflowDefinition;
 
@@ -114,13 +116,34 @@ impl DiagnoseEnvironment for SystemDiagnoseEnvironment {
     }
 
     fn command_succeeds(&self, program: &str, args: &[&str]) -> bool {
-        Command::new(program)
+        let Some(program) = find_command(program) else {
+            return false;
+        };
+        let Ok(mut child) = Command::new(program)
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|status| status.success())
+            .spawn()
+        else {
+            return false;
+        };
+
+        let started_at = Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => return status.success(),
+                Ok(None) if started_at.elapsed() < command_auth_timeout() => {
+                    thread::sleep(Duration::from_millis(50));
+                }
+                Ok(None) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return false;
+                }
+                Err(_) => return false,
+            }
+        }
     }
 }
 
@@ -321,11 +344,48 @@ impl ServiceConfig {
 }
 
 fn hook_command_names(hook: &str) -> impl Iterator<Item = String> + '_ {
-    hook.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .filter_map(first_shell_token)
-        .filter(|command| !is_shell_syntax(command))
+    hook.lines().filter_map(hook_command_name)
+}
+
+fn hook_command_name(line: &str) -> Option<String> {
+    let mut rest = line.trim();
+    if rest.is_empty() || rest.starts_with('#') {
+        return None;
+    }
+
+    loop {
+        let command = first_shell_token(rest)?;
+        if is_shell_syntax(&command) {
+            return None;
+        }
+        if !is_env_assignment(&command) {
+            return Some(command);
+        }
+        rest = drop_first_raw_token(rest);
+        if rest.is_empty() {
+            return None;
+        }
+    }
+}
+
+fn drop_first_raw_token(input: &str) -> &str {
+    let input = input.trim_start();
+    input
+        .char_indices()
+        .find_map(|(index, ch)| ch.is_whitespace().then_some(input[index..].trim_start()))
+        .unwrap_or_default()
+}
+
+fn is_env_assignment(token: &str) -> bool {
+    let Some((name, _)) = token.split_once('=') else {
+        return false;
+    };
+    let name = name.strip_suffix('+').unwrap_or(name);
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        && !name.chars().next().is_some_and(|ch| ch.is_ascii_digit())
 }
 
 fn workflow_error_message(err: WorkflowError) -> String {
@@ -359,7 +419,25 @@ fn is_command_named(command: &str, name: &str) -> bool {
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or(command);
-    file_name == name || file_name == format!("{name}.exe")
+    if file_name.eq_ignore_ascii_case(name) {
+        return true;
+    }
+    let path = Path::new(file_name);
+    let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    let Some(extension) = path.extension().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    stem.eq_ignore_ascii_case(name)
+        && matches!(
+            extension.to_ascii_lowercase().as_str(),
+            "exe" | "cmd" | "bat" | "com"
+        )
+}
+
+fn command_auth_timeout() -> Duration {
+    Duration::from_secs(5)
 }
 
 fn find_command(command: &str) -> Option<PathBuf> {

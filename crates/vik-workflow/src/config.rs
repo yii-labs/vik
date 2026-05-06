@@ -149,7 +149,7 @@ pub(crate) fn first_shell_token(command: &str) -> Option<String> {
             None => {
                 if ch.is_whitespace() {
                     if started {
-                        return Some(token);
+                        return (!token.is_empty()).then_some(token);
                     }
                 } else if ch == '\'' || ch == '"' {
                     quote = Some(ch);
@@ -168,7 +168,7 @@ pub(crate) fn first_shell_token(command: &str) -> Option<String> {
     if escaped {
         token.push('\\');
     }
-    started.then_some(token)
+    (started && !token.is_empty()).then_some(token)
 }
 
 fn find_shell_token_start(command: &str, needle: &str) -> Option<usize> {

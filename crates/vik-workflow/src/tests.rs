@@ -270,6 +270,19 @@ fn codex_command_program_preserves_quoted_windows_paths() {
 }
 
 #[test]
+fn codex_command_program_ignores_empty_quoted_program() {
+    let config = CodexConfig {
+        command: "'' app-server".to_string(),
+        ..CodexConfig::default()
+    };
+
+    assert_eq!(
+        config.command_program_for_platform(HostPlatform::Posix),
+        None
+    );
+}
+
+#[test]
 fn rejects_model_fields_without_app_server_command() {
     let def = parse_workflow_content(
         PathBuf::from("WORKFLOW.md"),
@@ -346,6 +359,47 @@ fn diagnosis_checks_command_authentication() {
     assert!(!diagnoses.has_errors());
     assert_diagnosis(&diagnoses, "auth.codex", DiagnosisSeverity::Warning);
     assert_diagnosis(&diagnoses, "auth.github", DiagnosisSeverity::Warning);
+}
+
+#[test]
+fn diagnosis_checks_codex_cmd_authentication() {
+    let def = parse_workflow_content(
+        PathBuf::from("WORKFLOW.md"),
+        "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\ncodex:\n  command: codex.cmd app-server\n---\nBody",
+    )
+    .unwrap();
+    let config = ServiceConfig::from_definition(&def).unwrap();
+    let environment = MockDiagnoseEnvironment::new()
+        .with_env("GH_TOKEN")
+        .with_commands(["codex.cmd", "gh", "git"])
+        .with_success("codex.cmd", ["login", "status"]);
+
+    let diagnoses = config.diagnose(&environment);
+
+    assert_diagnosis(&diagnoses, "auth.codex", DiagnosisSeverity::Passed);
+}
+
+#[test]
+fn diagnosis_skips_hook_environment_assignments() {
+    let def = parse_workflow_content(
+        PathBuf::from("WORKFLOW.md"),
+        "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\nhooks:\n  after_create: |\n    GIT_SSH_COMMAND=ssh git clone git@github.com:yii-labs/vik .\ncodex:\n  command: codex app-server\n---\nBody",
+    )
+    .unwrap();
+    let config = ServiceConfig::from_definition(&def).unwrap();
+    let environment = MockDiagnoseEnvironment::new()
+        .with_env("GH_TOKEN")
+        .with_commands(["codex", "gh", "git"])
+        .with_success("codex", ["login", "status"]);
+
+    let diagnoses = config.diagnose(&environment);
+
+    assert_diagnosis(&diagnoses, "command.git", DiagnosisSeverity::Passed);
+    assert!(
+        diagnoses
+            .iter()
+            .all(|diagnosis| diagnosis.name != "command.GIT_SSH_COMMAND=ssh")
+    );
 }
 
 #[test]
