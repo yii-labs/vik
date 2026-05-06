@@ -51,8 +51,9 @@ Required fields:
 - `Title`: issue title.
 - `State`: single-select state field.
 - `Labels`: multi-select label storage used by `update_issue`.
-- `Workpad`: text field containing Vik-managed comment JSON.
-- `PR Links`: text field containing Vik-managed pull request link JSON.
+- `Workpad`: text field containing the single Vik-managed workpad comment as
+  plain text.
+- `PR Links`: text field containing Vik-managed pull request link.
 
 Configure optional `fieldsMap.description` to include a description field in
 prompt context. Vik always uses the Feishu record ID as the provider issue ID
@@ -72,9 +73,6 @@ provides the token used for Base operations.
 
 ## Behavior
 
-Vik uses `lark-cli base` commands for record reads, record updates, comments,
-and PR links. Comment and PR link operations are stored in JSON text fields on
-the same configured table.
+Vik uses `lark-cli base` commands for record reads, record updates, comments, and PR links. Comment operations update the configured Workpad text field directly.
 
-Feishu attachment upload is not implemented unless a future workflow configures
-a Base attachment field for that purpose.
+Feishu attachment upload is not implemented unless a future workflow configures a Base attachment field for that purpose.
