@@ -14,11 +14,9 @@ pub const DEFAULT_PAGE_SIZE: usize = 100;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeishuIssueFields {
-    pub identifier: String,
     pub title: String,
     pub description: String,
     pub state: String,
-    pub delegated: String,
     pub labels: String,
     pub comments: String,
     pub pr_links: String,
@@ -29,13 +27,11 @@ impl FeishuIssueFields {
         let mut seen = HashSet::new();
         [
             &self.title,
-            &self.identifier,
             &self.state,
             &self.description,
             &self.labels,
             &self.comments,
             &self.pr_links,
-            &self.delegated,
         ]
         .into_iter()
         .map(|field| field.trim())
@@ -191,39 +187,8 @@ impl FeishuClient {
         })
     }
 
-    async fn search_by_identifier(&self, identifier: &str) -> Result<FeishuRecord, TrackerError> {
-        let search = json!({
-            "keyword": identifier,
-            "search_fields": [self.config.fields.identifier],
-            "select_fields": self.config.fields.names(),
-            "limit": self.config.page_size,
-        });
-        let mut args = self.base_args("+record-search");
-        args.extend([
-            "--json".to_string(),
-            search.to_string(),
-            "--format".to_string(),
-            "json".to_string(),
-        ]);
-        let payload = self.run_cli_json(args).await?;
-        records_from_list_payload(&payload)?
-            .into_iter()
-            .find(|record| {
-                field_text(&record.fields, &self.config.fields.identifier)
-                    .is_some_and(|value| value == identifier)
-            })
-            .ok_or_else(|| {
-                TrackerError::FeishuUnknownPayload(format!(
-                    "missing exact record for identifier {identifier}"
-                ))
-            })
-    }
-
     async fn record_for_issue(&self, issue_id: &str) -> Result<FeishuRecord, TrackerError> {
-        if issue_id.starts_with("rec") || self.config.fields.identifier.trim().is_empty() {
-            return self.record_by_id(issue_id).await;
-        }
-        self.search_by_identifier(issue_id).await
+        self.record_by_id(issue_id).await
     }
 
     async fn patch_record(
@@ -260,9 +225,7 @@ impl FeishuClient {
     }
 
     fn normalize_issue(&self, record: &FeishuRecord) -> Issue {
-        let identifier = field_text(&record.fields, &self.config.fields.identifier)
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| record.id.clone());
+        let identifier = record.id.clone();
         let title = field_text(&record.fields, &self.config.fields.title)
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| identifier.clone());
@@ -287,12 +250,7 @@ impl FeishuClient {
         }
     }
 
-    fn is_candidate(&self, record: &FeishuRecord, issue: &Issue) -> bool {
-        if !self.config.fields.delegated.trim().is_empty()
-            && field_bool(&record.fields, &self.config.fields.delegated) != Some(true)
-        {
-            return false;
-        }
+    fn is_candidate(&self, issue: &Issue) -> bool {
         if self.config.filter_tags.is_empty() {
             return true;
         }
@@ -329,7 +287,7 @@ impl IssueTracker for FeishuClient {
             .filter_map(|record| {
                 let issue = self.normalize_issue(&record);
                 issue_matches_state(&issue, &active_states)
-                    .then(|| self.is_candidate(&record, &issue).then_some(issue))
+                    .then(|| self.is_candidate(&issue).then_some(issue))
                     .flatten()
             })
             .collect())
@@ -382,7 +340,7 @@ impl IssueTracker for FeishuClient {
                     labels.push(label);
                 }
             }
-            patch.insert(self.config.fields.labels.clone(), json!(labels.join(", ")));
+            patch.insert(self.config.fields.labels.clone(), json!(labels));
         }
         let updated = self.patch_record(&record.id, patch).await?;
         Ok(self.normalize_issue(&updated))
@@ -606,18 +564,6 @@ fn field_text(fields: &Map<String, Value>, field: &str) -> Option<String> {
         .and_then(cell_text)
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-}
-
-fn field_bool(fields: &Map<String, Value>, field: &str) -> Option<bool> {
-    match fields.get(field)? {
-        Value::Bool(value) => Some(*value),
-        Value::String(value) => match normalize_state(value).as_str() {
-            "true" | "yes" | "1" => Some(true),
-            "false" | "no" | "0" => Some(false),
-            _ => None,
-        },
-        _ => None,
-    }
 }
 
 fn cell_text(value: &Value) -> Option<String> {

@@ -201,11 +201,9 @@ impl TrackerClient {
             TrackerKind::Feishu(provider) => {
                 let filter = config.filter();
                 let fields = feishu::FeishuIssueFields {
-                    identifier: provider.fields_map.identifier.clone(),
                     title: provider.fields_map.title.clone(),
                     description: provider.fields_map.description.clone(),
                     state: provider.fields_map.state.clone(),
-                    delegated: provider.fields_map.delegated.clone(),
                     labels: provider.fields_map.labels.clone(),
                     comments: provider.fields_map.comments.clone(),
                     pr_links: provider.fields_map.pr_links.clone(),

@@ -252,9 +252,6 @@ impl ServiceConfig {
                     provider.identity = identity;
                 }
                 let fields_map = nested_map(tracker_map, "fieldsMap");
-                if let Some(field) = string_value(fields_map, "identifier") {
-                    provider.fields_map.identifier = field;
-                }
                 if let Some(field) = string_value(fields_map, "title") {
                     provider.fields_map.title = field;
                 }
@@ -264,16 +261,13 @@ impl ServiceConfig {
                 if let Some(field) = string_value(fields_map, "state") {
                     provider.fields_map.state = field;
                 }
-                if let Some(field) = string_value(fields_map, "delegated") {
-                    provider.fields_map.delegated = field;
-                }
                 if let Some(field) = string_value(fields_map, "labels") {
                     provider.fields_map.labels = field;
                 }
                 if let Some(field) = string_value(fields_map, "comments") {
                     provider.fields_map.comments = field;
                 }
-                if let Some(field) = string_value(fields_map, "prLinks") {
+                if let Some(field) = string_value(fields_map, "pr_links") {
                     provider.fields_map.pr_links = field;
                 }
                 TrackerConfig::feishu(common_tracker, provider)

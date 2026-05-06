@@ -43,25 +43,21 @@ tracker:
     state: State
     labels: Labels
     comments: Workpad
-    prLinks: PR Links
+    pr_links: PR Links
 ```
 
 Required fields:
 
 - `Title`: issue title.
 - `State`: single-select state field.
-- `Labels`: comma-separated label storage used by `update_issue`.
+- `Labels`: multi-select label storage used by `update_issue`.
 - `Workpad`: text field containing Vik-managed comment JSON.
 - `PR Links`: text field containing Vik-managed pull request link JSON.
 
 Configure optional `fieldsMap.description` to include a description field in
-prompt context. Vik always uses the Feishu record ID as the provider issue ID and
-uses that record ID as the default issue identifier. Configure optional
-`fieldsMap.identifier` only when the table has a separate human-facing key; Vik
-then uses that field for display and exact lookup while keeping writes anchored
-to the record ID. Configure optional `fieldsMap.delegated` only when the table
-uses a checkbox to mark delegable records; when omitted, Vik relies on
-`tracker.view_id`, state, and label filters for candidate selection.
+prompt context. Vik always uses the Feishu record ID as the provider issue ID
+and display identifier. Candidate selection relies on `tracker.view_id`, state,
+and label filters.
 
 ## Credentials
 

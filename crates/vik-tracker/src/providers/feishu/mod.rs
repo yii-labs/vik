@@ -8,13 +8,10 @@ use serde::{Deserialize, Serialize};
 use super::TrackerConfigError;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct FeishuFieldsMap {
-    pub identifier: String,
     pub title: String,
     pub description: String,
     pub state: String,
-    pub delegated: String,
     pub labels: String,
     pub comments: String,
     pub pr_links: String,
@@ -23,11 +20,9 @@ pub struct FeishuFieldsMap {
 impl Default for FeishuFieldsMap {
     fn default() -> Self {
         Self {
-            identifier: String::new(),
             title: "Title".to_string(),
             description: String::new(),
             state: "State".to_string(),
-            delegated: String::new(),
             labels: "Labels".to_string(),
             comments: "Workpad".to_string(),
             pr_links: "PR Links".to_string(),

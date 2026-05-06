@@ -8,6 +8,17 @@ use super::{
     client::{FeishuIssueFields, FeishuRecord, issue_from_record, records_from_list_payload},
 };
 
+fn issue_fields() -> FeishuIssueFields {
+    FeishuIssueFields {
+        title: "Text".to_string(),
+        description: "Description".to_string(),
+        state: "State".to_string(),
+        labels: "Labels".to_string(),
+        comments: "Workpad".to_string(),
+        pr_links: "PR Links".to_string(),
+    }
+}
+
 #[test]
 fn provider_config_owns_cli_base_table_and_validation() {
     let config = FeishuTrackerConfig::new("base_token", "tbl123");
@@ -17,9 +28,7 @@ fn provider_config_owns_cli_base_table_and_validation() {
     assert_eq!(config.table_id, "tbl123");
     assert_eq!(config.view_id, "");
     assert_eq!(config.identity, "user");
-    assert_eq!(config.fields_map.identifier, "");
     assert_eq!(config.fields_map.description, "");
-    assert_eq!(config.fields_map.delegated, "");
     assert_eq!(config.fields_map.title, "Title");
     assert_eq!(config.fields_map.comments, "Workpad");
     assert_eq!(config.fields_map.pr_links, "PR Links");
@@ -48,11 +57,9 @@ fn provider_config_owns_cli_base_table_and_validation() {
 #[test]
 fn field_names_are_deduplicated_and_skip_empty_values() {
     let fields = FeishuIssueFields {
-        identifier: "Identifier".to_string(),
         title: "Text".to_string(),
         description: "Description".to_string(),
         state: "State".to_string(),
-        delegated: "AI Delegated".to_string(),
         labels: "Labels".to_string(),
         comments: "Workpad".to_string(),
         pr_links: "Workpad".to_string(),
@@ -60,15 +67,7 @@ fn field_names_are_deduplicated_and_skip_empty_values() {
 
     assert_eq!(
         fields.names(),
-        vec![
-            "Text",
-            "Identifier",
-            "State",
-            "Description",
-            "Labels",
-            "Workpad",
-            "AI Delegated"
-        ]
+        vec!["Text", "State", "Description", "Labels", "Workpad",]
     );
 }
 
@@ -77,11 +76,11 @@ fn parses_record_list_payload_with_record_ids() {
     let payload = json!({
         "ok": true,
         "data": {
-            "fields": ["Text", "Identifier", "State"],
+            "fields": ["Text", "State", "Labels"],
             "record_id_list": ["rec1", "rec2"],
             "data": [
-                ["Issue one", "VIK-1", ["Todo"]],
-                ["Issue two", null, ["Done"]]
+                ["Issue one", ["Todo"], ["feature"]],
+                ["Issue two", ["Done"], null]
             ]
         }
     });
@@ -90,8 +89,8 @@ fn parses_record_list_payload_with_record_ids() {
 
     assert_eq!(records.len(), 2);
     assert_eq!(records[0].id, "rec1");
-    assert_eq!(records[0].fields["Identifier"], json!("VIK-1"));
-    assert_eq!(records[1].fields["Identifier"], json!(null));
+    assert_eq!(records[0].fields["Labels"], json!(["feature"]));
+    assert_eq!(records[1].fields["Labels"], json!(null));
 }
 
 #[test]
@@ -136,48 +135,29 @@ fn parses_record_get_payload_with_nested_fields() {
 
 #[test]
 fn normalizes_issue_fields_and_label_text() {
-    let fields = FeishuIssueFields {
-        identifier: "Identifier".to_string(),
-        title: "Text".to_string(),
-        description: "Description".to_string(),
-        state: "State".to_string(),
-        delegated: "AI Delegated".to_string(),
-        labels: "Labels".to_string(),
-        comments: "Workpad".to_string(),
-        pr_links: "PR Links".to_string(),
-    };
+    let fields = issue_fields();
     let record = FeishuRecord {
         id: "rec123".to_string(),
         fields: Map::from_iter([
-            ("Identifier".to_string(), json!("VIK-123")),
             ("Text".to_string(), json!("Add Feishu tracker")),
             ("Description".to_string(), json!("Use Base as tracker")),
             ("State".to_string(), json!(["Todo"])),
-            ("Labels".to_string(), json!("feature, backend")),
+            ("Labels".to_string(), json!(["feature", "backend"])),
         ]),
     };
 
     let issue = issue_from_record(&record, &fields);
 
     assert_eq!(issue.id, "rec123");
-    assert_eq!(issue.identifier, "VIK-123");
+    assert_eq!(issue.identifier, "rec123");
     assert_eq!(issue.title, "Add Feishu tracker");
     assert_eq!(issue.state, "Todo");
     assert_eq!(issue.labels, vec!["feature", "backend"]);
 }
 
 #[test]
-fn falls_back_to_record_id_for_missing_identifier() {
-    let fields = FeishuIssueFields {
-        identifier: "Identifier".to_string(),
-        title: "Text".to_string(),
-        description: "Description".to_string(),
-        state: "State".to_string(),
-        delegated: "AI Delegated".to_string(),
-        labels: "Labels".to_string(),
-        comments: "Workpad".to_string(),
-        pr_links: "PR Links".to_string(),
-    };
+fn uses_record_id_as_identifier() {
+    let fields = issue_fields();
     let record = FeishuRecord {
         id: "rec123".to_string(),
         fields: Map::from_iter([
@@ -189,102 +169,6 @@ fn falls_back_to_record_id_for_missing_identifier() {
     let issue = issue_from_record(&record, &fields);
 
     assert_eq!(issue.identifier, "rec123");
-}
-
-#[test]
-fn uses_record_id_when_identifier_field_is_not_configured() {
-    let fields = FeishuIssueFields {
-        identifier: String::new(),
-        title: "Text".to_string(),
-        description: "Description".to_string(),
-        state: "State".to_string(),
-        delegated: "AI Delegated".to_string(),
-        labels: "Labels".to_string(),
-        comments: "Workpad".to_string(),
-        pr_links: "PR Links".to_string(),
-    };
-    let record = FeishuRecord {
-        id: "rec123".to_string(),
-        fields: Map::from_iter([
-            ("Text".to_string(), json!("Add Feishu tracker")),
-            ("Identifier".to_string(), json!("VIK-123")),
-            ("State".to_string(), json!(["Todo"])),
-        ]),
-    };
-
-    let issue = issue_from_record(&record, &fields);
-
-    assert_eq!(issue.id, "rec123");
-    assert_eq!(issue.identifier, "rec123");
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn get_issue_uses_exact_identifier_match_from_search_results() {
-    use std::fs;
-    use std::os::unix::fs::PermissionsExt;
-    use std::time::{SystemTime, UNIX_EPOCH};
-    use vik_core::IssueTracker;
-
-    use super::client::{FeishuClient, FeishuClientConfig};
-
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!("vik-feishu-search-test-{unique}"));
-    fs::create_dir_all(&dir).unwrap();
-    let cli_path = dir.join("lark-cli");
-    fs::write(
-        &cli_path,
-        r#"#!/bin/sh
-cat <<'JSON'
-{
-  "ok": true,
-  "data": {
-    "fields": ["Text", "Identifier", "State"],
-    "record_id_list": ["rec10", "rec1"],
-    "data": [
-      ["Issue ten", "VIK-10", ["Todo"]],
-      ["Issue one", "VIK-1", ["Todo"]]
-    ],
-    "has_more": false
-  }
-}
-JSON
-"#,
-    )
-    .unwrap();
-    let mut permissions = fs::metadata(&cli_path).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&cli_path, permissions).unwrap();
-
-    let fields = FeishuIssueFields {
-        identifier: "Identifier".to_string(),
-        title: "Text".to_string(),
-        description: "Description".to_string(),
-        state: "State".to_string(),
-        delegated: "AI Delegated".to_string(),
-        labels: "Labels".to_string(),
-        comments: "Workpad".to_string(),
-        pr_links: "PR Links".to_string(),
-    };
-    let config = FeishuClientConfig::new(
-        cli_path.to_string_lossy().to_string(),
-        "base",
-        "table",
-        "user",
-        vec!["Todo".to_string()],
-        fields,
-    );
-    let client = FeishuClient::new(config).unwrap();
-
-    let issue = client.get_issue("VIK-1").await.unwrap();
-
-    assert_eq!(issue.id, "rec1");
-    assert_eq!(issue.identifier, "VIK-1");
-
-    let _ = fs::remove_dir_all(dir);
 }
 
 #[tokio::test]
@@ -293,23 +177,13 @@ async fn empty_active_states_match_no_candidates_without_listing_records() {
 
     use super::client::{FeishuClient, FeishuClientConfig};
 
-    let fields = FeishuIssueFields {
-        identifier: String::new(),
-        title: "Text".to_string(),
-        description: "Description".to_string(),
-        state: "State".to_string(),
-        delegated: "AI Delegated".to_string(),
-        labels: "Labels".to_string(),
-        comments: "Workpad".to_string(),
-        pr_links: "PR Links".to_string(),
-    };
     let config = FeishuClientConfig::new(
         "missing-lark-cli",
         "base",
         "table",
         "user",
         Vec::new(),
-        fields,
+        issue_fields(),
     );
     let client = FeishuClient::new(config).unwrap();
 
@@ -324,23 +198,13 @@ async fn empty_state_filter_matches_no_records_without_listing_records() {
 
     use super::client::{FeishuClient, FeishuClientConfig};
 
-    let fields = FeishuIssueFields {
-        identifier: String::new(),
-        title: "Text".to_string(),
-        description: "Description".to_string(),
-        state: "State".to_string(),
-        delegated: "AI Delegated".to_string(),
-        labels: "Labels".to_string(),
-        comments: "Workpad".to_string(),
-        pr_links: "PR Links".to_string(),
-    };
     let config = FeishuClientConfig::new(
         "missing-lark-cli",
         "base",
         "table",
         "user",
         vec!["Todo".to_string()],
-        fields,
+        issue_fields(),
     );
     let client = FeishuClient::new(config).unwrap();
 
@@ -384,10 +248,10 @@ cat <<'JSON'
 {
   "ok": true,
   "data": {
-    "fields": ["Text", "Identifier", "State", "AI Delegated"],
+    "fields": ["Text", "State"],
     "record_id_list": ["rec1"],
     "data": [
-      ["Issue one", "VIK-1", ["Todo"], true]
+      ["Issue one", ["Todo"]]
     ],
     "has_more": false
   }
@@ -400,23 +264,13 @@ JSON
     permissions.set_mode(0o755);
     fs::set_permissions(&cli_path, permissions).unwrap();
 
-    let fields = FeishuIssueFields {
-        identifier: "Identifier".to_string(),
-        title: "Text".to_string(),
-        description: "Description".to_string(),
-        state: "State".to_string(),
-        delegated: "AI Delegated".to_string(),
-        labels: "Labels".to_string(),
-        comments: "Workpad".to_string(),
-        pr_links: "PR Links".to_string(),
-    };
     let config = FeishuClientConfig::new(
         cli_path.to_string_lossy().to_string(),
         "base",
         "table",
         "user",
         vec!["Todo".to_string()],
-        fields,
+        issue_fields(),
     )
     .with_view_id(" vewpBV8AK0 ");
     let client = FeishuClient::new(config).unwrap();
@@ -424,7 +278,7 @@ JSON
     let issues = client.fetch_candidates().await.unwrap();
 
     assert_eq!(issues.len(), 1);
-    assert_eq!(issues[0].identifier, "VIK-1");
+    assert_eq!(issues[0].identifier, "rec1");
 
     let _ = fs::remove_dir_all(dir);
 }
@@ -453,11 +307,11 @@ cat <<'JSON'
 {
   "ok": true,
   "data": {
-    "fields": ["Text", "Identifier", "State", "AI Delegated", "Labels", "Workpad", "PR Links"],
+    "fields": ["Text", "State", "Labels", "Workpad", "PR Links"],
     "record_id_list": ["rec1", "rec2"],
     "data": [
-      ["Issue one", "VIK-1", ["Todo"], true, "feature", null, null],
-      ["Issue two", "VIK-2", ["Todo"], false, "feature", null, null]
+      ["Issue one", ["Todo"], ["feature"], null, null],
+      ["Issue two", ["Todo"], ["other"], null, null]
     ],
     "has_more": false
   }
@@ -470,23 +324,13 @@ JSON
     permissions.set_mode(0o755);
     fs::set_permissions(&cli_path, permissions).unwrap();
 
-    let fields = FeishuIssueFields {
-        identifier: "Identifier".to_string(),
-        title: "Text".to_string(),
-        description: "Description".to_string(),
-        state: "State".to_string(),
-        delegated: "AI Delegated".to_string(),
-        labels: "Labels".to_string(),
-        comments: "Workpad".to_string(),
-        pr_links: "PR Links".to_string(),
-    };
     let config = FeishuClientConfig::new(
         cli_path.to_string_lossy().to_string(),
         "base",
         "table",
         "user",
         vec!["Todo".to_string()],
-        fields,
+        issue_fields(),
     )
     .with_filter_tags(vec!["feature".to_string()]);
     let client = FeishuClient::new(config).unwrap();
@@ -494,7 +338,100 @@ JSON
     let issues = client.fetch_candidates().await.unwrap();
 
     assert_eq!(issues.len(), 1);
-    assert_eq!(issues[0].identifier, "VIK-1");
+    assert_eq!(issues[0].identifier, "rec1");
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn update_issue_writes_labels_as_multi_select_array() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use vik_core::{IssueTracker, IssueUpdate};
+
+    use super::client::{FeishuClient, FeishuClientConfig};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("vik-feishu-label-test-{unique}"));
+    fs::create_dir_all(&dir).unwrap();
+    let cli_path = dir.join("lark-cli");
+    fs::write(
+        &cli_path,
+        r#"#!/bin/sh
+command=""
+json_arg=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    +record-get|+record-upsert)
+      command="$1"
+      ;;
+    --json)
+      json_arg="${2:-}"
+      shift
+      ;;
+  esac
+  shift
+done
+if [ "$command" = "+record-upsert" ]; then
+  case "$json_arg" in
+    *'"Labels":["feature","backend"]'*)
+      printf '{"ok":true,"data":{"record":{}}}\n'
+      exit 0
+      ;;
+    *)
+      echo "unexpected labels payload: $json_arg" >&2
+      exit 7
+      ;;
+  esac
+fi
+cat <<'JSON'
+{
+  "ok": true,
+  "data": {
+    "record": {
+      "fields": {
+        "Text": "Issue one",
+        "State": ["Todo"],
+        "Labels": ["feature"]
+      }
+    }
+  }
+}
+JSON
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&cli_path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&cli_path, permissions).unwrap();
+
+    let config = FeishuClientConfig::new(
+        cli_path.to_string_lossy().to_string(),
+        "base",
+        "table",
+        "user",
+        vec!["Todo".to_string()],
+        issue_fields(),
+    );
+    let client = FeishuClient::new(config).unwrap();
+
+    let issue = client
+        .update_issue(
+            "rec1",
+            IssueUpdate {
+                state: None,
+                labels: vec!["backend".to_string()],
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(issue.identifier, "rec1");
 
     let _ = fs::remove_dir_all(dir);
 }

@@ -35,7 +35,7 @@ vik check ./WORKFLOW.md
 
 ## Tracker
 
-`tracker.kind` must be `linear`, `github`, or `feishu`.
+`tracker.kind` must name a supported tracker provider.
 
 Common fields:
 

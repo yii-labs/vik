@@ -168,7 +168,7 @@ fn accepts_github_tracker_config() {
 fn accepts_feishu_tracker_config() {
     let def = parse_workflow_content(
         PathBuf::from("WORKFLOW.md"),
-        "---\ntracker:\n  kind: feishu\n  base_token: P5wZbJ2OiaETjdseIUJczdXqnle\n  table_id: tblUqPdAnvAcPY6T\n  cli_path: /usr/local/bin/lark-cli\n  identity: bot\n  fieldsMap:\n    title: Text\n    state: State\n    prLinks: Links\nworkspace:\n  root: work\n---\nBody",
+        "---\ntracker:\n  kind: feishu\n  base_token: P5wZbJ2OiaETjdseIUJczdXqnle\n  table_id: tblUqPdAnvAcPY6T\n  cli_path: /usr/local/bin/lark-cli\n  identity: bot\n  fieldsMap:\n    title: Text\n    state: State\n    pr_links: Links\nworkspace:\n  root: work\n---\nBody",
     )
     .unwrap();
     let config = ServiceConfig::from_definition(&def).unwrap();
@@ -180,7 +180,6 @@ fn accepts_feishu_tracker_config() {
     assert_eq!(provider.cli_path, "/usr/local/bin/lark-cli");
     assert_eq!(provider.identity, "bot");
     assert_eq!(provider.view_id, "");
-    assert_eq!(provider.fields_map.identifier, "");
     assert_eq!(provider.fields_map.title, "Text");
     assert_eq!(provider.fields_map.state, "State");
     assert_eq!(provider.fields_map.pr_links, "Links");

@@ -45,7 +45,7 @@ Why: `WORKFLOW.md` tells Vik which tracker issues to claim, where to create
 workspaces, how to clone the repo, and how to launch Codex.
 
 1. Open `WORKFLOW.md`.
-2. Confirm `tracker.kind` is `linear`, `github`, or `feishu`.
+2. Confirm `tracker.kind` is supported.
 3. For Linear, confirm `tracker.project_slug` matches the Linear project slug.
 4. For GitHub, confirm `tracker.repository` matches the `owner/name` repository.
 5. For Feishu, confirm `tracker.base_token` and `tracker.table_id` target the
