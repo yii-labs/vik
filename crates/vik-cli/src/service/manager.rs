@@ -1,8 +1,7 @@
-use std::collections::VecDeque;
 use std::env;
 use std::error::Error;
 use std::fs::{self, OpenOptions};
-use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -23,7 +22,7 @@ use vik_tracker::TrackerClient;
 use vik_workflow::{WorkflowReloader, load_effective_workflow, select_workflow_path};
 
 use crate::env::load_dotenv_from_dir;
-use crate::service::{LogsArgs, RunArgs, StartArgs};
+use crate::service::{RunArgs, StartArgs};
 
 pub struct ServiceManager {
     cwd: PathBuf,
@@ -147,23 +146,6 @@ impl ServiceManager {
                 state.workflow_path.display(),
                 state.log_dir.display()
             ),
-        }
-        Ok(())
-    }
-
-    pub fn print_logs(&self, args: LogsArgs) -> Result<(), Box<dyn Error>> {
-        let source = self
-            .read_state()?
-            .map(|state| state.log_dir)
-            .unwrap_or_else(|| self.log_dir.clone());
-        let Some(path) = self.log_file_for_reading(&source)? else {
-            println!("service logs not found: {}", source.display());
-            return Ok(());
-        };
-
-        self.print_recent_lines(&path, args.lines)?;
-        if args.follow {
-            self.follow_log(&path)?;
         }
         Ok(())
     }
@@ -440,66 +422,6 @@ impl ServiceManager {
         log_dir.join("vik-service.log")
     }
 
-    fn log_file_for_reading(&self, source: &Path) -> io::Result<Option<PathBuf>> {
-        if source.is_file() {
-            return Ok(Some(source.to_path_buf()));
-        }
-        if !source.is_dir() {
-            return Ok(None);
-        }
-
-        if let Some(path) = latest_file_with_prefix(source, "vik.log")? {
-            return Ok(Some(path));
-        }
-
-        let service_log = self.service_stderr_log_path(source);
-        if service_log.is_file() {
-            return Ok(Some(service_log));
-        }
-
-        Ok(None)
-    }
-
-    fn print_recent_lines(&self, path: &Path, lines: usize) -> io::Result<()> {
-        for line in self.recent_log_lines(path, lines)? {
-            println!("{line}");
-        }
-        Ok(())
-    }
-
-    fn recent_log_lines(&self, path: &Path, lines: usize) -> io::Result<Vec<String>> {
-        if lines == 0 {
-            return Ok(Vec::new());
-        }
-
-        let file = OpenOptions::new().read(true).open(path)?;
-        let reader = BufReader::new(file);
-        let mut recent = VecDeque::with_capacity(lines);
-        for line in reader.lines() {
-            if recent.len() == lines {
-                recent.pop_front();
-            }
-            recent.push_back(line?);
-        }
-        Ok(recent.into_iter().collect())
-    }
-
-    fn follow_log(&self, path: &Path) -> io::Result<()> {
-        let mut offset = fs::metadata(path)?.len();
-        loop {
-            thread::sleep(Duration::from_secs(1));
-            let mut file = OpenOptions::new().read(true).open(path)?;
-            file.seek(SeekFrom::Start(offset))?;
-            let mut chunk = String::new();
-            file.read_to_string(&mut chunk)?;
-            if !chunk.is_empty() {
-                print!("{chunk}");
-                io::stdout().flush()?;
-                offset += chunk.len() as u64;
-            }
-        }
-    }
-
     fn classify_state(&self, state: &ServiceState) -> RuntimeStatus {
         match (state.status, state.pid) {
             (StoredStatus::Running, Some(pid)) if self.process_matches_state(pid, state) => {
@@ -750,33 +672,6 @@ fn normalize_path(path: PathBuf) -> PathBuf {
     normalized
 }
 
-fn latest_file_with_prefix(dir: &Path, prefix: &str) -> io::Result<Option<PathBuf>> {
-    let mut latest: Option<(SystemTime, PathBuf)> = None;
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
-            continue;
-        };
-        if !name.starts_with(prefix) {
-            continue;
-        }
-        let metadata = entry.metadata()?;
-        if !metadata.is_file() {
-            continue;
-        }
-        let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
-        if latest
-            .as_ref()
-            .map(|(latest_modified, _)| modified > *latest_modified)
-            .unwrap_or(true)
-        {
-            latest = Some((modified, path));
-        }
-    }
-    Ok(latest.map(|(_, path)| path))
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ServiceState {
     version: u32,
@@ -1024,55 +919,6 @@ mod tests {
         let manager = temp_manager().unwrap();
 
         assert!(!manager.stale_service_group_cleanup_allowed(std::process::id()));
-    }
-
-    #[test]
-    fn recent_log_lines_are_limited() {
-        let manager = temp_manager().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("service.log");
-        fs::write(&path, "one\ntwo\nthree\n").unwrap();
-
-        let lines = manager.recent_log_lines(&path, 2).unwrap();
-
-        assert_eq!(lines, ["two", "three"]);
-    }
-
-    #[test]
-    fn recent_log_lines_supports_zero_lines() {
-        let manager = temp_manager().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("service.log");
-        fs::write(&path, "one\ntwo\nthree\n").unwrap();
-
-        let lines = manager.recent_log_lines(&path, 0).unwrap();
-
-        assert!(lines.is_empty());
-    }
-
-    #[test]
-    fn log_file_for_reading_uses_rolling_log_file() {
-        let manager = temp_manager().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("vik.log.2026-05-05");
-        fs::write(&path, "service log\n").unwrap();
-        fs::write(dir.path().join("vik-error.log.2026-05-05"), "error log\n").unwrap();
-
-        let selected = manager.log_file_for_reading(dir.path()).unwrap();
-
-        assert_eq!(selected, Some(path));
-    }
-
-    #[test]
-    fn log_file_for_reading_falls_back_to_service_stderr_log() {
-        let manager = temp_manager().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let path = manager.service_stderr_log_path(dir.path());
-        fs::write(&path, "startup error\n").unwrap();
-
-        let selected = manager.log_file_for_reading(dir.path()).unwrap();
-
-        assert_eq!(selected, Some(path));
     }
 
     #[cfg(unix)]

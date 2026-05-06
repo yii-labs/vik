@@ -24,8 +24,6 @@ enum ServiceCommand {
     Restart(RunArgs),
     /// Print current service status.
     Status,
-    /// Print recent service logs.
-    Logs(LogsArgs),
     /// Remove service state and stop Vik if it is running.
     Uninstall,
 }
@@ -74,17 +72,6 @@ impl RunArgs {
     }
 }
 
-#[derive(Debug, Clone, ClapArgs)]
-struct LogsArgs {
-    /// Number of recent lines to print.
-    #[arg(long, short, default_value_t = 100)]
-    lines: usize,
-
-    /// Continue printing appended log output.
-    #[arg(long, short, default_value_t = false)]
-    follow: bool,
-}
-
 pub(crate) async fn run(
     workflow: Option<PathBuf>,
     args: ServiceArgs,
@@ -101,7 +88,6 @@ pub(crate) async fn run(
         }
         ServiceCommand::Uninstall => manager.uninstall()?,
         ServiceCommand::Status => manager.status()?,
-        ServiceCommand::Logs(args) => manager.print_logs(args)?,
         ServiceCommand::Stop => manager.stop()?,
         ServiceCommand::Restart(args) => manager.restart(args.with_default_service_port()).await?,
     }

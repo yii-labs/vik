@@ -12,18 +12,17 @@ Default log directory:
 <workspace.root>/logs
 ```
 
-Service runs also write detached stdout and stderr to:
+Detached services also write early startup stderr to:
 
 ```text
-<workflow-directory>/.vik/service/<workflow-stem>-<path-hash>.log
+<workspace.root>/logs/vik-service.log
 ```
 
 Useful commands:
 
 ```sh
 tail -f "$HOME/code/vik-workspaces/logs"/vik.log.*
-vik service logs --lines 100
-vik service logs --follow
+tail -n 100 "$HOME/code/vik-workspaces/logs"/vik.log.*
 ```
 
 Adjust the first command when `workspace.root` or `logging.dir` differs from
