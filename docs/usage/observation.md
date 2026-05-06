@@ -4,7 +4,8 @@ Vik exposes runtime state through JSON logs and an optional HTTP server.
 
 ## Vik Logs
 
-Foreground runs write JSON logs to stdout and to `logging.dir`.
+Foreground runs write service JSON logs to stdout. Service and session JSON
+files are written under `logging.dir`.
 
 Default log directory:
 
@@ -15,12 +16,12 @@ Default log directory:
 Useful commands:
 
 ```sh
-tail -f "$HOME/code/vik-workspaces/logs"/vik.log.*
-tail -n 100 "$HOME/code/vik-workspaces/logs"/vik.log.*
+tail -f "$HOME/code/vik-workspaces/logs"/service.log.*
+tail -f "$HOME/code/vik-workspaces/logs"/session.log.*
 ```
 
-Adjust the first command when `workspace.root` or `logging.dir` differs from
-the checked-in `WORKFLOW.md`.
+Adjust the commands when `workspace.root` or `logging.dir` differs from the
+checked-in `WORKFLOW.md`.
 
 ## HTTP Server
 
@@ -69,36 +70,31 @@ turn count, last event, last message, workspace path, and token usage.
 
 ## Sessions
 
-Persisted agent session logs require VIK-11. When the Codex runtime is in use,
-builds that include VIK-11 append raw Codex app-server JSONL messages under:
+Codex app-server session traffic is emitted through tracing to the session log:
 
 ```text
-<workspace.root>/sessions/<issue-identifier>-<agent-session-id>.jsonl
+<logging.dir>/session.log.<date>
 ```
 
-The issue identifier is the human-facing key such as `VIK-16`. Filename
-components are sanitized to ASCII letters, numbers, `.`, `_`, and `-`; other
-characters become `_`.
+The default `logging.dir` is `<workspace.root>/logs`, but workflows can set a
+different directory.
 
-Find logs for one issue:
+Inspect session events:
 
 ```sh
-find "$HOME/code/vik-workspaces/sessions" \
-  -type f \
-  -name 'VIK-16-*.jsonl' \
-  -print
+jq . "$HOME/code/vik-workspaces/logs"/session.log.* | less
 ```
 
-Inspect one session:
+Session records include:
 
-```sh
-jq . "$HOME/code/vik-workspaces/sessions/<file>.jsonl" | less
-```
+- `agent`: currently `codex`.
+- `event`: Codex method name, or the correlated request method for RPC
+  responses.
+- `params`: structured JSON from request params, response result, or error.
+- `issue_id` and `issue_identifier`.
+- `session_id`, `thread_id`, and `turn_id` when known or derivable from the
+  message.
+- `rpc_id` for JSON-RPC request/response correlation.
 
-With the Codex runtime, session files contain raw Codex app-server messages for
-the session. They do not replace Vik daemon logs, HTTP snapshots, or tracker
-workpad notes.
-
-For builds before VIK-11, use `/api/v1/state`, `/api/v1/{issue_identifier}`,
-and JSON daemon logs only. Durable per-session JSONL files are unavailable in
-those builds.
+Service events stay in `<logging.dir>/service.log.<date>` and do not include
+Codex message payloads.

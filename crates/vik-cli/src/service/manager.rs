@@ -15,8 +15,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use inquire::Confirm;
 use serde::{Deserialize, Serialize};
 use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::{
-    EnvFilter, Layer, filter::LevelFilter, layer::SubscriberExt, util::SubscriberInitExt,
+    EnvFilter, Layer, layer::SubscriberExt, util::SubscriberInitExt,
 };
 use vik_agent::LocalAgentWorker;
 use vik_http::{HttpState, serve};
@@ -34,6 +35,14 @@ pub struct ServiceManager {
     state_path: PathBuf,
     log_dir: PathBuf,
     session_dir: PathBuf,
+}
+
+fn is_session_log_target(target: &str) -> bool {
+    target == vik_agent::SESSION_LOG_TARGET
+}
+
+fn is_service_log_target(target: &str) -> bool {
+    !is_session_log_target(target)
 }
 
 impl ServiceManager {
@@ -313,35 +322,44 @@ impl ServiceManager {
 
     fn init_logging(&self, log_dir: &Path) -> Result<(WorkerGuard, WorkerGuard), Box<dyn Error>> {
         fs::create_dir_all(log_dir)?;
-        let file_appender = tracing_appender::rolling::daily(log_dir, "vik.log");
-        let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
-        let error_file_appender = tracing_appender::rolling::daily(log_dir, "vik-error.log");
+        let service_appender = tracing_appender::rolling::daily(log_dir, "service.log");
+        let (service_writer, service_guard) = tracing_appender::non_blocking(service_appender);
+        let error_file_appender = tracing_appender::rolling::daily(log_dir, "service-error.log");
         let (error_file_writer, error_guard) = tracing_appender::non_blocking(error_file_appender);
         let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
         let stdout_layer = tracing_subscriber::fmt::layer()
             .json()
             .with_current_span(false)
-            .with_span_list(false);
-        let file_layer = tracing_subscriber::fmt::layer()
-            .with_writer(file_writer)
+            .with_span_list(false)
+            .with_filter(filter_fn(|metadata| {
+                is_service_log_target(metadata.target())
+            }));
+        let service_layer = tracing_subscriber::fmt::layer()
+            .with_writer(service_writer)
             .json()
             .with_current_span(false)
-            .with_span_list(false);
+            .with_span_list(false)
+            .with_filter(filter_fn(|metadata| {
+                is_service_log_target(metadata.target())
+            }));
         let error_file_layer = tracing_subscriber::fmt::layer()
             .with_writer(error_file_writer)
             .json()
             .with_current_span(false)
             .with_span_list(false)
-            .with_filter(LevelFilter::ERROR);
+            .with_filter(filter_fn(|metadata| {
+                is_service_log_target(metadata.target())
+                    && *metadata.level() == tracing::Level::ERROR
+            }));
 
         tracing_subscriber::registry()
             .with(filter)
             .with(stdout_layer)
-            .with(file_layer)
+            .with(service_layer)
             .with(error_file_layer)
             .init();
-        Ok((guard, error_guard))
+        Ok((service_guard, error_guard))
     }
 
     fn load_dotenv_from_cwd(&self) -> Result<(), Box<dyn Error>> {

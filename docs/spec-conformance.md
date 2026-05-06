@@ -24,7 +24,9 @@ This document maps Vik draft v1 required behavior to this workspace.
 - Strict prompt rendering: `vik-workflow::render_prompt`.
 - Retry queue and backoff: `vik-orchestrator::failure_backoff_ms`.
 - Terminal/non-active reconciliation: `vik-orchestrator::Orchestrator`.
-- Structured logs: `tracing` events include issue/session fields where available.
+- Structured logs: `tracing` writes service and session categories. Session
+  records include `agent`, `event`, structured `params`, issue/session identity,
+  and RPC correlation fields.
 - Operator observability: JSON logs plus optional HTTP API in `vik-http`.
 
 Implemented tracker providers:

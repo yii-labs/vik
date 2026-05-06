@@ -11,7 +11,7 @@ use vik_workspace::WorkspaceManager;
 
 use crate::codex::command::codex_spawn_process_command;
 use crate::codex::events::agent_event;
-use crate::codex::session_log::{SessionLog, session_log_dir, session_log_path};
+use crate::codex::process::SessionLogContext;
 use crate::codex::tools::DynamicTools;
 use crate::codex::transport::{CodexTransportFactory, ProcessTransportFactory};
 use crate::error::AgentError;
@@ -20,7 +20,6 @@ use crate::runtime::AgentRuntime;
 mod command;
 mod events;
 mod process;
-mod session_log;
 mod tools;
 mod transport;
 
@@ -29,13 +28,24 @@ mod tests;
 
 const CONTINUATION_PROMPT: &str = "Continue working on this tracker issue. Check current issue state and proceed only if it is still active.";
 
-#[derive(Clone)]
 pub(crate) struct Codex<T>
 where
     T: IssueTracker,
 {
     tracker: Arc<T>,
     transport_factory: Arc<dyn CodexTransportFactory>,
+}
+
+impl<T> Clone for Codex<T>
+where
+    T: IssueTracker,
+{
+    fn clone(&self) -> Self {
+        Self {
+            tracker: Arc::clone(&self.tracker),
+            transport_factory: Arc::clone(&self.transport_factory),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -162,7 +172,6 @@ where
         if !workspace_path.is_absolute() {
             return Err(AgentError::InvalidWorkspaceCwd);
         }
-        let session_log_dir = session_log_dir(session_workspace_root(workspace_path));
         let issue_identifier = issue.issue_identifier.clone();
         emit_lifecycle_event(
             &mut on_event,
@@ -175,6 +184,10 @@ where
             .transport_factory
             .spawn(&command, workspace_path, config, tools)
             .await?;
+        process.set_session_log_context(SessionLogContext::new(
+            issue.issue_id.clone(),
+            issue.issue_identifier.clone(),
+        ));
         emit_lifecycle_event(
             &mut on_event,
             &issue.issue_id,
@@ -226,6 +239,11 @@ where
                     "codex_turn_starting",
                     json!({ "thread_id": &thread_id, "turn_count": turn_count }),
                 );
+                process.set_session_log_context(SessionLogContext::for_thread(
+                    issue.issue_id.clone(),
+                    issue_identifier.clone(),
+                    thread_id.clone(),
+                ));
                 let turn_start = process
                     .turn_start(&thread_id, workspace_path, prompt, config)
                     .await?;
@@ -233,42 +251,12 @@ where
                 let mut live = AgentSession::new(thread_id.clone(), turn_id.clone());
                 live.turn_count = turn_count;
                 live.process_id = process.process_id();
-                let session_log_path =
-                    session_log_path(&session_log_dir, &issue_identifier, &live.session_id);
-                match SessionLog::open(session_log_path).await {
-                    Ok(mut session_log) => {
-                        for message in &turn_start.pre_response_messages {
-                            if message_belongs_to_turn(message, &turn_id) {
-                                if let Err(err) = session_log.append_message(message).await {
-                                    tracing::warn!(
-                                        path=%session_log.path().display(),
-                                        error=%err,
-                                        "codex_session_log_append outcome=failed"
-                                    );
-                                }
-                            } else {
-                                process.append_current_session_message(message).await;
-                            }
-                        }
-                        if let Err(err) = session_log.append_message(&turn_start.response).await {
-                            tracing::warn!(
-                                path=%session_log.path().display(),
-                                error=%err,
-                                "codex_session_log_append outcome=failed"
-                            );
-                        }
-                        process.set_session_log(Some(session_log));
-                    }
-                    Err(err) => {
-                        tracing::warn!(error=%err, "codex_session_log_open outcome=failed");
-                        for message in &turn_start.pre_response_messages {
-                            if !message_belongs_to_turn(message, &turn_id) {
-                                process.append_current_session_message(message).await;
-                            }
-                        }
-                        process.set_session_log(None);
-                    }
-                }
+                process.set_session_log_context(SessionLogContext::for_session(
+                    issue.issue_id.clone(),
+                    issue_identifier.clone(),
+                    thread_id.clone(),
+                    turn_id.clone(),
+                ));
                 on_event(agent_event(
                     issue.issue_id.clone(),
                     "session_started",
@@ -314,14 +302,12 @@ where
     }
 }
 
-fn session_workspace_root(workspace_path: &Path) -> &Path {
-    workspace_path.parent().unwrap_or(workspace_path)
-}
-
+#[cfg(test)]
 pub(crate) fn message_belongs_to_turn(message: &serde_json::Value, turn_id: &str) -> bool {
     message_turn_id(message).is_none_or(|message_turn_id| message_turn_id == turn_id)
 }
 
+#[cfg(test)]
 fn message_turn_id(message: &serde_json::Value) -> Option<&str> {
     message
         .pointer("/params/turn/id")

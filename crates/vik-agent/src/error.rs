@@ -25,6 +25,8 @@ pub enum AgentError {
     TurnCancelled,
     #[error("turn_input_required")]
     TurnInputRequired,
+    #[error("session_thread: {0}")]
+    SessionThread(String),
     #[error("workspace: {0}")]
     Workspace(#[from] WorkspaceError),
     #[error("workflow: {0}")]

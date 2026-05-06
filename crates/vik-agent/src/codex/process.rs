@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
@@ -7,13 +8,13 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::time;
-use vik_core::{AgentEvent, AgentSession};
+use vik_core::{AgentEvent, AgentSession, session_id};
 use vik_workflow::CodexConfig;
 
+use crate::SESSION_LOG_TARGET;
 use crate::codex::events::{
     agent_event, extract_rate_limits, extract_usage, summarize_message, truncate,
 };
-use crate::codex::session_log::SessionLog;
 use crate::codex::tools::DynamicTools;
 use crate::error::AgentError;
 
@@ -48,16 +49,31 @@ pub(crate) struct JsonlRpcProcess {
     stdin: ChildStdin,
     stdout: Lines<BufReader<ChildStdout>>,
     next_id: u64,
+    pending_methods: HashMap<String, String>,
     read_timeout: Duration,
     turn_timeout: Duration,
     tools: DynamicTools,
-    session_log: Option<SessionLog>,
+    session_log_context: SessionLogContext,
 }
 
 pub(crate) struct TurnStartResponse {
     pub(crate) turn_id: String,
-    pub(crate) response: Value,
-    pub(crate) pre_response_messages: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct SessionLogContext {
+    issue_id: String,
+    issue_identifier: String,
+    session_id: Option<String>,
+    thread_id: Option<String>,
+    turn_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SessionLogFields {
+    pub(crate) event: String,
+    pub(crate) params: Value,
+    pub(crate) rpc_id: Option<String>,
 }
 
 impl JsonlRpcProcess {
@@ -74,6 +90,7 @@ impl JsonlRpcProcess {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        process.kill_on_drop(true);
         let mut child = process.spawn().map_err(|err| AgentError::ProcessSpawn {
             program: command.program().to_string(),
             reason: err.to_string(),
@@ -93,10 +110,11 @@ impl JsonlRpcProcess {
             stdin,
             stdout: BufReader::new(stdout).lines(),
             next_id: 1,
+            pending_methods: HashMap::new(),
             read_timeout: Duration::from_millis(5_000),
             turn_timeout: Duration::from_millis(3_600_000),
             tools,
-            session_log: None,
+            session_log_context: SessionLogContext::default(),
         })
     }
 
@@ -149,7 +167,7 @@ impl JsonlRpcProcess {
         config: &CodexConfig,
     ) -> Result<TurnStartResponse, AgentError> {
         let params = turn_start_params(thread_id, cwd, prompt, config);
-        let (response, pre_response_messages) = self
+        let (response, _) = self
             .request_message_collecting_unmatched("turn/start", params)
             .await?;
         let turn_id = response
@@ -157,27 +175,24 @@ impl JsonlRpcProcess {
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
             .ok_or_else(|| AgentError::ResponseError("missing turn.id".to_string()))?;
-        Ok(TurnStartResponse {
-            turn_id,
-            response,
-            pre_response_messages,
-        })
+        Ok(TurnStartResponse { turn_id })
     }
 
-    pub(crate) fn set_session_log(&mut self, session_log: Option<SessionLog>) {
-        self.session_log = session_log;
+    pub(crate) fn set_session_log_context(&mut self, context: SessionLogContext) {
+        self.session_log_context = context;
     }
 
-    pub(crate) async fn append_current_session_message(&mut self, message: &Value) {
-        if let Some(log) = &mut self.session_log
-            && let Err(err) = log.append_message(message).await
-        {
-            tracing::warn!(
-                path=%log.path().display(),
-                error=%err,
-                "codex_session_log_append outcome=failed"
-            );
-        }
+    pub(crate) fn log_session_message(&self, direction: &'static str, message: &Value) {
+        let rpc_id = message.get("id").and_then(rpc_id_string);
+        let pending_method = rpc_id
+            .as_deref()
+            .and_then(|id| self.pending_methods.get(id).map(String::as_str));
+        log_session_message(
+            &self.session_log_context,
+            pending_method,
+            direction,
+            message,
+        );
     }
 
     pub(crate) async fn request(
@@ -211,11 +226,14 @@ impl JsonlRpcProcess {
         let id = self.next_id;
         self.next_id += 1;
         let request = json!({ "id": id, "method": method, "params": params });
+        self.pending_methods
+            .insert(id.to_string(), method.to_string());
         self.write_message(&request).await?;
         let mut unmatched_messages = Vec::new();
         loop {
             let message = self.read_message(self.read_timeout).await?;
             if message.get("id").and_then(Value::as_u64) == Some(id) {
+                self.pending_methods.remove(&id.to_string());
                 if let Some(error) = message.get("error") {
                     return Err(AgentError::ResponseError(error.to_string()));
                 }
@@ -223,8 +241,6 @@ impl JsonlRpcProcess {
             }
             if collect_unmatched {
                 unmatched_messages.push(message.clone());
-            } else {
-                self.append_current_session_message(&message).await;
             }
             if message.get("id").is_some() && message.get("method").is_some() {
                 self.respond_to_server_request(&message).await?;
@@ -248,7 +264,6 @@ impl JsonlRpcProcess {
             }
             let timeout = deadline - now;
             let message = self.read_message(timeout).await?;
-            self.append_current_session_message(&message).await;
             if message.get("id").is_some() && message.get("method").is_some() {
                 self.respond_to_server_request(&message).await?;
                 continue;
@@ -314,7 +329,12 @@ impl JsonlRpcProcess {
                 | "mcpServer/elicitation/request"
                 | "account/chatgptAuthTokens/refresh"
         ) {
-            return self
+            let rpc_id = rpc_id_string(&id);
+            if let Some(rpc_id) = &rpc_id {
+                self.pending_methods
+                    .insert(rpc_id.clone(), method.to_string());
+            }
+            let result = self
                 .write_message(&json!({
                     "id": id,
                     "error": {
@@ -323,6 +343,10 @@ impl JsonlRpcProcess {
                     }
                 }))
                 .await;
+            if let Some(rpc_id) = rpc_id {
+                self.pending_methods.remove(&rpc_id);
+            }
+            return result;
         }
         let result = match method {
             "item/commandExecution/requestApproval" => json!({ "decision": "acceptForSession" }),
@@ -337,8 +361,18 @@ impl JsonlRpcProcess {
             }
             _ => json!({}),
         };
-        self.write_message(&json!({ "id": id, "result": result }))
-            .await
+        let rpc_id = rpc_id_string(&id);
+        if let Some(rpc_id) = &rpc_id {
+            self.pending_methods
+                .insert(rpc_id.clone(), method.to_string());
+        }
+        let result = self
+            .write_message(&json!({ "id": id, "result": result }))
+            .await;
+        if let Some(rpc_id) = rpc_id {
+            self.pending_methods.remove(&rpc_id);
+        }
+        result
     }
 
     async fn write_message(&mut self, message: &Value) -> Result<(), AgentError> {
@@ -348,7 +382,9 @@ impl JsonlRpcProcess {
         self.stdin
             .write_all(&line)
             .await
-            .map_err(|err| AgentError::ResponseError(err.to_string()))
+            .map_err(|err| AgentError::ResponseError(err.to_string()))?;
+        self.log_session_message("sent", message);
+        Ok(())
     }
 
     async fn read_message(&mut self, timeout: Duration) -> Result<Value, AgentError> {
@@ -357,8 +393,170 @@ impl JsonlRpcProcess {
             .map_err(|_| AgentError::ResponseTimeout)?
             .map_err(|err| AgentError::ResponseError(err.to_string()))?
             .ok_or(AgentError::PortExit)?;
-        serde_json::from_str(&line).map_err(|err| AgentError::ResponseError(err.to_string()))
+        let message = serde_json::from_str(&line)
+            .map_err(|err| AgentError::ResponseError(err.to_string()))?;
+        self.log_session_message("received", &message);
+        Ok(message)
     }
+}
+
+impl SessionLogContext {
+    pub(crate) fn new(issue_id: impl Into<String>, issue_identifier: impl Into<String>) -> Self {
+        Self {
+            issue_id: issue_id.into(),
+            issue_identifier: issue_identifier.into(),
+            session_id: None,
+            thread_id: None,
+            turn_id: None,
+        }
+    }
+
+    pub(crate) fn for_session(
+        issue_id: impl Into<String>,
+        issue_identifier: impl Into<String>,
+        thread_id: impl Into<String>,
+        turn_id: impl Into<String>,
+    ) -> Self {
+        let thread_id = thread_id.into();
+        let turn_id = turn_id.into();
+        Self {
+            issue_id: issue_id.into(),
+            issue_identifier: issue_identifier.into(),
+            session_id: Some(session_id(&thread_id, &turn_id)),
+            thread_id: Some(thread_id),
+            turn_id: Some(turn_id),
+        }
+    }
+
+    pub(crate) fn for_thread(
+        issue_id: impl Into<String>,
+        issue_identifier: impl Into<String>,
+        thread_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            issue_id: issue_id.into(),
+            issue_identifier: issue_identifier.into(),
+            session_id: None,
+            thread_id: Some(thread_id.into()),
+            turn_id: None,
+        }
+    }
+
+    pub(crate) fn identity_for<'a>(&'a self, message: &'a Value) -> SessionLogIdentity {
+        let thread_id = self
+            .thread_id
+            .as_deref()
+            .or_else(|| message_thread_id(message));
+        let turn_id = self.turn_id.as_deref().or_else(|| message_turn_id(message));
+        let session_id = self
+            .session_id
+            .as_deref()
+            .map(ToOwned::to_owned)
+            .or_else(|| {
+                thread_id
+                    .zip(turn_id)
+                    .map(|(thread_id, turn_id)| session_id(thread_id, turn_id))
+            });
+        SessionLogIdentity {
+            issue_id: self.issue_id.clone(),
+            issue_identifier: self.issue_identifier.clone(),
+            session_id: session_id.unwrap_or_default(),
+            thread_id: thread_id.unwrap_or_default().to_string(),
+            turn_id: turn_id.unwrap_or_default().to_string(),
+        }
+    }
+}
+
+pub(crate) struct SessionLogIdentity {
+    pub(crate) issue_id: String,
+    pub(crate) issue_identifier: String,
+    pub(crate) session_id: String,
+    pub(crate) thread_id: String,
+    pub(crate) turn_id: String,
+}
+
+fn log_session_message(
+    context: &SessionLogContext,
+    pending_method: Option<&str>,
+    direction: &'static str,
+    message: &Value,
+) {
+    let fields = session_log_fields(message, pending_method);
+    let identity = context.identity_for(message);
+    let rpc_id = fields.rpc_id.as_deref().unwrap_or_default();
+    let params_json = fields.params.to_string();
+    tracing::info!(
+        target: SESSION_LOG_TARGET,
+        category = "session",
+        agent = "codex",
+        direction,
+        event = %fields.event,
+        params_json = %params_json,
+        issue_id = %identity.issue_id,
+        issue_identifier = %identity.issue_identifier,
+        session_id = %identity.session_id,
+        thread_id = %identity.thread_id,
+        turn_id = %identity.turn_id,
+        rpc_id,
+        "agent_session_message"
+    );
+}
+
+pub(crate) fn session_log_fields(
+    message: &Value,
+    pending_method: Option<&str>,
+) -> SessionLogFields {
+    let event = message
+        .get("method")
+        .and_then(Value::as_str)
+        .or(pending_method)
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| {
+            if message.get("error").is_some() {
+                "rpc_error".to_string()
+            } else if message.get("result").is_some() {
+                "rpc_response".to_string()
+            } else {
+                "message".to_string()
+            }
+        });
+    let params = message
+        .get("params")
+        .or_else(|| message.get("result"))
+        .or_else(|| message.get("error"))
+        .cloned()
+        .unwrap_or_else(|| message.clone());
+
+    SessionLogFields {
+        event,
+        params,
+        rpc_id: message.get("id").and_then(rpc_id_string),
+    }
+}
+
+fn rpc_id_string(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .map(ToOwned::to_owned)
+        .or_else(|| value.as_u64().map(|id| id.to_string()))
+}
+
+fn message_thread_id(message: &Value) -> Option<&str> {
+    message
+        .pointer("/params/threadId")
+        .or_else(|| message.pointer("/params/thread/id"))
+        .or_else(|| message.pointer("/result/threadId"))
+        .or_else(|| message.pointer("/result/thread/id"))
+        .and_then(Value::as_str)
+}
+
+fn message_turn_id(message: &Value) -> Option<&str> {
+    message
+        .pointer("/params/turn/id")
+        .or_else(|| message.pointer("/params/turnId"))
+        .or_else(|| message.pointer("/result/turn/id"))
+        .or_else(|| message.pointer("/result/turnId"))
+        .and_then(Value::as_str)
 }
 
 pub(crate) fn thread_start_params(

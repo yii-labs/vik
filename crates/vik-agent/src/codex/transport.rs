@@ -1,12 +1,12 @@
 use std::path::Path;
 
 use async_trait::async_trait;
-use serde_json::Value;
 use vik_core::{AgentEvent, AgentSession};
 use vik_workflow::CodexConfig;
 
-use crate::codex::process::{JsonlRpcProcess, ProcessCommand, TurnStartResponse};
-use crate::codex::session_log::SessionLog;
+use crate::codex::process::{
+    JsonlRpcProcess, ProcessCommand, SessionLogContext, TurnStartResponse,
+};
 use crate::codex::tools::DynamicTools;
 use crate::error::AgentError;
 
@@ -44,9 +44,7 @@ pub(crate) trait CodexTransport: Send {
         config: &CodexConfig,
     ) -> Result<TurnStartResponse, AgentError>;
 
-    fn set_session_log(&mut self, session_log: Option<SessionLog>);
-
-    async fn append_current_session_message(&mut self, message: &Value);
+    fn set_session_log_context(&mut self, context: SessionLogContext);
 
     async fn wait_for_turn(
         &mut self,
@@ -108,12 +106,8 @@ impl CodexTransport for JsonlRpcProcess {
         JsonlRpcProcess::turn_start(self, thread_id, cwd, prompt, config).await
     }
 
-    fn set_session_log(&mut self, session_log: Option<SessionLog>) {
-        JsonlRpcProcess::set_session_log(self, session_log);
-    }
-
-    async fn append_current_session_message(&mut self, message: &Value) {
-        JsonlRpcProcess::append_current_session_message(self, message).await;
+    fn set_session_log_context(&mut self, context: SessionLogContext) {
+        JsonlRpcProcess::set_session_log_context(self, context);
     }
 
     async fn wait_for_turn(
