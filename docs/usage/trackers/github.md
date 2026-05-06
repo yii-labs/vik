@@ -36,7 +36,7 @@ Set a token with repository issue access:
 
 ```sh
 export GH_TOKEN=github_pat_xxx
-vik check ./WORKFLOW.md
+vik doctor ./WORKFLOW.md
 ```
 
 For private repositories, grant at least repository metadata read access and

@@ -24,9 +24,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Validate Vik workflow config
-        env:
-          LINEAR_API_KEY: ci-placeholder
-        run: cargo run --locked -p vik-cli -- check ./WORKFLOW.md
+        run: cargo run --locked -p vik-cli -- doctor ./WORKFLOW.md
 
   rust:
     name: Rust (${{ matrix.os }})

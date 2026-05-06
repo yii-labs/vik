@@ -33,19 +33,15 @@ workspace:
   root: /vik-workspace
 ```
 
-## Config Check
+## Doctor
 
-Pass required secrets as environment variables. Docker does not copy local
-config files unless you mount them. Use `LINEAR_API_KEY` for a Linear tracker or
-`GH_TOKEN`/`GITHUB_TOKEN` for a GitHub tracker.
+Run local workflow diagnostics without secrets. Missing credentials and auth are
+reported as warnings; malformed config is reported as an error.
 
 ```sh
 docker run --rm \
-  --env LINEAR_API_KEY \
-  --env GH_TOKEN \
-  --env OPENAI_API_KEY \
   -v "$PWD:/vik-workspace" \
-  vik:local vik check
+  vik:local vik doctor
 ```
 
 ## Run Daemon
@@ -84,15 +80,13 @@ docker run --rm \
 
 ## GitHub Auth
 
-Token auth is simplest in Docker:
+Token auth is simplest in Docker for daemon runs. It is not required for
+`vik doctor`:
 
 ```sh
 docker run --rm \
-  --env GH_TOKEN \
-  --env LINEAR_API_KEY \
-  --env OPENAI_API_KEY \
   -v "$PWD:/vik-workspace" \
-  vik:local vik check
+  vik:local vik doctor
 ```
 
 If `WORKFLOW.md` uses an SSH clone hook, also mount SSH credentials or change
@@ -111,11 +105,8 @@ owner, pass a matching user:
 
 ```sh
 docker run --rm --user "$(id -u):$(id -g)" \
-  --env LINEAR_API_KEY \
-  --env GH_TOKEN \
-  --env OPENAI_API_KEY \
   -v "$PWD:/vik-workspace" \
-  vik:local vik check
+  vik:local vik doctor
 ```
 
 `/home/vik`, `CODEX_HOME`, `GH_CONFIG_DIR`, and `/vik-workspace` are writable in

@@ -1,7 +1,7 @@
 use clap::Parser;
 
-mod check;
 mod command;
+mod doctor;
 mod env;
 mod service;
 

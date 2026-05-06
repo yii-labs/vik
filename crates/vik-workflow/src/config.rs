@@ -99,6 +99,69 @@ impl CodexConfig {
         let command = self.command.trim();
         find_shell_token_start(command, "app-server").map(|index| command.split_at(index))
     }
+
+    pub fn command_program(&self) -> Option<String> {
+        first_shell_token(&self.command)
+    }
+}
+
+pub(crate) fn first_shell_token(command: &str) -> Option<String> {
+    let mut token = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+    let mut started = false;
+
+    for ch in command.trim().chars() {
+        if escaped {
+            token.push(ch);
+            escaped = false;
+            started = true;
+            continue;
+        }
+
+        match quote {
+            Some('\'') => {
+                if ch == '\'' {
+                    quote = None;
+                } else {
+                    token.push(ch);
+                    started = true;
+                }
+            }
+            Some('"') => {
+                if ch == '"' {
+                    quote = None;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else {
+                    token.push(ch);
+                    started = true;
+                }
+            }
+            Some(_) => unreachable!(),
+            None => {
+                if ch.is_whitespace() {
+                    if started {
+                        return Some(token);
+                    }
+                } else if ch == '\'' || ch == '"' {
+                    quote = Some(ch);
+                    started = true;
+                } else if ch == '\\' {
+                    escaped = true;
+                    started = true;
+                } else {
+                    token.push(ch);
+                    started = true;
+                }
+            }
+        }
+    }
+
+    if escaped {
+        token.push('\\');
+    }
+    started.then_some(token)
 }
 
 fn find_shell_token_start(command: &str, needle: &str) -> Option<usize> {
@@ -321,6 +384,10 @@ impl ServiceConfig {
 
     pub fn validate_for_dispatch(&self) -> Result<(), WorkflowError> {
         self.tracker.validate()?;
+        self.validate_non_tracker_config()
+    }
+
+    pub(crate) fn validate_non_tracker_config(&self) -> Result<(), WorkflowError> {
         if self.polling.interval_ms == 0 {
             return Err(WorkflowError::InvalidConfig(
                 "polling.interval_ms must be positive".to_string(),
@@ -332,7 +399,7 @@ impl ServiceConfig {
         Ok(())
     }
 
-    fn validate_codex_config(&self) -> Result<(), WorkflowError> {
+    pub(crate) fn validate_codex_config(&self) -> Result<(), WorkflowError> {
         if self.codex.command.trim().is_empty() {
             return Err(WorkflowError::InvalidConfig(
                 "codex.command is empty".to_string(),

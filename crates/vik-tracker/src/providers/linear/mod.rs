@@ -39,15 +39,27 @@ impl LinearTrackerConfig {
         env::var("LINEAR_API_KEY").ok()
     }
 
+    pub fn api_key_env_names() -> &'static [&'static str] {
+        &["LINEAR_API_KEY"]
+    }
+
     pub fn validate(&self) -> Result<(), TrackerConfigError> {
         if self.api_key.trim().is_empty() {
             return Err(TrackerConfigError::MissingApiKey);
         }
+        self.validate_without_api_key()
+    }
+
+    pub fn validate_without_api_key(&self) -> Result<(), TrackerConfigError> {
         if self.project_slug.trim().is_empty() {
             Err(TrackerConfigError::MissingProjectSlug)
         } else {
             Ok(())
         }
+    }
+
+    pub fn has_api_key(&self) -> bool {
+        !self.api_key.trim().is_empty()
     }
 }
 

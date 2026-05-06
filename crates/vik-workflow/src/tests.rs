@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 
@@ -255,6 +256,82 @@ fn rejects_model_fields_without_app_server_command() {
 }
 
 #[test]
+fn diagnosis_reports_missing_linear_key_as_warning() {
+    let def = parse_workflow_content(
+        PathBuf::from("WORKFLOW.md"),
+        "---\ntracker:\n  kind: linear\n  api_key: \"\"\n  project_slug: proj\nworkspace:\n  root: work\nhooks:\n  after_create: |\n    git clone git@github.com:yii-labs/vik .\ncodex:\n  command: codex app-server\n---\nBody",
+    )
+    .unwrap();
+    let config = ServiceConfig::from_definition(&def).unwrap();
+    let environment = MockDiagnoseEnvironment::new()
+        .with_env("GH_TOKEN")
+        .with_commands(["codex", "gh", "git"])
+        .with_success("codex", ["login", "status"]);
+
+    let diagnoses = config.diagnose(&environment);
+
+    assert!(!diagnoses.has_errors());
+    assert_diagnosis(&diagnoses, "config.tracker", DiagnosisSeverity::Passed);
+    assert_diagnosis(
+        &diagnoses,
+        "env.tracker_api_key",
+        DiagnosisSeverity::Warning,
+    );
+    assert_diagnosis(&diagnoses, "command.codex", DiagnosisSeverity::Passed);
+}
+
+#[test]
+fn diagnosis_reports_config_shape_errors_as_errors() {
+    let def = parse_workflow_content(
+        PathBuf::from("WORKFLOW.md"),
+        "---\ntracker:\n  kind: github\n  api_key: \"\"\n  repository: yii-labs\ncodex:\n  command: codex app-server\n---\nBody",
+    )
+    .unwrap();
+    let config = ServiceConfig::from_definition(&def).unwrap();
+    let environment = MockDiagnoseEnvironment::new().with_commands(["codex", "gh", "git"]);
+
+    let diagnoses = config.diagnose(&environment);
+
+    assert!(diagnoses.has_errors());
+    assert_diagnosis(&diagnoses, "config.tracker", DiagnosisSeverity::Error);
+    assert_diagnosis(
+        &diagnoses,
+        "env.tracker_api_key",
+        DiagnosisSeverity::Warning,
+    );
+}
+
+#[test]
+fn diagnosis_checks_command_authentication() {
+    let def = parse_workflow_content(
+        PathBuf::from("WORKFLOW.md"),
+        "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\ncodex:\n  command: codex app-server\n---\nBody",
+    )
+    .unwrap();
+    let config = ServiceConfig::from_definition(&def).unwrap();
+    let environment = MockDiagnoseEnvironment::new().with_commands(["codex", "gh", "git"]);
+
+    let diagnoses = config.diagnose(&environment);
+
+    assert!(!diagnoses.has_errors());
+    assert_diagnosis(&diagnoses, "auth.codex", DiagnosisSeverity::Warning);
+    assert_diagnosis(&diagnoses, "auth.github", DiagnosisSeverity::Warning);
+}
+
+#[test]
+fn dispatch_validation_still_requires_tracker_api_key() {
+    let def = parse_workflow_content(
+        PathBuf::from("WORKFLOW.md"),
+        "---\ntracker:\n  kind: linear\n  api_key: \"\"\n  project_slug: proj\n---\nBody",
+    )
+    .unwrap();
+    let config = ServiceConfig::from_definition(&def).unwrap();
+    let err = config.validate_for_dispatch().unwrap_err();
+
+    assert!(matches!(err, WorkflowError::MissingTrackerApiKey));
+}
+
+#[test]
 fn strict_prompt_render_fails_on_unknown() {
     let def = WorkflowDefinition {
         path: PathBuf::from("WORKFLOW.md"),
@@ -274,4 +351,71 @@ fn prompt_renders_issue_and_attempt() {
     };
     let rendered = render_prompt(&def, &sample_issue(), Some(2)).unwrap();
     assert_eq!(rendered, "ABC-1 attempt=2");
+}
+
+#[derive(Debug, Default)]
+struct MockDiagnoseEnvironment {
+    env: BTreeSet<String>,
+    commands: BTreeSet<String>,
+    successes: BTreeSet<String>,
+}
+
+impl MockDiagnoseEnvironment {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn with_env(mut self, name: impl Into<String>) -> Self {
+        self.env.insert(name.into());
+        self
+    }
+
+    fn with_commands(mut self, commands: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.commands.extend(commands.into_iter().map(Into::into));
+        self
+    }
+
+    fn with_success(
+        mut self,
+        program: impl Into<String>,
+        args: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.successes.insert(command_key(program, args));
+        self
+    }
+}
+
+impl DiagnoseEnvironment for MockDiagnoseEnvironment {
+    fn env_var_is_set(&self, name: &str) -> bool {
+        self.env.contains(name)
+    }
+
+    fn command_exists(&self, command: &str) -> bool {
+        self.commands.contains(command)
+    }
+
+    fn command_succeeds(&self, program: &str, args: &[&str]) -> bool {
+        self.successes
+            .contains(&command_key(program, args.iter().copied()))
+    }
+}
+
+fn command_key(
+    program: impl Into<String>,
+    args: impl IntoIterator<Item = impl Into<String>>,
+) -> String {
+    let mut key = program.into();
+    for arg in args {
+        key.push('\0');
+        key.push_str(&arg.into());
+    }
+    key
+}
+
+fn assert_diagnosis(diagnoses: &Diagnoses, name: &str, severity: DiagnosisSeverity) {
+    let diagnosis = diagnoses
+        .iter()
+        .find(|diagnosis| diagnosis.name == name)
+        .unwrap_or_else(|| panic!("missing diagnosis {name} in {diagnoses:?}"));
+    assert_eq!(diagnosis.severity, severity);
 }

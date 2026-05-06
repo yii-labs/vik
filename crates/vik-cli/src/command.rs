@@ -2,7 +2,7 @@ use std::error::Error;
 
 use clap::{Parser, Subcommand};
 
-use crate::check;
+use crate::doctor;
 use crate::service;
 
 #[derive(Debug, Parser)]
@@ -24,8 +24,8 @@ pub(crate) struct Args {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Validate workflow and exit.
-    Check,
+    /// Diagnose workflow config and local runtime readiness.
+    Doctor,
     /// Start Vik coding-agent orchestration.
     Start(service::StartArgs),
     /// Manage Vik as a detached local service.
@@ -34,7 +34,7 @@ enum Command {
 
 pub(crate) async fn run(args: Args) -> Result<(), Box<dyn Error>> {
     match args.command {
-        Command::Check => check::run(args.workflow),
+        Command::Doctor => doctor::run(args.workflow),
         Command::Start(start_args) => service::start(args.workflow, start_args).await,
         Command::Service(service_args) => service::run(args.workflow, service_args).await,
     }
@@ -50,24 +50,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn check_subcommand_accepts_workflow_path() {
-        let args = Args::try_parse_from(["vik", "check", "./custom.md"]).unwrap();
+    fn doctor_subcommand_accepts_workflow_path() {
+        let args = Args::try_parse_from(["vik", "doctor", "./custom.md"]).unwrap();
 
         match args.command {
-            Command::Check => {
+            Command::Doctor => {
                 assert_eq!(args.workflow, Some(PathBuf::from("./custom.md")));
             }
-            other => panic!("expected check subcommand, got {other:?}"),
+            other => panic!("expected doctor subcommand, got {other:?}"),
         }
     }
 
     #[test]
-    fn check_subcommand_allows_default_workflow_path() {
-        let args = Args::try_parse_from(["vik", "check"]).unwrap();
+    fn doctor_subcommand_allows_default_workflow_path() {
+        let args = Args::try_parse_from(["vik", "doctor"]).unwrap();
 
         match args.command {
-            Command::Check => assert_eq!(args.workflow, None),
-            other => panic!("expected check subcommand, got {other:?}"),
+            Command::Doctor => assert_eq!(args.workflow, None),
+            other => panic!("expected doctor subcommand, got {other:?}"),
         }
     }
 
@@ -79,13 +79,21 @@ mod tests {
     }
 
     #[test]
-    fn root_help_shows_check_command_not_legacy_flag() {
+    fn check_subcommand_is_rejected() {
+        let err = Args::try_parse_from(["vik", "check"]).unwrap_err();
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingSubcommand);
+    }
+
+    #[test]
+    fn root_help_shows_doctor_command_not_check() {
         let help = Args::command().render_help().to_string();
 
         assert!(help.contains("start"));
-        assert!(help.contains("check"));
+        assert!(help.contains("doctor"));
         assert!(help.contains("Start Vik coding-agent orchestration"));
-        assert!(help.contains("Validate workflow and exit"));
+        assert!(help.contains("Diagnose workflow config and local runtime readiness"));
+        assert!(!help.contains("check"));
         assert!(!help.contains("--check"));
     }
 

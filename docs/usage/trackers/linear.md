@@ -35,7 +35,7 @@ Set a Linear personal API key without printing or committing it:
 
 ```sh
 export LINEAR_API_KEY=lin_api_xxx
-vik check ./WORKFLOW.md
+vik doctor ./WORKFLOW.md
 ```
 
 When `tracker.kind` is `linear`, Vik's app-server dynamic tools route issue
