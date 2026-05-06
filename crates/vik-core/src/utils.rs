@@ -94,7 +94,7 @@ pub fn sanitize_workspace_key(identifier: &str) -> String {
 
 pub fn session_id(thread_id: &str, turn_id: &str) -> String {
     if is_uuid_like(thread_id) && is_uuid_like(turn_id) {
-        return turn_id.to_string();
+        return thread_id.to_string();
     }
 
     format!("{thread_id}-{turn_id}")
@@ -177,11 +177,11 @@ mod tests {
     }
 
     #[test]
-    fn session_id_uses_turn_uuid_for_codex_uuid_ids() {
+    fn session_id_uses_thread_uuid_for_codex_uuid_ids() {
         let thread_id = "019dfab1-fd48-78c0-9b40-cf507bd19842";
         let turn_id = "019dfab1-fd58-7a21-8285-58d94bbb614f";
 
-        assert_eq!(session_id(thread_id, turn_id), turn_id);
+        assert_eq!(session_id(thread_id, turn_id), thread_id);
     }
 
     #[test]
@@ -210,12 +210,12 @@ mod tests {
     }
 
     #[test]
-    fn agent_session_uses_turn_uuid_for_codex_uuid_ids() {
+    fn agent_session_uses_thread_uuid_for_codex_uuid_ids() {
         let thread_id = "019dfab1-fd48-78c0-9b40-cf507bd19842";
         let turn_id = "019dfab1-fd58-7a21-8285-58d94bbb614f";
         let session = AgentSession::new(thread_id, turn_id);
 
-        assert_eq!(session.session_id, turn_id);
+        assert_eq!(session.session_id, thread_id);
         assert_eq!(session.thread_id, thread_id);
         assert_eq!(session.turn_id, turn_id);
     }
