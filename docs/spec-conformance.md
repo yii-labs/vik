@@ -31,14 +31,13 @@ Implemented tracker providers:
 
 - Linear.
 - GitHub.
-- Feishu through `lark-cli` and one configured Base table.
 
 Not implemented:
 
 - SSH worker extension.
 - Durable retry/session persistence.
 - Non-Codex runtimes.
-- Trackers beyond Linear, GitHub, and Feishu.
+- Trackers beyond Linear and GitHub.
 
 ## Production Validation
 

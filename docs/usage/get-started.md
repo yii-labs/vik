@@ -48,16 +48,13 @@ workspaces, how to clone the repo, and how to launch Codex.
 2. Confirm `tracker.kind` is supported.
 3. For Linear, confirm `tracker.project_slug` matches the Linear project slug.
 4. For GitHub, confirm `tracker.repository` matches the `owner/name` repository.
-5. For Feishu, confirm `tracker.base_token` and `tracker.table_id` target the
-   intended Base table, and `tracker.view_id` targets the intended view when
-   one is configured.
-6. Confirm `tracker.active_states` contains every state Vik may claim.
-7. Confirm `tracker.terminal_states` contains terminal states that should stop
+5. Confirm `tracker.active_states` contains every state Vik may claim.
+6. Confirm `tracker.terminal_states` contains terminal states that should stop
    tracking and trigger cleanup.
-8. Confirm `workspace.root` points to the directory created above.
-9. Confirm `hooks.after_create` clones this repo into the empty issue
+7. Confirm `workspace.root` points to the directory created above.
+8. Confirm `hooks.after_create` clones this repo into the empty issue
    workspace.
-10. Confirm `codex.command` launches `codex app-server`.
+9. Confirm `codex.command` launches `codex app-server`.
 
 Validate config parsing after connections are configured:
 
@@ -229,43 +226,6 @@ Steps:
 5. Stop with a Linear auth blocker if no personal API key can be created or
    provided.
 
-### Feishu
-
-Why: With `tracker.kind: feishu`, Vik reads candidate issues from one Feishu
-Base table and routes tracker tools through an authenticated `lark-cli`.
-
-Official links:
-
-- Lark CLI: <https://github.com/larksuite/cli>
-- Feishu Open Platform docs: <https://open.feishu.cn/document/>
-
-Steps:
-
-1. Install `lark-cli` and confirm it is on `PATH`:
-
-   ```sh
-   lark-cli --help
-   ```
-
-2. Confirm CLI auth without printing secrets:
-
-   ```sh
-   lark-cli auth status --verify
-   ```
-
-3. Configure the Base table:
-
-   ```yaml
-   tracker:
-     kind: feishu
-     base_token: P5wZbJ2OiaETjdseIUJczdXqnle
-     table_id: tblUqPdAnvAcPY6T
-     view_id: vewpBV8AK0
-   ```
-
-4. Stop with a Feishu auth blocker if `lark-cli auth status --verify` fails or
-   the configured table cannot be read.
-
 ## 4. Run
 
 1. Validate workflow config:
@@ -296,4 +256,3 @@ Steps:
 - [Observation](observation.md)
 - [Linear Tracker](trackers/linear.md)
 - [GitHub Tracker](trackers/github.md)
-- [Feishu Tracker](trackers/feishu.md)

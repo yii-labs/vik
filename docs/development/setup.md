@@ -6,8 +6,7 @@
 - Git.
 - GitHub CLI for PR work.
 - Codex CLI for local orchestration runs.
-- Linear API key, GitHub token, or authenticated Lark CLI profile for real
-  tracker runs.
+- Linear API key or GitHub token for real tracker runs.
 - Docker for image validation when touching Docker files.
 
 ## Clone
