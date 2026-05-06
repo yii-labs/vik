@@ -5,11 +5,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use vik_core::{Issue, IssueAttachment, IssueComment, IssueTracker, IssueUpdate, TrackerError};
 
-mod feishu;
 mod github;
 mod linear;
 
-pub use feishu::{FeishuFieldsMap, FeishuTrackerConfig};
 pub use github::GitHubTrackerConfig;
 pub use linear::LinearTrackerConfig;
 
@@ -25,14 +23,6 @@ pub enum TrackerConfigError {
     MissingRepository,
     #[error("invalid_tracker_repository: {0}")]
     InvalidRepository(String),
-    #[error("missing_tracker_base_token")]
-    MissingBaseToken,
-    #[error("missing_tracker_table_id")]
-    MissingTableId,
-    #[error("missing_tracker_cli_path")]
-    MissingCliPath,
-    #[error("invalid_tracker_cli_identity: {0}")]
-    InvalidCliIdentity(String),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,7 +45,6 @@ pub struct CommonTrackerConfig {
 pub enum TrackerKind {
     Linear(linear::LinearTrackerConfig),
     GitHub(github::GitHubTrackerConfig),
-    Feishu(Box<feishu::FeishuTrackerConfig>),
     Unsupported(String),
 }
 
@@ -64,7 +53,6 @@ impl TrackerKind {
         match self {
             Self::Linear(_) => "linear",
             Self::GitHub(_) => "github",
-            Self::Feishu(_) => "feishu",
             Self::Unsupported(kind) => kind,
         }
     }
@@ -88,13 +76,6 @@ impl TrackerConfig {
         Self {
             common,
             kind: TrackerKind::GitHub(provider),
-        }
-    }
-
-    pub fn feishu(common: CommonTrackerConfig, provider: feishu::FeishuTrackerConfig) -> Self {
-        Self {
-            common,
-            kind: TrackerKind::Feishu(Box::new(provider)),
         }
     }
 
@@ -135,18 +116,10 @@ impl TrackerConfig {
         }
     }
 
-    pub fn feishu_provider(&self) -> Option<&feishu::FeishuTrackerConfig> {
-        match &self.kind {
-            TrackerKind::Feishu(config) => Some(config.as_ref()),
-            _ => None,
-        }
-    }
-
     pub fn validate(&self) -> Result<(), TrackerConfigError> {
         match &self.kind {
             TrackerKind::Linear(config) => config.validate(),
             TrackerKind::GitHub(config) => config.validate(),
-            TrackerKind::Feishu(config) => config.validate(),
             TrackerKind::Unsupported(_) => Err(TrackerConfigError::UnsupportedTrackerKind),
         }
     }
@@ -197,28 +170,6 @@ impl TrackerClient {
                     filter.tags.clone(),
                 ));
                 Self::new(Box::new(github::GitHubClient::new(tracker_config)?))
-            }
-            TrackerKind::Feishu(provider) => {
-                let filter = config.filter();
-                let fields = feishu::FeishuIssueFields {
-                    title: provider.fields_map.title.clone(),
-                    description: provider.fields_map.description.clone(),
-                    state: provider.fields_map.state.clone(),
-                    labels: provider.fields_map.labels.clone(),
-                    comments: provider.fields_map.comments.clone(),
-                    pr_links: provider.fields_map.pr_links.clone(),
-                };
-                let tracker_config = feishu::FeishuClientConfig::new(
-                    &provider.cli_path,
-                    &provider.base_token,
-                    &provider.table_id,
-                    &provider.identity,
-                    config.active_states().to_vec(),
-                    fields,
-                )
-                .with_view_id(&provider.view_id)
-                .with_filter_tags(filter.tags.clone());
-                Self::new(Box::new(feishu::FeishuClient::new(tracker_config)?))
             }
             TrackerKind::Unsupported(_) => return Err(TrackerError::UnsupportedTrackerKind),
         };
@@ -342,18 +293,6 @@ mod tests {
     }
 
     #[test]
-    fn tracker_client_from_config_builds_feishu_client() {
-        let config = TrackerConfig::feishu(
-            common_config(),
-            feishu::FeishuTrackerConfig::new("base-token", "tbl123"),
-        );
-
-        let tracker = TrackerClient::from_config(&config);
-
-        assert!(tracker.is_ok(), "{tracker:?}");
-    }
-
-    #[test]
     fn tracker_client_from_config_rejects_missing_linear_api_key() {
         let config = TrackerConfig::linear(
             common_config(),
@@ -385,32 +324,6 @@ mod tests {
         assert!(matches!(
             tracker,
             Err(TrackerError::InvalidTrackerRepository(_))
-        ));
-    }
-
-    #[test]
-    fn tracker_client_from_config_rejects_missing_feishu_table_id() {
-        let config = TrackerConfig::feishu(
-            common_config(),
-            feishu::FeishuTrackerConfig::new("base-token", ""),
-        );
-
-        let tracker = TrackerClient::from_config(&config);
-
-        assert!(matches!(tracker, Err(TrackerError::MissingTrackerTableId)));
-    }
-
-    #[test]
-    fn tracker_client_from_config_rejects_invalid_feishu_identity() {
-        let mut provider = feishu::FeishuTrackerConfig::new("base-token", "tbl123");
-        provider.identity = "service".to_string();
-        let config = TrackerConfig::feishu(common_config(), provider);
-
-        let tracker = TrackerClient::from_config(&config);
-
-        assert!(matches!(
-            tracker,
-            Err(TrackerError::InvalidTrackerCliIdentity(identity)) if identity == "service"
         ));
     }
 

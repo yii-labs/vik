@@ -22,14 +22,6 @@ pub enum WorkflowError {
     MissingTrackerRepository,
     #[error("invalid_tracker_repository: {0}")]
     InvalidTrackerRepository(String),
-    #[error("missing_tracker_base_token")]
-    MissingTrackerBaseToken,
-    #[error("missing_tracker_table_id")]
-    MissingTrackerTableId,
-    #[error("missing_tracker_cli_path")]
-    MissingTrackerCliPath,
-    #[error("invalid_tracker_cli_identity: {0}")]
-    InvalidTrackerCliIdentity(String),
     #[error("invalid_config: {0}")]
     InvalidConfig(String),
 }
@@ -43,12 +35,6 @@ impl From<vik_tracker::TrackerConfigError> for WorkflowError {
             vik_tracker::TrackerConfigError::MissingRepository => Self::MissingTrackerRepository,
             vik_tracker::TrackerConfigError::InvalidRepository(repository) => {
                 Self::InvalidTrackerRepository(repository)
-            }
-            vik_tracker::TrackerConfigError::MissingBaseToken => Self::MissingTrackerBaseToken,
-            vik_tracker::TrackerConfigError::MissingTableId => Self::MissingTrackerTableId,
-            vik_tracker::TrackerConfigError::MissingCliPath => Self::MissingTrackerCliPath,
-            vik_tracker::TrackerConfigError::InvalidCliIdentity(identity) => {
-                Self::InvalidTrackerCliIdentity(identity)
             }
         }
     }
