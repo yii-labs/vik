@@ -35,13 +35,11 @@ fn with_session_log_subscriber_with_filter<R>(
     fs::create_dir_all(log_dir)?;
     repair_log_newline_boundaries(log_dir, "session.log")?;
     let session_appender = tracing_appender::rolling::daily(log_dir, "session.log");
-    let (session_writer, session_guard) = tracing_appender::non_blocking(session_appender);
-    let session_layer = SessionJsonLayer::new(session_writer, parent);
+    let session_layer = SessionJsonLayer::new(session_appender, parent);
     let subscriber = tracing_subscriber::registry()
         .with(filter)
         .with(session_layer);
     let result = tracing::subscriber::with_default(subscriber, run);
-    drop(session_guard);
     Ok(result)
 }
 
