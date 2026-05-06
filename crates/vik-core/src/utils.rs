@@ -190,6 +190,26 @@ mod tests {
     }
 
     #[test]
+    fn session_id_preserves_composite_when_only_thread_id_is_uuid() {
+        let thread_id = "019dfab1-fd48-78c0-9b40-cf507bd19842";
+
+        assert_eq!(
+            session_id(thread_id, "turn-2"),
+            format!("{thread_id}-turn-2")
+        );
+    }
+
+    #[test]
+    fn session_id_preserves_composite_when_only_turn_id_is_uuid() {
+        let turn_id = "019dfab1-fd58-7a21-8285-58d94bbb614f";
+
+        assert_eq!(
+            session_id("thread-1", turn_id),
+            format!("thread-1-{turn_id}")
+        );
+    }
+
+    #[test]
     fn agent_session_uses_turn_uuid_for_codex_uuid_ids() {
         let thread_id = "019dfab1-fd48-78c0-9b40-cf507bd19842";
         let turn_id = "019dfab1-fd58-7a21-8285-58d94bbb614f";
