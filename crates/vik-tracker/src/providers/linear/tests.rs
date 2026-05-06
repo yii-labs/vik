@@ -14,16 +14,16 @@ use super::{
 #[test]
 fn provider_config_owns_endpoint_key_and_validation() {
     let config = LinearTrackerConfig::new(
-        super::DEFAULT_LINEAR_ENDPOINT,
+        LinearTrackerConfig::default_endpoint(),
         "lin_api_key",
         "vik-08c9cf588aa7",
     );
 
-    assert_eq!(config.endpoint, super::DEFAULT_LINEAR_ENDPOINT);
+    assert_eq!(config.endpoint, LinearTrackerConfig::default_endpoint());
     assert_eq!(config.api_key, "lin_api_key");
     config.validate().unwrap();
 
-    let missing_key = LinearTrackerConfig::new(super::DEFAULT_LINEAR_ENDPOINT, "", "proj");
+    let missing_key = LinearTrackerConfig::new(LinearTrackerConfig::default_endpoint(), "", "proj");
     assert!(matches!(
         missing_key.validate(),
         Err(TrackerConfigError::MissingApiKey)

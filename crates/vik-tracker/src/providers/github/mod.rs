@@ -53,6 +53,4 @@ impl GitHubTrackerConfig {
     }
 }
 
-pub use client::{
-    DEFAULT_GITHUB_ENDPOINT, GitHubClient, GitHubClientConfig, GitHubIssueFilterConfig,
-};
+pub(super) use client::{GitHubClient, GitHubClientConfig, GitHubIssueFilterConfig};

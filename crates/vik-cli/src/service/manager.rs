@@ -17,13 +17,8 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 use vik_agent::LocalAgentWorker;
 use vik_http::{HttpState, serve};
 use vik_orchestrator::Orchestrator;
-use vik_tracker::{
-    GitHubClient, GitHubClientConfig, GitHubIssueFilterConfig, LinearClient, LinearClientConfig,
-    LinearIssueFilterConfig, TrackerClient, TrackerKind,
-};
-use vik_workflow::{
-    ServiceConfig, WorkflowReloader, load_effective_workflow, select_workflow_path,
-};
+use vik_tracker::TrackerClient;
+use vik_workflow::{WorkflowReloader, load_effective_workflow, select_workflow_path};
 
 use crate::service::{LogsArgs, RunArgs, StartArgs};
 
@@ -294,7 +289,7 @@ impl ServiceManager {
         let _log_guard = self.init_logging(&log_dir)?;
         tracing::info!(log_dir=%log_dir.display(), "logging outcome=started");
 
-        let tracker = Arc::new(build_tracker(&loaded.config)?);
+        let tracker = Arc::new(TrackerClient::from_config(&loaded.config.tracker)?);
         let worker = Arc::new(LocalAgentWorker::new(Arc::clone(&tracker)));
         let orchestrator = Arc::new(Orchestrator::new(Arc::clone(&tracker), worker, reloader));
 
@@ -690,46 +685,6 @@ impl Default for RunArgs {
             host: IpAddr::V4(Ipv4Addr::LOCALHOST),
         }
     }
-}
-
-fn build_tracker(config: &ServiceConfig) -> Result<TrackerClient, Box<dyn Error>> {
-    let tracker = match &config.tracker.kind {
-        TrackerKind::Linear(provider) => {
-            let common = &config.tracker.common;
-            let filter = config.tracker.filter();
-            let tracker_config = LinearClientConfig::new(
-                &provider.endpoint,
-                &provider.api_key,
-                &provider.project_slug,
-                common.active_states.clone(),
-            )
-            .with_filter(LinearIssueFilterConfig::new(
-                filter.assignees.clone(),
-                filter.tags.clone(),
-            ));
-            TrackerClient::new(Box::new(LinearClient::new(tracker_config)?))
-        }
-        TrackerKind::GitHub(provider) => {
-            let common = &config.tracker.common;
-            let filter = config.tracker.filter();
-            let tracker_config = GitHubClientConfig::new(
-                &provider.endpoint,
-                &provider.api_key,
-                &provider.repository,
-                common.active_states.clone(),
-                common.terminal_states.clone(),
-            )
-            .with_filter(GitHubIssueFilterConfig::new(
-                filter.assignees.clone(),
-                filter.tags.clone(),
-            ));
-            TrackerClient::new(Box::new(GitHubClient::new(tracker_config)?))
-        }
-        TrackerKind::Unsupported(_) => {
-            return Err(Box::new(vik_core::TrackerError::UnsupportedTrackerKind));
-        }
-    };
-    Ok(tracker)
 }
 
 fn normalize_workflow_path(path: PathBuf) -> PathBuf {
