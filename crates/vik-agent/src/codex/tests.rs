@@ -44,11 +44,8 @@ fn token_usage_prefers_absolute_totals() {
 }
 
 #[test]
-fn session_id_composes_thread_and_turn() {
-    assert_eq!(
-        vik_core::session_id("thread-1", "turn-2"),
-        "thread-1-turn-2"
-    );
+fn session_id_uses_thread_id() {
+    assert_eq!(vik_core::session_id("thread-1", "turn-2"), "thread-1");
 }
 
 #[test]
@@ -377,7 +374,7 @@ async fn codex_run_uses_issue_prompt_then_continuation_prompt() {
         dir.path()
             .join("work")
             .join("sessions")
-            .join("VIK-1-thread-1-turn-1.jsonl")
+            .join("VIK-1-thread-1.jsonl")
             .exists()
     );
     drop(state);

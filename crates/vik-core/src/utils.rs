@@ -92,23 +92,8 @@ pub fn sanitize_workspace_key(identifier: &str) -> String {
         .collect()
 }
 
-pub fn session_id(thread_id: &str, turn_id: &str) -> String {
-    if is_uuid_like(thread_id) && is_uuid_like(turn_id) {
-        return thread_id.to_string();
-    }
-
-    format!("{thread_id}-{turn_id}")
-}
-
-fn is_uuid_like(value: &str) -> bool {
-    if value.len() != 36 {
-        return false;
-    }
-
-    value.bytes().enumerate().all(|(index, byte)| match index {
-        8 | 13 | 18 | 23 => byte == b'-',
-        _ => byte.is_ascii_hexdigit(),
-    })
+pub fn session_id(thread_id: &str, _turn_id: &str) -> String {
+    thread_id.to_string()
 }
 
 pub fn issue_is_active(
@@ -177,40 +162,22 @@ mod tests {
     }
 
     #[test]
-    fn session_id_uses_thread_uuid_for_codex_uuid_ids() {
-        let thread_id = "019dfab1-fd48-78c0-9b40-cf507bd19842";
-        let turn_id = "019dfab1-fd58-7a21-8285-58d94bbb614f";
+    fn session_id_uses_thread_id() {
+        let thread_uuid = "019dfab1-fd48-78c0-9b40-cf507bd19842";
+        let turn_uuid = "019dfab1-fd58-7a21-8285-58d94bbb614f";
 
-        assert_eq!(session_id(thread_id, turn_id), thread_id);
+        for (thread_id, turn_id) in [
+            (thread_uuid, turn_uuid),
+            (thread_uuid, "turn-2"),
+            ("thread-1", turn_uuid),
+            ("thread-1", "turn-2"),
+        ] {
+            assert_eq!(session_id(thread_id, turn_id), thread_id);
+        }
     }
 
     #[test]
-    fn session_id_preserves_composite_for_non_uuid_ids() {
-        assert_eq!(session_id("thread-1", "turn-2"), "thread-1-turn-2");
-    }
-
-    #[test]
-    fn session_id_preserves_composite_when_only_thread_id_is_uuid() {
-        let thread_id = "019dfab1-fd48-78c0-9b40-cf507bd19842";
-
-        assert_eq!(
-            session_id(thread_id, "turn-2"),
-            format!("{thread_id}-turn-2")
-        );
-    }
-
-    #[test]
-    fn session_id_preserves_composite_when_only_turn_id_is_uuid() {
-        let turn_id = "019dfab1-fd58-7a21-8285-58d94bbb614f";
-
-        assert_eq!(
-            session_id("thread-1", turn_id),
-            format!("thread-1-{turn_id}")
-        );
-    }
-
-    #[test]
-    fn agent_session_uses_thread_uuid_for_codex_uuid_ids() {
+    fn agent_session_uses_thread_id() {
         let thread_id = "019dfab1-fd48-78c0-9b40-cf507bd19842";
         let turn_id = "019dfab1-fd58-7a21-8285-58d94bbb614f";
         let session = AgentSession::new(thread_id, turn_id);
