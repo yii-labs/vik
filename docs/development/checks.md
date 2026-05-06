@@ -6,7 +6,7 @@ accepts a narrower gate.
 ## Required CI Parity
 
 ```sh
-LINEAR_API_KEY=ci-placeholder cargo run --locked -p vik-cli -- check ./WORKFLOW.md
+cargo run --locked -p vik-cli -- doctor ./WORKFLOW.md
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --workspace --all-features
@@ -33,9 +33,8 @@ docker build -t vik:local .
 mkdir -p "$PWD/.vik/docker-workspace"
 cp WORKFLOW.md "$PWD/.vik/docker-workspace/WORKFLOW.md"
 docker run --rm \
-  --env LINEAR_API_KEY=ci-placeholder \
   -v "$PWD/.vik/docker-workspace:/vik-workspace" \
-  vik:local vik check
+  vik:local vik doctor
 ```
 
 Pass real `GH_TOKEN`, `OPENAI_API_KEY`, and `LINEAR_API_KEY` only for an

@@ -31,9 +31,9 @@ elif [[ "$1" == "start" ]]; then
     else
         set -- vik "$@"
     fi
-elif [[ "$1" == "check" ]]; then
+elif [[ "$1" == "doctor" ]]; then
     if [[ $# -eq 1 ]]; then
-        set -- vik check "$VIK_WORKFLOW_PATH"
+        set -- vik doctor "$VIK_WORKFLOW_PATH"
         uses_default_workflow=1
     else
         set -- vik "$@"
@@ -49,8 +49,8 @@ elif [[ "$1" == "vik" && "${2:-}" == "start" && ( $# -eq 2 || "${3:-}" == -* ) ]
     shift 2
     set -- vik start "$VIK_WORKFLOW_PATH" "$@"
     uses_default_workflow=1
-elif [[ "$1" == "vik" && "${2:-}" == "check" && $# -eq 2 ]]; then
-    set -- vik check "$VIK_WORKFLOW_PATH"
+elif [[ "$1" == "vik" && "${2:-}" == "doctor" && $# -eq 2 ]]; then
+    set -- vik doctor "$VIK_WORKFLOW_PATH"
     uses_default_workflow=1
 elif [[ "$1" == "vik" && "${2:-}" == -* ]]; then
     shift

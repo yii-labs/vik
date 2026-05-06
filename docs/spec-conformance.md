@@ -44,7 +44,7 @@ Not implemented:
 Run with real tracker and Codex credentials before production use:
 
 ```sh
-cargo run -p vik-cli -- check ./WORKFLOW.md
+cargo run -p vik-cli -- doctor ./WORKFLOW.md
 cargo test --workspace
 ```
 

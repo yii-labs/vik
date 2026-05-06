@@ -1,4 +1,5 @@
 mod config;
+mod diagnosis;
 mod error;
 mod parser;
 mod prompt;
@@ -9,6 +10,7 @@ mod yaml;
 mod tests;
 
 pub use config::*;
+pub use diagnosis::*;
 pub use error::*;
 pub use parser::*;
 pub use prompt::*;

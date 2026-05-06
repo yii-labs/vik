@@ -321,6 +321,10 @@ impl ServiceConfig {
 
     pub fn validate_for_dispatch(&self) -> Result<(), WorkflowError> {
         self.tracker.validate()?;
+        self.validate_non_tracker_config()
+    }
+
+    pub(crate) fn validate_non_tracker_config(&self) -> Result<(), WorkflowError> {
         if self.polling.interval_ms == 0 {
             return Err(WorkflowError::InvalidConfig(
                 "polling.interval_ms must be positive".to_string(),
@@ -332,7 +336,7 @@ impl ServiceConfig {
         Ok(())
     }
 
-    fn validate_codex_config(&self) -> Result<(), WorkflowError> {
+    pub(crate) fn validate_codex_config(&self) -> Result<(), WorkflowError> {
         if self.codex.command.trim().is_empty() {
             return Err(WorkflowError::InvalidConfig(
                 "codex.command is empty".to_string(),

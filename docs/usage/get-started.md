@@ -56,10 +56,10 @@ workspaces, how to clone the repo, and how to launch Codex.
    workspace.
 9. Confirm `codex.command` launches `codex app-server`.
 
-Validate config parsing after connections are configured:
+Run local workflow diagnostics:
 
 ```sh
-vik check ./WORKFLOW.md
+vik doctor ./WORKFLOW.md
 ```
 
 Start the daemon:
@@ -231,7 +231,7 @@ Steps:
 1. Validate workflow config:
 
    ```sh
-   vik check ./WORKFLOW.md
+   vik doctor ./WORKFLOW.md
    ```
 
 2. Start Vik:

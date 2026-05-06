@@ -30,7 +30,7 @@ You are working on {{ issue.identifier }}.
 Validate:
 
 ```sh
-vik check ./WORKFLOW.md
+vik doctor ./WORKFLOW.md
 ```
 
 ## Tracker

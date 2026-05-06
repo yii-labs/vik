@@ -123,6 +123,30 @@ impl TrackerConfig {
             TrackerKind::Unsupported(_) => Err(TrackerConfigError::UnsupportedTrackerKind),
         }
     }
+
+    pub fn validate_without_api_key(&self) -> Result<(), TrackerConfigError> {
+        match &self.kind {
+            TrackerKind::Linear(config) => config.validate_without_api_key(),
+            TrackerKind::GitHub(config) => config.validate_without_api_key(),
+            TrackerKind::Unsupported(_) => Err(TrackerConfigError::UnsupportedTrackerKind),
+        }
+    }
+
+    pub fn has_api_key(&self) -> bool {
+        match &self.kind {
+            TrackerKind::Linear(config) => config.has_api_key(),
+            TrackerKind::GitHub(config) => config.has_api_key(),
+            TrackerKind::Unsupported(_) => false,
+        }
+    }
+
+    pub fn api_key_env_names(&self) -> &'static [&'static str] {
+        match &self.kind {
+            TrackerKind::Linear(_) => LinearTrackerConfig::api_key_env_names(),
+            TrackerKind::GitHub(_) => GitHubTrackerConfig::api_key_env_names(),
+            TrackerKind::Unsupported(_) => &[],
+        }
+    }
 }
 
 impl fmt::Display for TrackerKind {
