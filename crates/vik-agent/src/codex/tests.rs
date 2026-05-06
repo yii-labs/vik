@@ -319,7 +319,7 @@ fn session_log_context_derives_session_identity_from_turn_start_response() {
     assert_eq!(identity.issue_identifier, "VIK-1");
     assert_eq!(identity.thread_id, "thread-1");
     assert_eq!(identity.turn_id, "turn-1");
-    assert_eq!(identity.session_id, "thread-1-turn-1");
+    assert_eq!(identity.session_id, "thread-1");
 }
 
 #[test]
@@ -335,7 +335,7 @@ fn session_log_context_prefers_message_turn_identity_over_context() {
 
     assert_eq!(identity.thread_id, "thread-1");
     assert_eq!(identity.turn_id, "turn-old");
-    assert_eq!(identity.session_id, "thread-1-turn-old");
+    assert_eq!(identity.session_id, "thread-1");
 }
 
 #[test]
