@@ -181,9 +181,7 @@ impl JsonlRpcProcess {
             thread_id.to_string(),
             turn_id.clone(),
         );
-        for message in unmatched_messages {
-            log_session_message(&session_context, None, "received", &message);
-        }
+        log_turn_start_received_messages(&session_context, &unmatched_messages, &response);
         Ok(TurnStartResponse { turn_id })
     }
 
@@ -222,7 +220,7 @@ impl JsonlRpcProcess {
         &mut self,
         method: &str,
         params: Value,
-    ) -> Result<(Value, Vec<Value>), AgentError> {
+    ) -> Result<(Value, Vec<PendingReceivedMessage>), AgentError> {
         self.request_message_inner(method, params, true).await
     }
 
@@ -231,34 +229,56 @@ impl JsonlRpcProcess {
         method: &str,
         params: Value,
         collect_unmatched: bool,
-    ) -> Result<(Value, Vec<Value>), AgentError> {
+    ) -> Result<(Value, Vec<PendingReceivedMessage>), AgentError> {
         let id = self.next_id;
         self.next_id += 1;
+        let request_rpc_id = id.to_string();
         let request = json!({ "id": id, "method": method, "params": params });
         self.pending_methods
-            .insert(id.to_string(), method.to_string());
+            .insert(request_rpc_id.clone(), method.to_string());
         self.write_message(&request).await?;
         let mut unmatched_messages = Vec::new();
         loop {
             let message = self.read_message_raw(self.read_timeout).await?;
             let matches_request = message.get("id").and_then(Value::as_u64) == Some(id);
-            if !collect_unmatched || matches_request {
+            if !collect_unmatched {
                 self.log_session_message("received", &message);
             }
             if matches_request {
-                self.pending_methods.remove(&id.to_string());
                 if let Some(error) = message.get("error") {
+                    if collect_unmatched {
+                        log_session_message(
+                            &self.session_log_context,
+                            Some(method),
+                            "received",
+                            &message,
+                        );
+                    }
+                    self.pending_methods.remove(&request_rpc_id);
                     return Err(AgentError::ResponseError(error.to_string()));
                 }
+                self.pending_methods.remove(&request_rpc_id);
                 return Ok((message, unmatched_messages));
             }
             if collect_unmatched {
-                unmatched_messages.push(message.clone());
+                unmatched_messages.push(self.pending_received_message(&message));
             }
             if message.get("id").is_some() && message.get("method").is_some() {
                 self.respond_to_server_request(&message).await?;
             }
         }
+    }
+
+    fn pending_received_message(&self, message: &Value) -> PendingReceivedMessage {
+        PendingReceivedMessage {
+            message: message.clone(),
+            pending_method: self.pending_method_for(message).map(ToOwned::to_owned),
+        }
+    }
+
+    fn pending_method_for<'a>(&'a self, message: &Value) -> Option<&'a str> {
+        let rpc_id = message.get("id").and_then(rpc_id_string)?;
+        self.pending_methods.get(&rpc_id).map(String::as_str)
     }
 
     pub(crate) async fn wait_for_turn(
@@ -416,6 +436,12 @@ impl JsonlRpcProcess {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct PendingReceivedMessage {
+    message: Value,
+    pending_method: Option<String>,
+}
+
 impl SessionLogContext {
     pub(crate) fn new(issue_id: impl Into<String>, issue_identifier: impl Into<String>) -> Self {
         Self {
@@ -508,6 +534,22 @@ fn log_session_message(
         rpc_id = rpc_id,
         "agent_session_message"
     );
+}
+
+fn log_turn_start_received_messages(
+    context: &SessionLogContext,
+    unmatched_messages: &[PendingReceivedMessage],
+    response: &Value,
+) {
+    for message in unmatched_messages {
+        log_session_message(
+            context,
+            message.pending_method.as_deref(),
+            "received",
+            &message.message,
+        );
+    }
+    log_session_message(context, Some("turn/start"), "received", response);
 }
 
 pub(crate) fn session_log_fields(
@@ -638,4 +680,125 @@ fn normalize_turn_sandbox_policy(cwd: &Path, policy: Option<Value>) -> Option<Va
             .or_insert(json!(false));
     }
     Some(Value::Object(map))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+    use tracing::field::{Field, Visit};
+    use tracing::span::{Attributes, Id, Record};
+    use tracing::{Dispatch, Event, Metadata, Subscriber};
+
+    #[test]
+    fn turn_start_receive_logs_flush_buffered_messages_before_response() {
+        let records = Arc::new(Mutex::new(Vec::new()));
+        let dispatch = Dispatch::new(RecordingSubscriber {
+            records: Arc::clone(&records),
+        });
+        let context = SessionLogContext::for_session("issue-1", "VIK-1", "thread-1", "turn-2");
+        let buffered = vec![
+            PendingReceivedMessage {
+                message: json!({
+                    "method": "turn/started",
+                    "params": {
+                        "threadId": "thread-1",
+                        "turn": { "id": "turn-2" }
+                    }
+                }),
+                pending_method: None,
+            },
+            PendingReceivedMessage {
+                message: json!({ "id": 9, "result": { "ok": true } }),
+                pending_method: Some("item/tool/call".to_string()),
+            },
+        ];
+        let response = json!({ "id": 4, "result": { "turn": { "id": "turn-2" } } });
+
+        tracing::dispatcher::with_default(&dispatch, || {
+            log_turn_start_received_messages(&context, &buffered, &response);
+        });
+
+        assert_eq!(
+            records.lock().unwrap().as_slice(),
+            [
+                RecordedSessionEvent {
+                    event: "turn/started".to_string(),
+                    turn_id: "turn-2".to_string(),
+                    rpc_id: String::new(),
+                },
+                RecordedSessionEvent {
+                    event: "item/tool/call".to_string(),
+                    turn_id: "turn-2".to_string(),
+                    rpc_id: "9".to_string(),
+                },
+                RecordedSessionEvent {
+                    event: "turn/start".to_string(),
+                    turn_id: "turn-2".to_string(),
+                    rpc_id: "4".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct RecordedSessionEvent {
+        event: String,
+        turn_id: String,
+        rpc_id: String,
+    }
+
+    struct RecordingSubscriber {
+        records: Arc<Mutex<Vec<RecordedSessionEvent>>>,
+    }
+
+    impl Subscriber for RecordingSubscriber {
+        fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+        fn event(&self, event: &Event<'_>) {
+            let mut visitor = RecordedEventVisitor::default();
+            event.record(&mut visitor);
+            self.records.lock().unwrap().push(RecordedSessionEvent {
+                event: visitor.event.unwrap_or_default(),
+                turn_id: visitor.turn_id.unwrap_or_default(),
+                rpc_id: visitor.rpc_id.unwrap_or_default(),
+            });
+        }
+
+        fn enter(&self, _span: &Id) {}
+
+        fn exit(&self, _span: &Id) {}
+    }
+
+    #[derive(Default)]
+    struct RecordedEventVisitor {
+        event: Option<String>,
+        turn_id: Option<String>,
+        rpc_id: Option<String>,
+    }
+
+    impl Visit for RecordedEventVisitor {
+        fn record_str(&mut self, field: &Field, value: &str) {
+            match field.name() {
+                "event" => self.event = Some(value.to_string()),
+                "turn_id" => self.turn_id = Some(value.to_string()),
+                "rpc_id" => self.rpc_id = Some(value.to_string()),
+                _ => {}
+            }
+        }
+
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            self.record_str(field, &format!("{value:?}"));
+        }
+    }
 }
