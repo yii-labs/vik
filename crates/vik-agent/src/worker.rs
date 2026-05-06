@@ -112,19 +112,51 @@ fn run_runtime_in_current_thread(
     cancel_rx: oneshot::Receiver<()>,
 ) -> Result<(), AgentError> {
     let log_dir = request.config.logging.dir.clone();
-    with_session_log_subscriber(&log_dir, || {
-        let runtime_loop = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|err| AgentError::SessionThread(err.to_string()))?;
-        runtime_loop.block_on(async move {
-            tokio::select! {
-                result = runtime.run(request, events) => result,
-                _ = cancel_rx => Err(AgentError::TurnCancelled),
-            }
-        })
+    let mut runtime = Some(runtime);
+    let mut request = Some(request);
+    let mut events = Some(events);
+    let mut cancel_rx = Some(cancel_rx);
+    match with_session_log_subscriber(&log_dir, || {
+        run_runtime_loop(
+            runtime.take().expect("runtime is available"),
+            request.take().expect("request is available"),
+            events.take().expect("events sender is available"),
+            cancel_rx.take().expect("cancel receiver is available"),
+        )
+    }) {
+        Ok(result) => result,
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                log_dir = %log_dir.display(),
+                "session logging unavailable; continuing without session log capture"
+            );
+            run_runtime_loop(
+                runtime.expect("runtime is available after session log setup failure"),
+                request.expect("request is available after session log setup failure"),
+                events.expect("events sender is available after session log setup failure"),
+                cancel_rx.expect("cancel receiver is available after session log setup failure"),
+            )
+        }
+    }
+}
+
+fn run_runtime_loop(
+    runtime: Arc<dyn AgentRuntime>,
+    request: AgentRunRequest<ServiceConfig>,
+    events: mpsc::UnboundedSender<AgentEvent>,
+    cancel_rx: oneshot::Receiver<()>,
+) -> Result<(), AgentError> {
+    let runtime_loop = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|err| AgentError::SessionThread(err.to_string()))?;
+    runtime_loop.block_on(async move {
+        tokio::select! {
+            result = runtime.run(request, events) => result,
+            _ = cancel_rx => Err(AgentError::TurnCancelled),
+        }
     })
-    .map_err(|err| AgentError::SessionThread(format!("session logging: {err}")))?
 }
 
 struct SessionCancelOnDrop {

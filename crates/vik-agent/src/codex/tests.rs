@@ -447,6 +447,30 @@ async fn local_agent_worker_abort_cancels_session_thread() {
 }
 
 #[tokio::test]
+async fn local_agent_worker_runs_when_session_log_setup_fails() {
+    let dir = TempDir::new().unwrap();
+    let log_file = dir.path().join("not-a-directory");
+    std::fs::write(&log_file, b"not a directory").unwrap();
+    let tracker = Arc::new(FakeTracker::new(vec!["Done"]));
+    let factory = Arc::new(FakeTransportFactory::default());
+    let runtime = Arc::new(Codex::with_transport_factory(
+        Arc::clone(&tracker),
+        factory.clone(),
+    ));
+    let worker = crate::LocalAgentWorker::with_runtime_override(Arc::clone(&tracker), runtime);
+    let mut request = agent_request(dir.path(), 1);
+    request.config.logging.dir = log_file;
+    let (tx, _rx) = mpsc::unbounded_channel();
+
+    let outcome = vik_core::AgentWorker::run(&worker, request, tx).await;
+
+    assert_eq!(outcome.kind, vik_core::WorkerExitKind::Normal);
+    let state = factory.state.lock().unwrap();
+    assert_eq!(state.prompts, vec!["VIK-1 attempt=1"]);
+    assert_eq!(state.shutdowns, 1);
+}
+
+#[tokio::test]
 async fn local_agent_worker_maps_runtime_failure_to_worker_outcome() {
     let runtime = Arc::new(FailingRuntime);
     let tracker = Arc::new(FakeTracker::new(vec!["Todo"]));
