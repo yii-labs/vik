@@ -3,7 +3,6 @@ use std::path::Path;
 use std::process::Command;
 
 use async_trait::async_trait;
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use vik_core::{
@@ -102,14 +101,6 @@ pub struct FeishuClient {
 pub(crate) struct FeishuRecord {
     pub id: String,
     pub fields: Map<String, Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct StoredComment {
-    id: String,
-    body: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -231,6 +222,14 @@ impl FeishuClient {
             .unwrap_or_else(|| identifier.clone());
         let state = field_text(&record.fields, &self.config.fields.state).unwrap_or_default();
         let labels = parse_labels(field_text(&record.fields, &self.config.fields.labels));
+        let mut url = format!(
+            "https://www.feishu.cn/base/{}?table={}",
+            self.config.base_token, self.config.table_id
+        );
+        if !self.config.view_id.is_empty() {
+            url.push_str("&view=");
+            url.push_str(&self.config.view_id);
+        }
         Issue {
             id: record.id.clone(),
             identifier,
@@ -239,10 +238,7 @@ impl FeishuClient {
             priority: None,
             state,
             branch_name: None,
-            url: Some(format!(
-                "https://www.feishu.cn/base/{}?table={}",
-                self.config.base_token, self.config.table_id
-            )),
+            url: Some(url),
             labels,
             blocked_by: Vec::new(),
             created_at: None,
@@ -265,8 +261,8 @@ impl FeishuClient {
             .any(|tag| issue_labels.contains(&normalize_state(tag)))
     }
 
-    fn comments(&self, record: &FeishuRecord) -> Result<Vec<StoredComment>, TrackerError> {
-        parse_json_field(field_text(&record.fields, &self.config.fields.comments).as_deref())
+    fn workpad_body(&self, record: &FeishuRecord) -> Option<String> {
+        field_text_preserving_whitespace(&record.fields, &self.config.fields.comments)
     }
 
     fn pr_links(&self, record: &FeishuRecord) -> Result<Vec<StoredPrLink>, TrackerError> {
@@ -354,37 +350,29 @@ impl IssueTracker for FeishuClient {
         body: &str,
     ) -> Result<IssueComment, TrackerError> {
         let record = self.record_for_issue(issue_id).await?;
-        let mut comments = self.comments(&record)?;
-        let comment = StoredComment {
-            id: format!(
-                "{}:comment:{}-{}",
-                record.id,
-                Utc::now().timestamp_millis(),
-                comments.len() + 1
-            ),
+        let comment = IssueComment {
+            id: workpad_comment_id(&record.id),
             body: body.to_string(),
             url: None,
         };
-        comments.push(comment.clone());
         let mut patch = Map::new();
-        patch.insert(
-            self.config.fields.comments.clone(),
-            json!(
-                serde_json::to_string(&comments)
-                    .map_err(|err| { TrackerError::FeishuUnknownPayload(err.to_string()) })?
-            ),
-        );
+        patch.insert(self.config.fields.comments.clone(), json!(body));
         self.patch_record(&record.id, patch).await?;
-        Ok(comment.into())
+        Ok(comment)
     }
 
     async fn list_comments(&self, issue_id: &str) -> Result<Vec<IssueComment>, TrackerError> {
         let record = self.record_for_issue(issue_id).await?;
         Ok(self
-            .comments(&record)?
-            .into_iter()
-            .map(IssueComment::from)
-            .collect())
+            .workpad_body(&record)
+            .map(|body| {
+                vec![IssueComment {
+                    id: workpad_comment_id(&record.id),
+                    body,
+                    url: None,
+                }]
+            })
+            .unwrap_or_default())
     }
 
     async fn update_comment(
@@ -392,35 +380,17 @@ impl IssueTracker for FeishuClient {
         comment_id: &str,
         body: &str,
     ) -> Result<IssueComment, TrackerError> {
-        let record_id = comment_id
-            .split_once(":comment:")
-            .map(|(record_id, _)| record_id.to_string())
-            .ok_or_else(|| {
-                TrackerError::FeishuUnknownPayload(format!("invalid comment id {comment_id}"))
-            })?;
+        let record_id = record_id_from_comment_id(comment_id)?;
         let record = self.record_by_id(&record_id).await?;
-        let mut comments = self.comments(&record)?;
-        let mut updated = None;
-        for comment in &mut comments {
-            if comment.id == comment_id {
-                comment.body = body.to_string();
-                updated = Some(comment.clone());
-                break;
-            }
-        }
-        let updated = updated.ok_or_else(|| {
-            TrackerError::FeishuUnknownPayload(format!("missing comment {comment_id}"))
-        })?;
+        let updated = IssueComment {
+            id: workpad_comment_id(&record.id),
+            body: body.to_string(),
+            url: None,
+        };
         let mut patch = Map::new();
-        patch.insert(
-            self.config.fields.comments.clone(),
-            json!(
-                serde_json::to_string(&comments)
-                    .map_err(|err| { TrackerError::FeishuUnknownPayload(err.to_string()) })?
-            ),
-        );
+        patch.insert(self.config.fields.comments.clone(), json!(body));
         self.patch_record(&record.id, patch).await?;
-        Ok(updated.into())
+        Ok(updated)
     }
 
     async fn upload_attachment(
@@ -454,16 +424,6 @@ impl IssueTracker for FeishuClient {
         );
         self.patch_record(&record.id, patch).await?;
         Ok(())
-    }
-}
-
-impl From<StoredComment> for IssueComment {
-    fn from(value: StoredComment) -> Self {
-        Self {
-            id: value.id,
-            body: value.body,
-            url: value.url,
-        }
     }
 }
 
@@ -560,12 +520,50 @@ pub(crate) fn issue_from_record(record: &FeishuRecord, fields: &FeishuIssueField
     FeishuClient { config }.normalize_issue(record)
 }
 
+#[cfg(test)]
+pub(crate) fn issue_from_record_with_view_id(
+    record: &FeishuRecord,
+    fields: &FeishuIssueFields,
+    view_id: &str,
+) -> Issue {
+    let config = FeishuClientConfig::new("", "base", "table", "user", vec![], fields.clone())
+        .with_view_id(view_id);
+    FeishuClient { config }.normalize_issue(record)
+}
+
 fn field_text(fields: &Map<String, Value>, field: &str) -> Option<String> {
     fields
         .get(field)
         .and_then(cell_text)
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn field_text_preserving_whitespace(fields: &Map<String, Value>, field: &str) -> Option<String> {
+    fields
+        .get(field)
+        .and_then(cell_text)
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn workpad_comment_id(record_id: &str) -> String {
+    format!("{record_id}:workpad")
+}
+
+fn record_id_from_comment_id(comment_id: &str) -> Result<String, TrackerError> {
+    if let Some(record_id) = comment_id.strip_suffix(":workpad")
+        && !record_id.is_empty()
+    {
+        return Ok(record_id.to_string());
+    }
+    if let Some((record_id, _)) = comment_id.split_once(":comment:")
+        && !record_id.is_empty()
+    {
+        return Ok(record_id.to_string());
+    }
+    Err(TrackerError::FeishuUnknownPayload(format!(
+        "invalid comment id {comment_id}"
+    )))
 }
 
 fn cell_text(value: &Value) -> Option<String> {
