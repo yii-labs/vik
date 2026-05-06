@@ -3,7 +3,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use vik_core::{HostPlatform, WorkflowDefinition};
+use vik_core::WorkflowDefinition;
 use vik_tracker::{
     CommonTrackerConfig, GitHubTrackerConfig, LinearTrackerConfig, TrackerConfig,
     TrackerFilterConfig,
@@ -99,154 +99,6 @@ impl CodexConfig {
         let command = self.command.trim();
         find_shell_token_start(command, "app-server").map(|index| command.split_at(index))
     }
-
-    pub fn command_program(&self) -> Option<String> {
-        self.command_program_for_platform(HostPlatform::current())
-    }
-
-    pub fn command_program_for_platform(&self, platform: HostPlatform) -> Option<String> {
-        match platform {
-            HostPlatform::Posix => first_posix_command_program(&self.command),
-            HostPlatform::Windows => split_windows_command_line(&self.command).into_iter().next(),
-        }
-    }
-}
-
-fn first_posix_command_program(command: &str) -> Option<String> {
-    let mut rest = command.trim();
-    loop {
-        let token = first_shell_token(rest)?;
-        if !is_shell_env_assignment(&token) {
-            return Some(token);
-        }
-        rest = drop_first_shell_token(rest);
-        if rest.is_empty() {
-            return None;
-        }
-    }
-}
-
-pub(crate) fn first_shell_token(command: &str) -> Option<String> {
-    let mut token = String::new();
-    let mut quote = None;
-    let mut escaped = false;
-    let mut started = false;
-
-    for ch in command.trim().chars() {
-        if escaped {
-            token.push(ch);
-            escaped = false;
-            started = true;
-            continue;
-        }
-
-        match quote {
-            Some('\'') => {
-                if ch == '\'' {
-                    quote = None;
-                } else {
-                    token.push(ch);
-                    started = true;
-                }
-            }
-            Some('"') => {
-                if ch == '"' {
-                    quote = None;
-                } else if ch == '\\' {
-                    escaped = true;
-                } else {
-                    token.push(ch);
-                    started = true;
-                }
-            }
-            Some(_) => unreachable!(),
-            None => {
-                if ch.is_whitespace() {
-                    if started {
-                        return (!token.is_empty()).then_some(token);
-                    }
-                } else if ch == '\'' || ch == '"' {
-                    quote = Some(ch);
-                    started = true;
-                } else if ch == '\\' {
-                    escaped = true;
-                    started = true;
-                } else {
-                    token.push(ch);
-                    started = true;
-                }
-            }
-        }
-    }
-
-    if escaped {
-        token.push('\\');
-    }
-    (started && !token.is_empty()).then_some(token)
-}
-
-pub(crate) fn drop_first_shell_token(input: &str) -> &str {
-    let input = input.trim_start();
-    let mut quote = None;
-    let mut escaped = false;
-    let mut started = false;
-
-    for (index, ch) in input.char_indices() {
-        if escaped {
-            escaped = false;
-            started = true;
-            continue;
-        }
-
-        match quote {
-            Some('\'') => {
-                if ch == '\'' {
-                    quote = None;
-                } else {
-                    started = true;
-                }
-            }
-            Some('"') => {
-                if ch == '"' {
-                    quote = None;
-                } else if ch == '\\' {
-                    escaped = true;
-                } else {
-                    started = true;
-                }
-            }
-            Some(_) => unreachable!(),
-            None => {
-                if ch.is_whitespace() {
-                    if started {
-                        return input[index..].trim_start();
-                    }
-                } else if ch == '\'' || ch == '"' {
-                    quote = Some(ch);
-                    started = true;
-                } else if ch == '\\' {
-                    escaped = true;
-                    started = true;
-                } else {
-                    started = true;
-                }
-            }
-        }
-    }
-
-    ""
-}
-
-pub(crate) fn is_shell_env_assignment(token: &str) -> bool {
-    let Some((name, _)) = token.split_once('=') else {
-        return false;
-    };
-    let name = name.strip_suffix('+').unwrap_or(name);
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-        && !name.chars().next().is_some_and(|ch| ch.is_ascii_digit())
 }
 
 fn find_shell_token_start(command: &str, needle: &str) -> Option<usize> {
@@ -309,53 +161,6 @@ fn find_shell_token_start(command: &str, needle: &str) -> Option<usize> {
         token.push('\\');
     }
     if token == needle { token_start } else { None }
-}
-
-fn split_windows_command_line(input: &str) -> Vec<String> {
-    let mut args = Vec::new();
-    let mut current = String::new();
-    let mut in_quotes = false;
-    let mut arg_started = false;
-    let mut backslashes = 0;
-
-    for ch in input.trim().chars() {
-        match ch {
-            '\\' => {
-                backslashes += 1;
-                arg_started = true;
-            }
-            '"' => {
-                arg_started = true;
-                current.extend(std::iter::repeat_n('\\', backslashes / 2));
-                if backslashes % 2 == 0 {
-                    in_quotes = !in_quotes;
-                } else {
-                    current.push('"');
-                }
-                backslashes = 0;
-            }
-            ch if ch.is_whitespace() && !in_quotes => {
-                current.extend(std::iter::repeat_n('\\', backslashes));
-                backslashes = 0;
-                if arg_started {
-                    args.push(std::mem::take(&mut current));
-                    arg_started = false;
-                }
-            }
-            _ => {
-                current.extend(std::iter::repeat_n('\\', backslashes));
-                backslashes = 0;
-                current.push(ch);
-                arg_started = true;
-            }
-        }
-    }
-
-    current.extend(std::iter::repeat_n('\\', backslashes));
-    if arg_started {
-        args.push(current);
-    }
-    args
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

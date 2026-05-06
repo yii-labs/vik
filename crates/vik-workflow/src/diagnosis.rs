@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -7,10 +6,7 @@ use std::time::{Duration, Instant};
 
 use vik_core::WorkflowDefinition;
 
-use crate::{
-    ServiceConfig, WorkflowError, drop_first_shell_token, first_shell_token,
-    is_shell_env_assignment,
-};
+use crate::{ServiceConfig, WorkflowError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosisSeverity {
@@ -102,7 +98,6 @@ pub trait Diagnose {
 
 pub trait DiagnoseEnvironment {
     fn env_var_is_set(&self, name: &str) -> bool;
-    fn command_exists(&self, command: &str) -> bool;
     fn command_succeeds(&self, program: &str, args: &[&str]) -> bool;
 }
 
@@ -112,10 +107,6 @@ pub struct SystemDiagnoseEnvironment;
 impl DiagnoseEnvironment for SystemDiagnoseEnvironment {
     fn env_var_is_set(&self, name: &str) -> bool {
         env::var(name).is_ok_and(|value| !value.trim().is_empty())
-    }
-
-    fn command_exists(&self, command: &str) -> bool {
-        find_command(command).is_some()
     }
 
     fn command_succeeds(&self, program: &str, args: &[&str]) -> bool {
@@ -218,7 +209,6 @@ impl ServiceConfig {
         diagnoses: &mut Diagnoses,
     ) {
         self.diagnose_tracker_api_key(diagnoses);
-        self.diagnose_required_commands(environment, diagnoses);
         self.diagnose_command_auth(environment, diagnoses);
     }
 
@@ -241,63 +231,25 @@ impl ServiceConfig {
         ));
     }
 
-    fn diagnose_required_commands(
-        &self,
-        environment: &dyn DiagnoseEnvironment,
-        diagnoses: &mut Diagnoses,
-    ) {
-        for command in self.required_commands() {
-            if environment.command_exists(&command) {
-                diagnoses.push(Diagnosis::passed(
-                    format!("command.{command}"),
-                    format!("{command} command is available"),
-                ));
-            } else {
-                diagnoses.push(Diagnosis::warning(
-                    format!("command.{command}"),
-                    format!("{command} command was not found on PATH"),
-                ));
-            }
-        }
-    }
-
     fn diagnose_command_auth(
         &self,
         environment: &dyn DiagnoseEnvironment,
         diagnoses: &mut Diagnoses,
     ) {
-        let Some(codex_command) = self.codex.command_program() else {
-            return;
-        };
-
         if environment.env_var_is_set("OPENAI_API_KEY") {
             diagnoses.push(Diagnosis::passed(
                 "auth.codex",
                 "OPENAI_API_KEY is set for Codex auth",
             ));
-        } else if is_command_named(&codex_command, "codex")
-            && environment.command_exists(&codex_command)
-        {
-            if environment.command_succeeds(&codex_command, &["login", "status"]) {
-                diagnoses.push(Diagnosis::passed(
-                    "auth.codex",
-                    "codex login status succeeds",
-                ));
-            } else {
-                diagnoses.push(Diagnosis::warning(
-                    "auth.codex",
-                    "codex login status did not succeed; vik start requires Codex auth",
-                ));
-            }
-        } else if is_command_named(&codex_command, "codex") {
-            diagnoses.push(Diagnosis::warning(
+        } else if environment.command_succeeds("codex", &["login", "status"]) {
+            diagnoses.push(Diagnosis::passed(
                 "auth.codex",
-                "codex auth was not checked because the codex command was not found",
+                "codex login status succeeds",
             ));
         } else {
             diagnoses.push(Diagnosis::warning(
                 "auth.codex",
-                format!("codex auth was not checked for configured command `{codex_command}`"),
+                "codex login status did not succeed; vik start requires Codex auth",
             ));
         }
 
@@ -306,117 +258,22 @@ impl ServiceConfig {
                 "auth.github",
                 "GitHub token environment is set",
             ));
-        } else if environment.command_exists("gh") {
-            if environment.command_succeeds(
-                "gh",
-                &["auth", "status", "--active", "--hostname", "github.com"],
-            ) {
-                diagnoses.push(Diagnosis::passed("auth.github", "gh auth status succeeds"));
-            } else {
-                diagnoses.push(Diagnosis::warning(
-                    "auth.github",
-                    "gh auth status did not succeed; agents need GitHub auth for PR workflows",
-                ));
-            }
+        } else if environment.command_succeeds(
+            "gh",
+            &["auth", "status", "--active", "--hostname", "github.com"],
+        ) {
+            diagnoses.push(Diagnosis::passed("auth.github", "gh auth status succeeds"));
         } else {
             diagnoses.push(Diagnosis::warning(
                 "auth.github",
-                "gh auth was not checked because the gh command was not found and no GitHub token is set",
+                "gh auth status did not succeed; agents need GitHub auth for PR workflows",
             ));
-        }
-    }
-
-    fn required_commands(&self) -> BTreeSet<String> {
-        let mut commands = BTreeSet::from(["gh".to_string(), "git".to_string()]);
-        if let Some(command) = self.codex.command_program() {
-            commands.insert(command);
-        }
-        for hook in [
-            self.hooks.after_create.as_deref(),
-            self.hooks.before_run.as_deref(),
-            self.hooks.after_run.as_deref(),
-            self.hooks.before_remove.as_deref(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            commands.extend(hook_command_names(hook));
-        }
-        commands
-    }
-}
-
-fn hook_command_names(hook: &str) -> impl Iterator<Item = String> + '_ {
-    hook.lines().filter_map(hook_command_name)
-}
-
-fn hook_command_name(line: &str) -> Option<String> {
-    let mut rest = line.trim();
-    if rest.is_empty() || rest.starts_with('#') {
-        return None;
-    }
-
-    loop {
-        let command = first_shell_token(rest)?;
-        if is_shell_syntax(&command) {
-            return None;
-        }
-        if !is_shell_env_assignment(&command) {
-            return Some(command);
-        }
-        rest = drop_first_shell_token(rest);
-        if rest.is_empty() {
-            return None;
         }
     }
 }
 
 fn workflow_error_message(err: WorkflowError) -> String {
     err.to_string()
-}
-
-fn is_shell_syntax(command: &str) -> bool {
-    matches!(
-        command,
-        "if" | "then"
-            | "else"
-            | "elif"
-            | "fi"
-            | "for"
-            | "while"
-            | "do"
-            | "done"
-            | "case"
-            | "esac"
-            | "{"
-            | "}"
-            | "export"
-            | "set"
-            | "cd"
-            | ":"
-    )
-}
-
-fn is_command_named(command: &str, name: &str) -> bool {
-    let file_name = Path::new(command)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or(command);
-    if file_name.eq_ignore_ascii_case(name) {
-        return true;
-    }
-    let path = Path::new(file_name);
-    let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
-        return false;
-    };
-    let Some(extension) = path.extension().and_then(|value| value.to_str()) else {
-        return false;
-    };
-    stem.eq_ignore_ascii_case(name)
-        && matches!(
-            extension.to_ascii_lowercase().as_str(),
-            "exe" | "cmd" | "bat" | "com"
-        )
 }
 
 fn command_auth_timeout() -> Duration {

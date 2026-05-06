@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use serde_yaml::Mapping;
 use tempfile::tempdir;
-use vik_core::{HostPlatform, Issue, WorkflowDefinition};
+use vik_core::{Issue, WorkflowDefinition};
 
 use super::*;
 
@@ -240,65 +240,6 @@ fn parses_codex_model_fields() {
 }
 
 #[test]
-fn codex_command_program_preserves_windows_paths() {
-    let config = CodexConfig {
-        command: r#"C:\Users\me\bin\codex.exe app-server"#.to_string(),
-        ..CodexConfig::default()
-    };
-
-    assert_eq!(
-        config
-            .command_program_for_platform(HostPlatform::Windows)
-            .as_deref(),
-        Some(r#"C:\Users\me\bin\codex.exe"#)
-    );
-}
-
-#[test]
-fn codex_command_program_preserves_quoted_windows_paths() {
-    let config = CodexConfig {
-        command: r#""C:\Program Files\Codex\codex.exe" app-server"#.to_string(),
-        ..CodexConfig::default()
-    };
-
-    assert_eq!(
-        config
-            .command_program_for_platform(HostPlatform::Windows)
-            .as_deref(),
-        Some(r#"C:\Program Files\Codex\codex.exe"#)
-    );
-}
-
-#[test]
-fn codex_command_program_ignores_empty_quoted_program() {
-    let config = CodexConfig {
-        command: "'' app-server".to_string(),
-        ..CodexConfig::default()
-    };
-
-    assert_eq!(
-        config.command_program_for_platform(HostPlatform::Posix),
-        None
-    );
-}
-
-#[test]
-fn codex_command_program_skips_posix_environment_assignments() {
-    let config = CodexConfig {
-        command: r#"CODEX_HOME=/tmp/codex OPENAI_API_KEY="token value" codex app-server"#
-            .to_string(),
-        ..CodexConfig::default()
-    };
-
-    assert_eq!(
-        config
-            .command_program_for_platform(HostPlatform::Posix)
-            .as_deref(),
-        Some("codex")
-    );
-}
-
-#[test]
 fn rejects_model_fields_without_app_server_command() {
     let def = parse_workflow_content(
         PathBuf::from("WORKFLOW.md"),
@@ -324,7 +265,6 @@ fn diagnosis_reports_missing_linear_key_as_warning() {
     let config = ServiceConfig::from_definition(&def).unwrap();
     let environment = MockDiagnoseEnvironment::new()
         .with_env("GH_TOKEN")
-        .with_commands(["codex", "gh", "git"])
         .with_success("codex", ["login", "status"]);
 
     let diagnoses = config.diagnose(&environment);
@@ -336,7 +276,7 @@ fn diagnosis_reports_missing_linear_key_as_warning() {
         "env.tracker_api_key",
         DiagnosisSeverity::Warning,
     );
-    assert_diagnosis(&diagnoses, "command.codex", DiagnosisSeverity::Passed);
+    assert_no_command_diagnoses(&diagnoses);
 }
 
 #[test]
@@ -347,7 +287,7 @@ fn diagnosis_reports_config_shape_errors_as_errors() {
     )
     .unwrap();
     let config = ServiceConfig::from_definition(&def).unwrap();
-    let environment = MockDiagnoseEnvironment::new().with_commands(["codex", "gh", "git"]);
+    let environment = MockDiagnoseEnvironment::new();
 
     let diagnoses = config.diagnose(&environment);
 
@@ -368,7 +308,7 @@ fn diagnosis_checks_command_authentication() {
     )
     .unwrap();
     let config = ServiceConfig::from_definition(&def).unwrap();
-    let environment = MockDiagnoseEnvironment::new().with_commands(["codex", "gh", "git"]);
+    let environment = MockDiagnoseEnvironment::new();
 
     let diagnoses = config.diagnose(&environment);
 
@@ -378,69 +318,21 @@ fn diagnosis_checks_command_authentication() {
 }
 
 #[test]
-fn diagnosis_checks_codex_cmd_authentication() {
+fn diagnosis_checks_codex_authentication() {
     let def = parse_workflow_content(
         PathBuf::from("WORKFLOW.md"),
-        "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\ncodex:\n  command: codex.cmd app-server\n---\nBody",
+        "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\ncodex:\n  command: codex app-server\n---\nBody",
     )
     .unwrap();
     let config = ServiceConfig::from_definition(&def).unwrap();
     let environment = MockDiagnoseEnvironment::new()
         .with_env("GH_TOKEN")
-        .with_commands(["codex.cmd", "gh", "git"])
-        .with_success("codex.cmd", ["login", "status"]);
-
-    let diagnoses = config.diagnose(&environment);
-
-    assert_diagnosis(&diagnoses, "auth.codex", DiagnosisSeverity::Passed);
-}
-
-#[test]
-fn diagnosis_skips_hook_environment_assignments() {
-    let def = parse_workflow_content(
-        PathBuf::from("WORKFLOW.md"),
-        "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\nhooks:\n  after_create: |\n    GIT_SSH_COMMAND=ssh git clone git@github.com:yii-labs/vik .\ncodex:\n  command: codex app-server\n---\nBody",
-    )
-    .unwrap();
-    let config = ServiceConfig::from_definition(&def).unwrap();
-    let environment = MockDiagnoseEnvironment::new()
-        .with_env("GH_TOKEN")
-        .with_commands(["codex", "gh", "git"])
         .with_success("codex", ["login", "status"]);
 
     let diagnoses = config.diagnose(&environment);
 
-    assert_diagnosis(&diagnoses, "command.git", DiagnosisSeverity::Passed);
-    assert!(
-        diagnoses
-            .iter()
-            .all(|diagnosis| diagnosis.name != "command.GIT_SSH_COMMAND=ssh")
-    );
-}
-
-#[cfg(not(windows))]
-#[test]
-fn diagnosis_skips_codex_command_environment_assignments() {
-    let def = parse_workflow_content(
-        PathBuf::from("WORKFLOW.md"),
-        "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\ncodex:\n  command: CODEX_HOME=/tmp/codex codex app-server\n---\nBody",
-    )
-    .unwrap();
-    let config = ServiceConfig::from_definition(&def).unwrap();
-    let environment = MockDiagnoseEnvironment::new()
-        .with_env("GH_TOKEN")
-        .with_commands(["codex", "gh", "git"])
-        .with_success("codex", ["login", "status"]);
-
-    let diagnoses = config.diagnose(&environment);
-
-    assert_diagnosis(&diagnoses, "command.codex", DiagnosisSeverity::Passed);
     assert_diagnosis(&diagnoses, "auth.codex", DiagnosisSeverity::Passed);
-    assert!(
-        diagnoses
-            .iter()
-            .all(|diagnosis| diagnosis.name != "command.CODEX_HOME=/tmp/codex")
-    );
+    assert_no_command_diagnoses(&diagnoses);
 }
 
 #[test]
@@ -481,7 +373,6 @@ fn prompt_renders_issue_and_attempt() {
 #[derive(Debug, Default)]
 struct MockDiagnoseEnvironment {
     env: BTreeSet<String>,
-    commands: BTreeSet<String>,
     successes: BTreeSet<String>,
 }
 
@@ -492,11 +383,6 @@ impl MockDiagnoseEnvironment {
 
     fn with_env(mut self, name: impl Into<String>) -> Self {
         self.env.insert(name.into());
-        self
-    }
-
-    fn with_commands(mut self, commands: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        self.commands.extend(commands.into_iter().map(Into::into));
         self
     }
 
@@ -513,10 +399,6 @@ impl MockDiagnoseEnvironment {
 impl DiagnoseEnvironment for MockDiagnoseEnvironment {
     fn env_var_is_set(&self, name: &str) -> bool {
         self.env.contains(name)
-    }
-
-    fn command_exists(&self, command: &str) -> bool {
-        self.commands.contains(command)
     }
 
     fn command_succeeds(&self, program: &str, args: &[&str]) -> bool {
@@ -543,4 +425,13 @@ fn assert_diagnosis(diagnoses: &Diagnoses, name: &str, severity: DiagnosisSeveri
         .find(|diagnosis| diagnosis.name == name)
         .unwrap_or_else(|| panic!("missing diagnosis {name} in {diagnoses:?}"));
     assert_eq!(diagnosis.severity, severity);
+}
+
+fn assert_no_command_diagnoses(diagnoses: &Diagnoses) {
+    assert!(
+        diagnoses
+            .iter()
+            .all(|diagnosis| !diagnosis.name.starts_with("command.")),
+        "unexpected command diagnosis in {diagnoses:?}"
+    );
 }
