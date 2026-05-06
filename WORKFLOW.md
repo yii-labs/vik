@@ -108,6 +108,10 @@ they are available and can run without blocking the immediate critical path.
 The Main agent remains accountable for the ticket state, final decisions, and
 handoff quality.
 
+Before implementation, if any independent research, review, or verification slice exists,
+MUST spawn at least one subagent for that bounded slice, wait for it, and integrate its result.
+If no subagent is spawned, record `Subagent skipped: <reason>` in the workpad Notes.
+
 - `Main / orchestrator`: owns Linear state routing, the single workpad comment,
   branch/PR metadata, scope control, milestone updates, and final handoff. It
   decides when to delegate, integrates role outputs, resolves conflicts between
