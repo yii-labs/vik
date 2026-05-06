@@ -286,9 +286,11 @@ impl IssueTracker for FeishuClient {
             .into_iter()
             .filter_map(|record| {
                 let issue = self.normalize_issue(&record);
-                issue_matches_state(&issue, &active_states)
-                    .then(|| self.is_candidate(&issue).then_some(issue))
-                    .flatten()
+                if issue_matches_state(&issue, &active_states) && self.is_candidate(&issue) {
+                    Some(issue)
+                } else {
+                    None
+                }
             })
             .collect())
     }
