@@ -418,6 +418,7 @@ fn diagnosis_skips_hook_environment_assignments() {
     );
 }
 
+#[cfg(not(windows))]
 #[test]
 fn diagnosis_skips_codex_command_environment_assignments() {
     let def = parse_workflow_content(
