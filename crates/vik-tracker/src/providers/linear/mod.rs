@@ -51,7 +51,4 @@ impl LinearTrackerConfig {
     }
 }
 
-pub use client::{
-    DEFAULT_LINEAR_ENDPOINT, DEFAULT_PAGE_SIZE, LinearClient, LinearClientConfig,
-    LinearIssueFilterConfig,
-};
+pub(super) use client::{LinearClient, LinearClientConfig, LinearIssueFilterConfig};

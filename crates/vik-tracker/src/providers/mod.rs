@@ -5,8 +5,11 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use vik_core::{Issue, IssueAttachment, IssueComment, IssueTracker, IssueUpdate, TrackerError};
 
-pub mod github;
-pub mod linear;
+mod github;
+mod linear;
+
+pub use github::GitHubTrackerConfig;
+pub use linear::LinearTrackerConfig;
 
 #[derive(Debug, Error)]
 pub enum TrackerConfigError {
@@ -262,7 +265,7 @@ mod tests {
         let config = TrackerConfig::linear(
             common_config(),
             linear::LinearTrackerConfig::new(
-                linear::DEFAULT_LINEAR_ENDPOINT,
+                linear::LinearTrackerConfig::default_endpoint(),
                 "linear-token",
                 "vik-project",
             ),
@@ -278,7 +281,7 @@ mod tests {
         let config = TrackerConfig::github(
             common_config(),
             github::GitHubTrackerConfig::new(
-                github::DEFAULT_GITHUB_ENDPOINT,
+                github::GitHubTrackerConfig::default_endpoint(),
                 "github-token",
                 "yii-labs/vik",
             ),
@@ -293,7 +296,11 @@ mod tests {
     fn tracker_client_from_config_rejects_missing_linear_api_key() {
         let config = TrackerConfig::linear(
             common_config(),
-            linear::LinearTrackerConfig::new(linear::DEFAULT_LINEAR_ENDPOINT, "", "vik-project"),
+            linear::LinearTrackerConfig::new(
+                linear::LinearTrackerConfig::default_endpoint(),
+                "",
+                "vik-project",
+            ),
         );
 
         let tracker = TrackerClient::from_config(&config);
@@ -306,7 +313,7 @@ mod tests {
         let config = TrackerConfig::github(
             common_config(),
             github::GitHubTrackerConfig::new(
-                github::DEFAULT_GITHUB_ENDPOINT,
+                github::GitHubTrackerConfig::default_endpoint(),
                 "github-token",
                 "yii-labs",
             ),
