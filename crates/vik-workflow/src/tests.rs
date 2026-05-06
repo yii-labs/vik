@@ -283,6 +283,22 @@ fn codex_command_program_ignores_empty_quoted_program() {
 }
 
 #[test]
+fn codex_command_program_skips_posix_environment_assignments() {
+    let config = CodexConfig {
+        command: r#"CODEX_HOME=/tmp/codex OPENAI_API_KEY="token value" codex app-server"#
+            .to_string(),
+        ..CodexConfig::default()
+    };
+
+    assert_eq!(
+        config
+            .command_program_for_platform(HostPlatform::Posix)
+            .as_deref(),
+        Some("codex")
+    );
+}
+
+#[test]
 fn rejects_model_fields_without_app_server_command() {
     let def = parse_workflow_content(
         PathBuf::from("WORKFLOW.md"),
@@ -399,6 +415,30 @@ fn diagnosis_skips_hook_environment_assignments() {
         diagnoses
             .iter()
             .all(|diagnosis| diagnosis.name != "command.GIT_SSH_COMMAND=ssh")
+    );
+}
+
+#[test]
+fn diagnosis_skips_codex_command_environment_assignments() {
+    let def = parse_workflow_content(
+        PathBuf::from("WORKFLOW.md"),
+        "---\ntracker:\n  kind: linear\n  api_key: token\n  project_slug: proj\ncodex:\n  command: CODEX_HOME=/tmp/codex codex app-server\n---\nBody",
+    )
+    .unwrap();
+    let config = ServiceConfig::from_definition(&def).unwrap();
+    let environment = MockDiagnoseEnvironment::new()
+        .with_env("GH_TOKEN")
+        .with_commands(["codex", "gh", "git"])
+        .with_success("codex", ["login", "status"]);
+
+    let diagnoses = config.diagnose(&environment);
+
+    assert_diagnosis(&diagnoses, "command.codex", DiagnosisSeverity::Passed);
+    assert_diagnosis(&diagnoses, "auth.codex", DiagnosisSeverity::Passed);
+    assert!(
+        diagnoses
+            .iter()
+            .all(|diagnosis| diagnosis.name != "command.CODEX_HOME=/tmp/codex")
     );
 }
 

@@ -7,7 +7,10 @@ use std::time::{Duration, Instant};
 
 use vik_core::WorkflowDefinition;
 
-use crate::{ServiceConfig, WorkflowError, first_shell_token};
+use crate::{
+    ServiceConfig, WorkflowError, drop_first_shell_token, first_shell_token,
+    is_shell_env_assignment,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosisSeverity {
@@ -358,34 +361,14 @@ fn hook_command_name(line: &str) -> Option<String> {
         if is_shell_syntax(&command) {
             return None;
         }
-        if !is_env_assignment(&command) {
+        if !is_shell_env_assignment(&command) {
             return Some(command);
         }
-        rest = drop_first_raw_token(rest);
+        rest = drop_first_shell_token(rest);
         if rest.is_empty() {
             return None;
         }
     }
-}
-
-fn drop_first_raw_token(input: &str) -> &str {
-    let input = input.trim_start();
-    input
-        .char_indices()
-        .find_map(|(index, ch)| ch.is_whitespace().then_some(input[index..].trim_start()))
-        .unwrap_or_default()
-}
-
-fn is_env_assignment(token: &str) -> bool {
-    let Some((name, _)) = token.split_once('=') else {
-        return false;
-    };
-    let name = name.strip_suffix('+').unwrap_or(name);
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-        && !name.chars().next().is_some_and(|ch| ch.is_ascii_digit())
 }
 
 fn workflow_error_message(err: WorkflowError) -> String {

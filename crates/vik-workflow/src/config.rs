@@ -106,8 +106,22 @@ impl CodexConfig {
 
     pub fn command_program_for_platform(&self, platform: HostPlatform) -> Option<String> {
         match platform {
-            HostPlatform::Posix => first_shell_token(&self.command),
+            HostPlatform::Posix => first_posix_command_program(&self.command),
             HostPlatform::Windows => split_windows_command_line(&self.command).into_iter().next(),
+        }
+    }
+}
+
+fn first_posix_command_program(command: &str) -> Option<String> {
+    let mut rest = command.trim();
+    loop {
+        let token = first_shell_token(rest)?;
+        if !is_shell_env_assignment(&token) {
+            return Some(token);
+        }
+        rest = drop_first_shell_token(rest);
+        if rest.is_empty() {
+            return None;
         }
     }
 }
@@ -169,6 +183,70 @@ pub(crate) fn first_shell_token(command: &str) -> Option<String> {
         token.push('\\');
     }
     (started && !token.is_empty()).then_some(token)
+}
+
+pub(crate) fn drop_first_shell_token(input: &str) -> &str {
+    let input = input.trim_start();
+    let mut quote = None;
+    let mut escaped = false;
+    let mut started = false;
+
+    for (index, ch) in input.char_indices() {
+        if escaped {
+            escaped = false;
+            started = true;
+            continue;
+        }
+
+        match quote {
+            Some('\'') => {
+                if ch == '\'' {
+                    quote = None;
+                } else {
+                    started = true;
+                }
+            }
+            Some('"') => {
+                if ch == '"' {
+                    quote = None;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else {
+                    started = true;
+                }
+            }
+            Some(_) => unreachable!(),
+            None => {
+                if ch.is_whitespace() {
+                    if started {
+                        return input[index..].trim_start();
+                    }
+                } else if ch == '\'' || ch == '"' {
+                    quote = Some(ch);
+                    started = true;
+                } else if ch == '\\' {
+                    escaped = true;
+                    started = true;
+                } else {
+                    started = true;
+                }
+            }
+        }
+    }
+
+    ""
+}
+
+pub(crate) fn is_shell_env_assignment(token: &str) -> bool {
+    let Some((name, _)) = token.split_once('=') else {
+        return false;
+    };
+    let name = name.strip_suffix('+').unwrap_or(name);
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        && !name.chars().next().is_some_and(|ch| ch.is_ascii_digit())
 }
 
 fn find_shell_token_start(command: &str, needle: &str) -> Option<usize> {
