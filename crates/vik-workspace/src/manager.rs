@@ -11,7 +11,7 @@ use vik_workflow::HooksConfig;
 use crate::error::WorkspaceError;
 use crate::path::{absolute_existing_or_join, ensure_inside_root};
 
-const RESERVED_WORKSPACE_KEYS: &[&str] = &[".vik", "logs", "sessions"];
+const RESERVED_WORKSPACE_KEYS: &[&str] = &[".vik", "logs", "service", "sessions"];
 
 #[derive(Debug, Clone)]
 pub struct WorkspaceManager {

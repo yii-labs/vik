@@ -33,30 +33,32 @@ Status values:
 
 ## Logs
 
-Service stdout and stderr are written to:
+Daemon JSON logs are written to `logging.dir` from `WORKFLOW.md`, which
+defaults to:
 
 ```text
-<workflow-directory>/.vik/service/<workflow-stem>-<path-hash>.log
+<workspace.root>/logs/
 ```
 
-The service state file uses the same name with `.json`. The CLI derives the
-name from the sanitized workflow file stem plus a stable hash of the full
-workflow path. Use `service status` or `service logs` when possible; both
-commands resolve the exact file path for the workflow.
+The detached service also writes early startup stderr to:
 
-Read recent logs:
+```text
+<workspace.root>/logs/vik-service.log
+```
+
+Use `service status` to print the configured log directory for the workflow.
+
+Read recent daemon logs:
 
 ```sh
-vik service logs --lines 100
+tail -n 100 <workspace.root>/logs/vik.log.*
 ```
 
-Follow logs:
+Follow daemon logs:
 
 ```sh
-vik service logs --follow
+tail -f <workspace.root>/logs/vik.log.*
 ```
-
-Daemon JSON logs still use `logging.dir` from `WORKFLOW.md`.
 
 ## Restart And Stop
 
@@ -91,8 +93,8 @@ Required credentials:
 Service state lives under:
 
 ```text
-<workflow-directory>/.vik/service/
+<workspace.root>/service/
 ```
 
-The state JSON records workflow path, cwd, pid, log path, port, and command.
+The state JSON records workflow path, cwd, pid, log dir, session dir, port, and command.
 Delete state only after confirming no matching Vik process is alive.

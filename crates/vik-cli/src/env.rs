@@ -1,5 +1,6 @@
 use std::error::Error;
 use std::io;
+use std::path::Path;
 
 pub(crate) fn load_dotenv() -> Result<(), Box<dyn Error>> {
     match dotenvy::dotenv() {
@@ -15,6 +16,18 @@ fn load_dotenv_path(path: &std::path::Path) -> Result<(), Box<dyn Error>> {
         Ok(_) => Ok(()),
         Err(err) => Err(format!("failed to load {}: {err}", path.display()).into()),
     }
+}
+
+pub(crate) fn load_dotenv_from_dir(dir: &Path) -> Result<(), Box<dyn Error>> {
+    for ancestor in dir.ancestors() {
+        let path = ancestor.join(".env");
+        match dotenvy::from_path(&path) {
+            Ok(_) => return Ok(()),
+            Err(dotenvy::Error::Io(err)) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(format!("failed to load {}: {err}", path.display()).into()),
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
