@@ -9,6 +9,7 @@ use vik_workflow::{AgentRuntimeConfig, ServiceConfig};
 use crate::codex::Codex;
 use crate::error::AgentError;
 use crate::runtime::AgentRuntime;
+use crate::session_log::with_session_log_subscriber;
 
 #[derive(Clone)]
 pub struct LocalAgentWorker<T>
@@ -87,9 +88,17 @@ async fn run_runtime_on_session_thread(
             let _ = result_tx.send(result);
         })
         .map_err(|err| AgentError::SessionThread(err.to_string()))?;
-    let result = result_rx
-        .await
-        .map_err(|_| AgentError::SessionThread("session thread exited without result".into()))?;
+    let result = match result_rx.await {
+        Ok(result) => result,
+        Err(_) => {
+            return match handle.join() {
+                Ok(()) => Err(AgentError::SessionThread(
+                    "session thread exited without result".into(),
+                )),
+                Err(_) => Err(AgentError::SessionThread("session thread panicked".into())),
+            };
+        }
+    };
     handle
         .join()
         .map_err(|_| AgentError::SessionThread("session thread panicked".into()))?;
@@ -102,16 +111,20 @@ fn run_runtime_in_current_thread(
     events: mpsc::UnboundedSender<AgentEvent>,
     cancel_rx: oneshot::Receiver<()>,
 ) -> Result<(), AgentError> {
-    let runtime_loop = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|err| AgentError::SessionThread(err.to_string()))?;
-    runtime_loop.block_on(async move {
-        tokio::select! {
-            result = runtime.run(request, events) => result,
-            _ = cancel_rx => Err(AgentError::TurnCancelled),
-        }
+    let log_dir = request.config.logging.dir.clone();
+    with_session_log_subscriber(&log_dir, || {
+        let runtime_loop = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|err| AgentError::SessionThread(err.to_string()))?;
+        runtime_loop.block_on(async move {
+            tokio::select! {
+                result = runtime.run(request, events) => result,
+                _ = cancel_rx => Err(AgentError::TurnCancelled),
+            }
+        })
     })
+    .map_err(|err| AgentError::SessionThread(format!("session logging: {err}")))?
 }
 
 struct SessionCancelOnDrop {

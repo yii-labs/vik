@@ -323,6 +323,22 @@ fn session_log_context_derives_session_identity_from_turn_start_response() {
 }
 
 #[test]
+fn session_log_context_prefers_message_turn_identity_over_context() {
+    let context = SessionLogContext::for_session("issue-1", "VIK-1", "thread-1", "turn-new");
+    let identity = context.identity_for(&json!({
+        "method": "turn/completed",
+        "params": {
+            "threadId": "thread-1",
+            "turn": { "id": "turn-old" }
+        }
+    }));
+
+    assert_eq!(identity.thread_id, "thread-1");
+    assert_eq!(identity.turn_id, "turn-old");
+    assert_eq!(identity.session_id, "thread-1-turn-old");
+}
+
+#[test]
 fn session_thread_name_uses_sanitized_issue_identifier() {
     assert_eq!(session_thread_name("VIK-51"), "vik-session-VIK-51");
     assert_eq!(

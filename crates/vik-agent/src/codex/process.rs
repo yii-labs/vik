@@ -167,7 +167,7 @@ impl JsonlRpcProcess {
         config: &CodexConfig,
     ) -> Result<TurnStartResponse, AgentError> {
         let params = turn_start_params(thread_id, cwd, prompt, config);
-        let (response, _) = self
+        let (response, unmatched_messages) = self
             .request_message_collecting_unmatched("turn/start", params)
             .await?;
         let turn_id = response
@@ -175,6 +175,15 @@ impl JsonlRpcProcess {
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
             .ok_or_else(|| AgentError::ResponseError("missing turn.id".to_string()))?;
+        let session_context = SessionLogContext::for_session(
+            self.session_log_context.issue_id.clone(),
+            self.session_log_context.issue_identifier.clone(),
+            thread_id.to_string(),
+            turn_id.clone(),
+        );
+        for message in unmatched_messages {
+            log_session_message(&session_context, None, "received", &message);
+        }
         Ok(TurnStartResponse { turn_id })
     }
 
@@ -231,8 +240,12 @@ impl JsonlRpcProcess {
         self.write_message(&request).await?;
         let mut unmatched_messages = Vec::new();
         loop {
-            let message = self.read_message(self.read_timeout).await?;
-            if message.get("id").and_then(Value::as_u64) == Some(id) {
+            let message = self.read_message_raw(self.read_timeout).await?;
+            let matches_request = message.get("id").and_then(Value::as_u64) == Some(id);
+            if !collect_unmatched || matches_request {
+                self.log_session_message("received", &message);
+            }
+            if matches_request {
                 self.pending_methods.remove(&id.to_string());
                 if let Some(error) = message.get("error") {
                     return Err(AgentError::ResponseError(error.to_string()));
@@ -388,15 +401,18 @@ impl JsonlRpcProcess {
     }
 
     async fn read_message(&mut self, timeout: Duration) -> Result<Value, AgentError> {
+        let message = self.read_message_raw(timeout).await?;
+        self.log_session_message("received", &message);
+        Ok(message)
+    }
+
+    async fn read_message_raw(&mut self, timeout: Duration) -> Result<Value, AgentError> {
         let line = time::timeout(timeout, self.stdout.next_line())
             .await
             .map_err(|_| AgentError::ResponseTimeout)?
             .map_err(|err| AgentError::ResponseError(err.to_string()))?
             .ok_or(AgentError::PortExit)?;
-        let message = serde_json::from_str(&line)
-            .map_err(|err| AgentError::ResponseError(err.to_string()))?;
-        self.log_session_message("received", &message);
-        Ok(message)
+        serde_json::from_str(&line).map_err(|err| AgentError::ResponseError(err.to_string()))
     }
 }
 
@@ -443,20 +459,12 @@ impl SessionLogContext {
     }
 
     pub(crate) fn identity_for<'a>(&'a self, message: &'a Value) -> SessionLogIdentity {
-        let thread_id = self
-            .thread_id
-            .as_deref()
-            .or_else(|| message_thread_id(message));
-        let turn_id = self.turn_id.as_deref().or_else(|| message_turn_id(message));
-        let session_id = self
-            .session_id
-            .as_deref()
-            .map(ToOwned::to_owned)
-            .or_else(|| {
-                thread_id
-                    .zip(turn_id)
-                    .map(|(thread_id, turn_id)| session_id(thread_id, turn_id))
-            });
+        let thread_id = message_thread_id(message).or(self.thread_id.as_deref());
+        let turn_id = message_turn_id(message).or(self.turn_id.as_deref());
+        let session_id = thread_id
+            .zip(turn_id)
+            .map(|(thread_id, turn_id)| session_id(thread_id, turn_id))
+            .or_else(|| self.session_id.as_deref().map(ToOwned::to_owned));
         SessionLogIdentity {
             issue_id: self.issue_id.clone(),
             issue_identifier: self.issue_identifier.clone(),
@@ -489,15 +497,15 @@ fn log_session_message(
         target: SESSION_LOG_TARGET,
         category = "session",
         agent = "codex",
-        direction,
-        event = %fields.event,
-        params_json = %params_json,
-        issue_id = %identity.issue_id,
-        issue_identifier = %identity.issue_identifier,
-        session_id = %identity.session_id,
-        thread_id = %identity.thread_id,
-        turn_id = %identity.turn_id,
-        rpc_id,
+        direction = direction,
+        event = fields.event.as_str(),
+        params_json = params_json.as_str(),
+        issue_id = identity.issue_id.as_str(),
+        issue_identifier = identity.issue_identifier.as_str(),
+        session_id = identity.session_id.as_str(),
+        thread_id = identity.thread_id.as_str(),
+        turn_id = identity.turn_id.as_str(),
+        rpc_id = rpc_id,
         "agent_session_message"
     );
 }

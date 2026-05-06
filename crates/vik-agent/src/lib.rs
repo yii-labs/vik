@@ -1,6 +1,7 @@
 mod codex;
 mod error;
 mod runtime;
+mod session_log;
 mod worker;
 
 pub use error::AgentError;

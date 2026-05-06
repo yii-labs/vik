@@ -2177,6 +2177,8 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
  "vik-core",
  "vik-workflow",
  "vik-workspace",
