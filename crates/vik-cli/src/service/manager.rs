@@ -1,6 +1,6 @@
 use std::env;
 use std::error::Error;
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Component, Path, PathBuf};
@@ -201,14 +201,10 @@ impl ServiceManager {
         command.current_dir(&cwd);
         self.detach_command(&mut command);
 
-        let err_log = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(self.service_stderr_log_path(&self.log_dir))?;
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::from(err_log));
+            .stderr(Stdio::null());
 
         let child = command.spawn()?;
         let pid = child.id();
@@ -419,10 +415,6 @@ impl ServiceManager {
             self.state_path.display(),
             self.log_dir.display()
         );
-    }
-
-    fn service_stderr_log_path(&self, log_dir: &Path) -> PathBuf {
-        log_dir.join("vik-service.log")
     }
 
     fn classify_state(&self, state: &ServiceState) -> RuntimeStatus {

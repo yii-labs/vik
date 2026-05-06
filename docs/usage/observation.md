@@ -12,12 +12,6 @@ Default log directory:
 <workspace.root>/logs
 ```
 
-Detached services also write early startup stderr to:
-
-```text
-<workspace.root>/logs/vik-service.log
-```
-
 Useful commands:
 
 ```sh
