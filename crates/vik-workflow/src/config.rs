@@ -3,7 +3,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use vik_core::WorkflowDefinition;
+use vik_core::{HostPlatform, WorkflowDefinition};
 use vik_tracker::{
     CommonTrackerConfig, GitHubTrackerConfig, LinearTrackerConfig, TrackerConfig,
     TrackerFilterConfig,
@@ -101,7 +101,14 @@ impl CodexConfig {
     }
 
     pub fn command_program(&self) -> Option<String> {
-        first_shell_token(&self.command)
+        self.command_program_for_platform(HostPlatform::current())
+    }
+
+    pub fn command_program_for_platform(&self, platform: HostPlatform) -> Option<String> {
+        match platform {
+            HostPlatform::Posix => first_shell_token(&self.command),
+            HostPlatform::Windows => split_windows_command_line(&self.command).into_iter().next(),
+        }
     }
 }
 
@@ -224,6 +231,53 @@ fn find_shell_token_start(command: &str, needle: &str) -> Option<usize> {
         token.push('\\');
     }
     if token == needle { token_start } else { None }
+}
+
+fn split_windows_command_line(input: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut arg_started = false;
+    let mut backslashes = 0;
+
+    for ch in input.trim().chars() {
+        match ch {
+            '\\' => {
+                backslashes += 1;
+                arg_started = true;
+            }
+            '"' => {
+                arg_started = true;
+                current.extend(std::iter::repeat_n('\\', backslashes / 2));
+                if backslashes % 2 == 0 {
+                    in_quotes = !in_quotes;
+                } else {
+                    current.push('"');
+                }
+                backslashes = 0;
+            }
+            ch if ch.is_whitespace() && !in_quotes => {
+                current.extend(std::iter::repeat_n('\\', backslashes));
+                backslashes = 0;
+                if arg_started {
+                    args.push(std::mem::take(&mut current));
+                    arg_started = false;
+                }
+            }
+            _ => {
+                current.extend(std::iter::repeat_n('\\', backslashes));
+                backslashes = 0;
+                current.push(ch);
+                arg_started = true;
+            }
+        }
+    }
+
+    current.extend(std::iter::repeat_n('\\', backslashes));
+    if arg_started {
+        args.push(current);
+    }
+    args
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

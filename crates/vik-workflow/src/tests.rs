@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use serde_yaml::Mapping;
 use tempfile::tempdir;
-use vik_core::{Issue, WorkflowDefinition};
+use vik_core::{HostPlatform, Issue, WorkflowDefinition};
 
 use super::*;
 
@@ -236,6 +236,36 @@ fn parses_codex_model_fields() {
     assert_eq!(
         config.codex.model_reasoning_effort.as_deref(),
         Some("xhigh")
+    );
+}
+
+#[test]
+fn codex_command_program_preserves_windows_paths() {
+    let config = CodexConfig {
+        command: r#"C:\Users\me\bin\codex.exe app-server"#.to_string(),
+        ..CodexConfig::default()
+    };
+
+    assert_eq!(
+        config
+            .command_program_for_platform(HostPlatform::Windows)
+            .as_deref(),
+        Some(r#"C:\Users\me\bin\codex.exe"#)
+    );
+}
+
+#[test]
+fn codex_command_program_preserves_quoted_windows_paths() {
+    let config = CodexConfig {
+        command: r#""C:\Program Files\Codex\codex.exe" app-server"#.to_string(),
+        ..CodexConfig::default()
+    };
+
+    assert_eq!(
+        config
+            .command_program_for_platform(HostPlatform::Windows)
+            .as_deref(),
+        Some(r#"C:\Program Files\Codex\codex.exe"#)
     );
 }
 
