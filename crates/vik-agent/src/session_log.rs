@@ -3,6 +3,7 @@ use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
@@ -13,6 +14,8 @@ use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt};
 
 use crate::SESSION_LOG_TARGET;
+
+static SESSION_LOG_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 pub(crate) fn with_session_log_subscriber<R>(
     log_dir: &Path,
@@ -67,6 +70,8 @@ where
     ) {
         let metadata = event.metadata();
         if metadata.target() != SESSION_LOG_TARGET {
+            // Keep normal service diagnostics flowing to the parent subscriber
+            // while session threads use a thread-local subscriber.
             self.parent.event(event);
             return;
         }
@@ -93,6 +98,7 @@ where
         let mut line = Vec::new();
         if write_session_json_line(&mut line, &visitor.fields).is_ok() {
             line.push(b'\n');
+            let _guard = SESSION_LOG_WRITE_LOCK.lock().ok();
             let mut writer = self.writer.make_writer();
             let _ = writer.write_all(&line);
         }
