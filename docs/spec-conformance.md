@@ -25,8 +25,8 @@ This document maps Vik draft v1 required behavior to this workspace.
 - Retry queue and backoff: `vik-orchestrator::failure_backoff_ms`.
 - Terminal/non-active reconciliation: `vik-orchestrator::Orchestrator`.
 - Structured logs: `tracing` writes service and session categories. Session
-  records include `agent`, `event`, structured `params`, issue/session identity,
-  and RPC correlation fields.
+  records include `agent`, `event`, structured `params`, and issue/session
+  identity when the worker observes it.
 - Operator observability: JSON logs plus optional HTTP API in `vik-http`.
 
 Implemented tracker providers:

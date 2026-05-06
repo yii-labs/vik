@@ -912,6 +912,14 @@ mod tests {
     }
 
     #[test]
+    fn log_filters_split_service_and_session_targets() {
+        assert!(is_session_log_target(vik_agent::SESSION_LOG_TARGET));
+        assert!(!is_service_log_target(vik_agent::SESSION_LOG_TARGET));
+        assert!(is_service_log_target("vik_orchestrator::engine"));
+        assert!(is_service_log_target("vik_cli::service::manager"));
+    }
+
+    #[test]
     fn stale_group_cleanup_skips_live_pid() {
         let manager = temp_manager().unwrap();
 

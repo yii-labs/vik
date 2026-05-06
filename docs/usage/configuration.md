@@ -104,9 +104,8 @@ Each run logs to stdout and to daily files under `logging.dir`:
 
 - `service.log.<date>` contains service, manager, orchestrator, hook, tracker,
   HTTP, and lifecycle events.
-- `session.log.<date>` contains Codex app-server request and response messages
-  with `agent`, `event`, structured `params`, issue/session identity, and RPC
-  correlation fields.
+- `session.log.<date>` contains worker-boundary agent run and return events
+  with `agent`, `event`, structured `params`, and issue/session identity.
 
 ## Hooks
 

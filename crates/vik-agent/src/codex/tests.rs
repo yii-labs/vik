@@ -1,11 +1,10 @@
 use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use chrono::Utc;
-use serde_json::json;
+use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::sync::mpsc;
 use vik_core::{
@@ -20,14 +19,12 @@ use vik_workflow::{
 
 use crate::codex::command::{codex_spawn_command, codex_spawn_process_command_for_platform};
 use crate::codex::events::extract_usage;
-use crate::codex::process::{
-    SessionLogContext, permission_approval_result, session_log_fields, thread_start_params,
-    turn_start_params,
-};
+use crate::codex::message_belongs_to_turn;
+use crate::codex::process::{permission_approval_result, thread_start_params, turn_start_params};
+use crate::codex::session_log::{SessionLog, session_log_dir, session_log_path};
 use crate::codex::tools::DynamicTools;
 use crate::codex::transport::{CodexTransport, CodexTransportFactory, EventSink};
-use crate::codex::{CONTINUATION_PROMPT, Codex, message_belongs_to_turn};
-use crate::worker::session_thread_name;
+use crate::codex::{CONTINUATION_PROMPT, Codex};
 use crate::{AgentError, AgentRuntime};
 
 #[test]
@@ -285,65 +282,70 @@ fn turn_start_buffered_message_routing_uses_message_turn_id() {
     ));
 }
 
-#[test]
-fn session_log_fields_extract_method_params_and_rpc_results() {
-    let request = json!({
-        "id": 4,
-        "method": "turn/start",
-        "params": { "threadId": "thread-1", "input": [] }
-    });
-    let fields = session_log_fields(&request, None);
-    assert_eq!(fields.event, "turn/start");
-    assert_eq!(fields.rpc_id.as_deref(), Some("4"));
-    assert_eq!(fields.params["threadId"], "thread-1");
+#[tokio::test]
+async fn session_log_appends_raw_codex_jsonl_under_workspace_sessions() {
+    let workspace_root = TempDir::new().unwrap();
+    let sessions = session_log_dir(workspace_root.path());
+    let path = session_log_path(&sessions, "VIK-11", "thread/one:turn two");
+    let mut session_log = SessionLog::open(path.clone()).await.unwrap();
 
-    let response = json!({
-        "id": 4,
-        "result": { "turn": { "id": "turn-1" } }
-    });
-    let fields = session_log_fields(&response, Some("turn/start"));
-    assert_eq!(fields.event, "turn/start");
-    assert_eq!(fields.rpc_id.as_deref(), Some("4"));
-    assert_eq!(fields.params["turn"]["id"], "turn-1");
-}
+    session_log
+        .append_message(&json!({
+            "method": "turn/started",
+            "params": { "turn": { "id": "turn two" } }
+        }))
+        .await
+        .unwrap();
+    session_log
+        .append_message(&json!({
+            "method": "turn/completed",
+            "params": { "turn": { "status": "completed" } }
+        }))
+        .await
+        .unwrap();
 
-#[test]
-fn session_log_context_derives_session_identity_from_turn_start_response() {
-    let context = SessionLogContext::for_thread("issue-1", "VIK-1", "thread-1");
-    let identity = context.identity_for(&json!({
-        "id": 4,
-        "result": { "turn": { "id": "turn-1" } }
-    }));
-
-    assert_eq!(identity.issue_id, "issue-1");
-    assert_eq!(identity.issue_identifier, "VIK-1");
-    assert_eq!(identity.thread_id, "thread-1");
-    assert_eq!(identity.turn_id, "turn-1");
-    assert_eq!(identity.session_id, "thread-1");
-}
-
-#[test]
-fn session_log_context_prefers_message_turn_identity_over_context() {
-    let context = SessionLogContext::for_session("issue-1", "VIK-1", "thread-1", "turn-new");
-    let identity = context.identity_for(&json!({
-        "method": "turn/completed",
-        "params": {
-            "threadId": "thread-1",
-            "turn": { "id": "turn-old" }
-        }
-    }));
-
-    assert_eq!(identity.thread_id, "thread-1");
-    assert_eq!(identity.turn_id, "turn-old");
-    assert_eq!(identity.session_id, "thread-1");
-}
-
-#[test]
-fn session_thread_name_uses_sanitized_issue_identifier() {
-    assert_eq!(session_thread_name("VIK-51"), "vik-session-VIK-51");
     assert_eq!(
-        session_thread_name("bad issue/51"),
-        "vik-session-bad_issue_51"
+        path,
+        workspace_root
+            .path()
+            .join("sessions")
+            .join("VIK-11-thread_one_turn_two.jsonl")
+    );
+    let contents = tokio::fs::read_to_string(&path).await.unwrap();
+    assert!(!contents.contains("VIK-11"));
+    assert!(!contents.contains("thread_one_turn_two"));
+    let lines: Vec<_> = contents.lines().collect();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(lines[0]).unwrap()["method"],
+        "turn/started"
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(lines[1]).unwrap()["method"],
+        "turn/completed"
+    );
+}
+
+#[tokio::test]
+async fn session_log_starts_new_line_after_torn_write() {
+    let workspace_root = TempDir::new().unwrap();
+    let sessions = session_log_dir(workspace_root.path());
+    let path = session_log_path(&sessions, "VIK-11", "session-1");
+    tokio::fs::create_dir_all(path.parent().unwrap())
+        .await
+        .unwrap();
+    tokio::fs::write(&path, b"{\"partial\":true").await.unwrap();
+    let mut session_log = SessionLog::open(path.clone()).await.unwrap();
+
+    session_log
+        .append_message(&json!({ "method": "turn/completed" }))
+        .await
+        .unwrap();
+
+    let contents = tokio::fs::read_to_string(&path).await.unwrap();
+    assert_eq!(
+        contents,
+        "{\"partial\":true\n{\"method\":\"turn/completed\"}\n"
     );
 }
 
@@ -367,7 +369,14 @@ async fn codex_run_uses_issue_prompt_then_continuation_prompt() {
     );
     assert_eq!(state.unsubscribed_threads, vec!["thread-1"]);
     assert_eq!(state.shutdowns, 1);
-    assert_eq!(state.session_contexts_set, 5);
+    assert_eq!(state.session_logs_set, 2);
+    assert!(
+        dir.path()
+            .join("work")
+            .join("sessions")
+            .join("VIK-1-thread-1.jsonl")
+            .exists()
+    );
     drop(state);
 
     let events = drain_events(&mut rx);
@@ -413,60 +422,6 @@ async fn codex_run_shuts_down_and_unsubscribes_after_turn_failure() {
     let state = factory.state.lock().unwrap();
     assert_eq!(state.prompts, vec!["VIK-1 attempt=1".to_string()]);
     assert_eq!(state.unsubscribed_threads, vec!["thread-1"]);
-    assert_eq!(state.shutdowns, 1);
-}
-
-#[tokio::test]
-async fn local_agent_worker_abort_cancels_session_thread() {
-    let dir = TempDir::new().unwrap();
-    let tracker = Arc::new(FakeTracker::new(vec!["Todo"]));
-    let factory = Arc::new(FakeTransportFactory::with_blocking_wait());
-    let runtime = Arc::new(Codex::with_transport_factory(
-        Arc::clone(&tracker),
-        factory.clone(),
-    ));
-    let worker = crate::LocalAgentWorker::with_runtime_override(Arc::clone(&tracker), runtime);
-    let request = agent_request(dir.path(), 1);
-    let (tx, _rx) = mpsc::unbounded_channel();
-    let state = Arc::clone(&factory.state);
-
-    let handle =
-        tokio::spawn(async move { vik_core::AgentWorker::run(&worker, request, tx).await });
-    wait_until(Duration::from_secs(2), || {
-        state.lock().unwrap().waits_started > 0
-    })
-    .await;
-
-    handle.abort();
-    let _ = handle.await;
-    wait_until(Duration::from_secs(2), || state.lock().unwrap().drops > 0).await;
-
-    let state = factory.state.lock().unwrap();
-    assert_eq!(state.drops, 1);
-    assert_eq!(state.wait_thread_names, vec!["vik-session-VIK-1"]);
-}
-
-#[tokio::test]
-async fn local_agent_worker_runs_when_session_log_setup_fails() {
-    let dir = TempDir::new().unwrap();
-    let log_file = dir.path().join("not-a-directory");
-    std::fs::write(&log_file, b"not a directory").unwrap();
-    let tracker = Arc::new(FakeTracker::new(vec!["Done"]));
-    let factory = Arc::new(FakeTransportFactory::default());
-    let runtime = Arc::new(Codex::with_transport_factory(
-        Arc::clone(&tracker),
-        factory.clone(),
-    ));
-    let worker = crate::LocalAgentWorker::with_runtime_override(Arc::clone(&tracker), runtime);
-    let mut request = agent_request(dir.path(), 1);
-    request.config.logging.dir = log_file;
-    let (tx, _rx) = mpsc::unbounded_channel();
-
-    let outcome = vik_core::AgentWorker::run(&worker, request, tx).await;
-
-    assert_eq!(outcome.kind, vik_core::WorkerExitKind::Normal);
-    let state = factory.state.lock().unwrap();
-    assert_eq!(state.prompts, vec!["VIK-1 attempt=1"]);
     assert_eq!(state.shutdowns, 1);
 }
 
@@ -602,12 +557,8 @@ struct FakeTransportState {
     prompts: Vec<String>,
     unsubscribed_threads: Vec<String>,
     shutdowns: usize,
-    session_contexts_set: usize,
+    session_logs_set: usize,
     fail_turn: bool,
-    block_wait: bool,
-    waits_started: usize,
-    wait_thread_names: Vec<String>,
-    drops: usize,
 }
 
 #[derive(Default)]
@@ -619,16 +570,6 @@ impl FakeTransportFactory {
     fn with_turn_failure() -> Self {
         let state = FakeTransportState {
             fail_turn: true,
-            ..FakeTransportState::default()
-        };
-        Self {
-            state: Arc::new(Mutex::new(state)),
-        }
-    }
-
-    fn with_blocking_wait() -> Self {
-        let state = FakeTransportState {
-            block_wait: true,
             ..FakeTransportState::default()
         };
         Self {
@@ -687,12 +628,21 @@ impl CodexTransport for FakeTransport {
         let turn_id = format!("turn-{}", state.prompts.len());
         Ok(crate::codex::process::TurnStartResponse {
             turn_id: turn_id.clone(),
+            response: json!({ "result": { "turn": { "id": turn_id } } }),
+            pre_response_messages: vec![json!({
+                "method": "turn/started",
+                "params": { "turn": { "id": turn_id } }
+            })],
         })
     }
 
-    fn set_session_log_context(&mut self, _context: SessionLogContext) {
-        self.state.lock().unwrap().session_contexts_set += 1;
+    fn set_session_log(&mut self, session_log: Option<SessionLog>) {
+        if session_log.is_some() {
+            self.state.lock().unwrap().session_logs_set += 1;
+        }
     }
+
+    async fn append_current_session_message(&mut self, _message: &Value) {}
 
     async fn wait_for_turn(
         &mut self,
@@ -704,20 +654,6 @@ impl CodexTransport for FakeTransport {
     ) -> Result<(), AgentError> {
         if self.state.lock().unwrap().fail_turn {
             return Err(AgentError::TurnFailed("fake failure".to_string()));
-        }
-        let block_wait = {
-            let mut state = self.state.lock().unwrap();
-            state.waits_started += 1;
-            state.wait_thread_names.push(
-                std::thread::current()
-                    .name()
-                    .unwrap_or_default()
-                    .to_string(),
-            );
-            state.block_wait
-        };
-        if block_wait {
-            std::future::pending::<()>().await;
         }
         live.last_event = Some("turn/completed".to_string());
         on_event(crate::codex::events::agent_event(
@@ -750,12 +686,6 @@ impl CodexTransport for FakeTransport {
     }
 }
 
-impl Drop for FakeTransport {
-    fn drop(&mut self) {
-        self.state.lock().unwrap().drops += 1;
-    }
-}
-
 struct FailingRuntime;
 
 #[async_trait]
@@ -775,14 +705,6 @@ fn drain_events(rx: &mut mpsc::UnboundedReceiver<AgentEvent>) -> Vec<AgentEvent>
         events.push(event);
     }
     events
-}
-
-async fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) {
-    let started = Instant::now();
-    while !condition() {
-        assert!(started.elapsed() < timeout, "condition timed out");
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
 }
 
 fn agent_request(root: &Path, max_turns: u32) -> AgentRunRequest<ServiceConfig> {

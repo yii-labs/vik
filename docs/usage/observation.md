@@ -70,7 +70,8 @@ turn count, last event, last message, workspace path, and token usage.
 
 ## Sessions
 
-Codex app-server session traffic is emitted through tracing to the session log:
+Agent session traffic is emitted through tracing to the session log from the
+worker boundary:
 
 ```text
 <logging.dir>/session.log.<date>
@@ -88,13 +89,12 @@ jq . "$HOME/code/vik-workspaces/logs"/session.log.* | less
 Session records include:
 
 - `agent`: currently `codex`.
-- `event`: Codex method name, or the correlated request method for RPC
-  responses.
-- `params`: structured JSON from request params, response result, or error.
+- `event`: worker run boundary or agent event name.
+- `params`: structured JSON for the run boundary, returned agent event, usage,
+  rate-limit data, or error.
 - `issue_id` and `issue_identifier`.
-- `session_id`, `thread_id`, and `turn_id` when known or derivable from the
-  message.
-- `rpc_id` for JSON-RPC request/response correlation.
+- `session_id`, `thread_id`, and `turn_id` when the returned agent event
+  includes session identity.
 
 Service events stay in `<logging.dir>/service.log.<date>` and do not include
-Codex message payloads.
+agent session payloads.
