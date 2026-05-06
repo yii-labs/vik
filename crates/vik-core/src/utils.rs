@@ -93,7 +93,22 @@ pub fn sanitize_workspace_key(identifier: &str) -> String {
 }
 
 pub fn session_id(thread_id: &str, turn_id: &str) -> String {
+    if is_uuid_like(thread_id) && is_uuid_like(turn_id) {
+        return turn_id.to_string();
+    }
+
     format!("{thread_id}-{turn_id}")
+}
+
+fn is_uuid_like(value: &str) -> bool {
+    if value.len() != 36 {
+        return false;
+    }
+
+    value.bytes().enumerate().all(|(index, byte)| match index {
+        8 | 13 | 18 | 23 => byte == b'-',
+        _ => byte.is_ascii_hexdigit(),
+    })
 }
 
 pub fn issue_is_active(
@@ -121,7 +136,9 @@ pub fn blocker_is_terminal(blocker: &BlockerRef, terminal_states: &[String]) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{HostPlatform, PosixShell, ShellInvocation};
+    use crate::AgentSession;
+
+    use super::{HostPlatform, PosixShell, ShellInvocation, session_id};
 
     #[test]
     fn shell_invocation_uses_bash_for_posix_app_server() {
@@ -157,5 +174,29 @@ mod tests {
             &["-NoProfile", "-NonInteractive", "-Command"]
         );
         assert_eq!(invocation.command(), "Write-Output hook");
+    }
+
+    #[test]
+    fn session_id_uses_turn_uuid_for_codex_uuid_ids() {
+        let thread_id = "019dfab1-fd48-78c0-9b40-cf507bd19842";
+        let turn_id = "019dfab1-fd58-7a21-8285-58d94bbb614f";
+
+        assert_eq!(session_id(thread_id, turn_id), turn_id);
+    }
+
+    #[test]
+    fn session_id_preserves_composite_for_non_uuid_ids() {
+        assert_eq!(session_id("thread-1", "turn-2"), "thread-1-turn-2");
+    }
+
+    #[test]
+    fn agent_session_uses_turn_uuid_for_codex_uuid_ids() {
+        let thread_id = "019dfab1-fd48-78c0-9b40-cf507bd19842";
+        let turn_id = "019dfab1-fd58-7a21-8285-58d94bbb614f";
+        let session = AgentSession::new(thread_id, turn_id);
+
+        assert_eq!(session.session_id, turn_id);
+        assert_eq!(session.thread_id, thread_id);
+        assert_eq!(session.turn_id, turn_id);
     }
 }
