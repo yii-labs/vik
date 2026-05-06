@@ -92,8 +92,8 @@ pub fn sanitize_workspace_key(identifier: &str) -> String {
         .collect()
 }
 
-pub fn session_id(thread_id: &str, turn_id: &str) -> String {
-    format!("{thread_id}-{turn_id}")
+pub fn session_id(thread_id: &str, _turn_id: &str) -> String {
+    thread_id.to_string()
 }
 
 pub fn issue_is_active(
@@ -121,7 +121,9 @@ pub fn blocker_is_terminal(blocker: &BlockerRef, terminal_states: &[String]) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{HostPlatform, PosixShell, ShellInvocation};
+    use crate::AgentSession;
+
+    use super::{HostPlatform, PosixShell, ShellInvocation, session_id};
 
     #[test]
     fn shell_invocation_uses_bash_for_posix_app_server() {
@@ -157,5 +159,31 @@ mod tests {
             &["-NoProfile", "-NonInteractive", "-Command"]
         );
         assert_eq!(invocation.command(), "Write-Output hook");
+    }
+
+    #[test]
+    fn session_id_uses_thread_id() {
+        let thread_uuid = "019dfab1-fd48-78c0-9b40-cf507bd19842";
+        let turn_uuid = "019dfab1-fd58-7a21-8285-58d94bbb614f";
+
+        for (thread_id, turn_id) in [
+            (thread_uuid, turn_uuid),
+            (thread_uuid, "turn-2"),
+            ("thread-1", turn_uuid),
+            ("thread-1", "turn-2"),
+        ] {
+            assert_eq!(session_id(thread_id, turn_id), thread_id);
+        }
+    }
+
+    #[test]
+    fn agent_session_uses_thread_id() {
+        let thread_id = "019dfab1-fd48-78c0-9b40-cf507bd19842";
+        let turn_id = "019dfab1-fd58-7a21-8285-58d94bbb614f";
+        let session = AgentSession::new(thread_id, turn_id);
+
+        assert_eq!(session.session_id, thread_id);
+        assert_eq!(session.thread_id, thread_id);
+        assert_eq!(session.turn_id, turn_id);
     }
 }
