@@ -48,16 +48,22 @@ The detached service also writes early startup stderr to:
 
 Use `service status` to print the configured log directory for the workflow.
 
-Read recent daemon logs:
+Read recent service logs:
 
 ```sh
-tail -n 100 <workspace.root>/logs/vik.log.*
+tail -n 100 <workspace.root>/logs/service.log.*
 ```
 
-Follow daemon logs:
+Follow service logs:
 
 ```sh
-tail -f <workspace.root>/logs/vik.log.*
+tail -f <workspace.root>/logs/service.log.*
+```
+
+Follow agent session traffic:
+
+```sh
+tail -f <workspace.root>/logs/session.log.*
 ```
 
 ## Restart And Stop
