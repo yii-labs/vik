@@ -1,53 +1,27 @@
 # Checks
 
-Run these before push unless the change is explicitly docs-only and the reviewer
-accepts a narrower gate.
+Run these before handoff unless the change is explicitly docs-only and the
+reviewer accepts a narrower gate.
 
 ## Required CI Parity
 
 ```sh
-cargo run --locked -p vik-cli -- doctor ./WORKFLOW.md
+cargo run --locked -- doctor --json ./workflow.yml
 cargo fmt --all -- --check
-cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-cargo test --locked --workspace --all-features
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-features
 git diff --check
 ```
 
-## Docs Gate
+## Docs-Only Narrow Gate
 
-Run for docs changes:
-
-```sh
-rg -n "[\\p{Han}\\p{Hiragana}\\p{Katakana}]" \
-  README.md AGENTS.md docs .env.example WORKFLOW.md Dockerfile docker
-```
-
-No matches should be returned.
-
-## Docker Gate
-
-Run when `Dockerfile`, `docker/`, or Docker docs change:
+For docs-only changes, run:
 
 ```sh
-docker build -t vik:local .
-mkdir -p "$PWD/.vik/docker-workspace"
-cp WORKFLOW.md "$PWD/.vik/docker-workspace/WORKFLOW.md"
-docker run --rm \
-  -v "$PWD/.vik/docker-workspace:/vik-workspace" \
-  vik:local vik doctor
+cargo run --locked -- --help
+cargo run --locked -- doctor --json ./workflow.yml
+git diff --check
 ```
 
-Pass real `GH_TOKEN`, `OPENAI_API_KEY`, and `LINEAR_API_KEY` only for an
-end-to-end daemon run against an isolated tracker target.
-
-## Runtime Gate
-
-Run when orchestration behavior changes:
-
-```sh
-cargo run --locked -p vik-cli -- start ./WORKFLOW.md --port 3000
-curl -fsS http://127.0.0.1:3000/api/v1/state | jq .
-```
-
-Record the issue state, PR link, and final tracker state when using Vik itself
-to drive a ticket.
+Also grep changed docs for stale command shapes and non-English text before
+handoff.

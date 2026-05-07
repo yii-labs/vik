@@ -1,258 +1,274 @@
 # Get Started
 
-Use this file as an executable checklist for a human operator or AI agent with
-shell access. Use browser automation only for login or settings pages. Never
-print, log, or commit secret values.
+Vik is a small program that watches an issue tracker (like GitHub or
+Linear, and whatever) and lets agents (Codex or Claude Code) work on issues
+for you. You describe how you want it to behave in a single file
+called `workflow.yml`. Once that file is ready, you start Vik and
+walk away.
 
-## 1. Workspace
+This guide builds that file with you, one section at a time. Run
+every command from the same folder you are working in.
 
-Why: Vik creates one working copy per active tracker issue. The workspace root
-must be a directory where Vik may create, mutate, and remove issue directories.
+> Never paste API keys into chat, commit them to git, or print them
+> with `echo` / `cat`. Keep secrets in environment variables.
 
-1. Start in the operator directory that contains `WORKFLOW.md`:
+## What you need first
 
-   ```sh
-   test -f WORKFLOW.md
-   pwd
-   ```
+- A terminal you are comfortable using.
+- The `vik` binary installed and on your `PATH`.
+- One coding agent: Codex (`codex`) **or** Claude Code (`claude`).
+- One tracker account: GitHub **or** Linear.
+- The usual command-line tools: `git`, `jq`.
 
-2. Confirm required runtime commands are available:
-
-   ```sh
-   vik --help
-   git --version
-   gh --version
-   codex --version
-   jq --version
-   ```
-
-3. Create the issue workspace root used by `WORKFLOW.md`:
-
-   ```sh
-   mkdir -p "$HOME/code/vik-workspaces"
-   ```
-
-4. Confirm the current directory is a Git worktree before Vik starts creating
-   issue workspaces:
-
-   ```sh
-   git rev-parse --show-toplevel
-   ```
-
-## 2. Workflow
-
-Why: `WORKFLOW.md` tells Vik which tracker issues to claim, where to create
-workspaces, how to clone the repo, and how to launch Codex.
-
-1. Open `WORKFLOW.md`.
-2. Confirm `tracker.kind` is supported.
-3. For Linear, confirm `tracker.project_slug` matches the Linear project slug.
-4. For GitHub, confirm `tracker.repository` matches the `owner/name` repository.
-5. Confirm `tracker.active_states` contains every state Vik may claim.
-6. Confirm `tracker.terminal_states` contains terminal states that should stop
-   tracking and trigger cleanup.
-7. Confirm `workspace.root` points to the directory created above.
-8. Confirm `hooks.after_create` clones this repo into the empty issue
-   workspace.
-9. Confirm `codex.command` launches `codex app-server`.
-
-Run local workflow diagnostics:
+Quick sanity check:
 
 ```sh
-vik doctor ./WORKFLOW.md
+pwd
+vik --help
+git --version
+jq --version
 ```
 
-Start the daemon:
+If any of these fail, install the missing tool before continuing.
+
+## 1. Create `workflow.yml`
+
+Pick (or create) a folder where you want to work from, and start an
+empty config file inside it:
 
 ```sh
-vik start ./WORKFLOW.md
+mkdir -p hello-vik
+cd hello-vik
+touch workflow.yml
 ```
 
-Start with the optional observation server:
+This is the file you will add to in every step below. Open it in
+your editor of choice.
+
+## 2. Tell Vik where to put files
+
+Vik keeps logs, per-issue working folders, and session records under
+one workflow-scoped workspace directory. If you omit `workspace.root`,
+Vik uses `VIK_HOME` when set; otherwise it uses your home directory.
+
+Add to `workflow.yml`:
+
+```yaml
+workspace: {}
+```
+
+Create the parent directory Vik needs before first run:
 
 ```sh
-vik start ./WORKFLOW.md --port 3000
+mkdir -p "${VIK_HOME:-$HOME}/workflows"
 ```
 
-## 3. Connections
+You can also set `workspace.root` to an absolute path like
+`/Users/you/vik-workspaces`.
+Relative paths resolve from the directory that contains `workflow.yml`.
+Vik adds `workflows/<workflow-path-key>/` under that root so different
+workflow files do not collide.
 
-### Codex
+## 3. Pick a coding agent
 
-Why: Vik launches `codex app-server` inside each issue workspace. Codex must be
-installed and authenticated before the daemon can run agent sessions.
+Vik can drive Codex or Claude Code. Pick one and follow that section.
 
-Official links:
+### Option A: Codex
 
-- Codex CLI reference:
-  <https://developers.openai.com/codex/cli/reference>
-- OpenAI API keys:
-  <https://platform.openai.com/settings/organization/api-keys>
+Check the CLI is installed and logged in:
 
-Steps:
+```sh
+codex --version
+codex login status
+```
 
-1. Check CLI availability:
+Add an `agents` section to `workflow.yml`. The name (`coder` here)
+is yours to choose — stages will reference it later.
 
-   ```sh
-   codex --version
-   codex app-server --help
-   ```
+```yaml
+agents:
+  coder:
+    runtime: codex
+    model: gpt-5.5
+```
 
-2. Check auth:
+### Option B: Claude Code
 
-   ```sh
-   codex login status
-   ```
+Check the CLI is installed and logged in:
 
-3. If auth is missing and a browser is available, run:
+```sh
+claude --version
+claude auth status
+```
 
-   ```sh
-   codex login
-   codex login status
-   ```
+Add an `agents` section to `workflow.yml`:
 
-4. If browser auth is unavailable and `OPENAI_API_KEY` is already exported,
-   authenticate without printing the key:
+```yaml
+agents:
+  coder:
+    runtime: claude_code
+    model: claude-sonnet-4-6
+```
 
-   ```sh
-   printenv OPENAI_API_KEY | codex login --with-api-key
-   codex login status
-   ```
+## 4. Connect a tracker, then add the pull command
 
-5. Stop with a Codex auth blocker if neither browser auth nor an API key is
-   available.
+Vik does not own tracker access. You give it a shell command that
+prints a list of issues as JSON; Vik runs that command on a loop.
+Pick the tracker you use and follow its dedicated guide for full
+setup, sample pull commands, and the prompt-side commands you will
+need later (read details, leave comments, change state, etc.).
 
-### GitHub
+| Tracker | Auth                            | Setup guide                               |
+| ------- | ------------------------------- | ----------------------------------------- |
+| GitHub  | `gh auth login` (or `GH_TOKEN`) | [GitHub Issue Source](trackers/github.md) |
+| Linear  | `export LINEAR_API_KEY=...`     | [Linear Issue Source](trackers/linear.md) |
 
-Why: Vik workflow hooks clone repositories. Agents also need GitHub access for
-branch, push, PR, label, comment, review, and check operations. When
-`tracker.kind` is `github`, Vik also uses this token to read and update GitHub
-issues.
+Whichever you pick, every issue your pull command emits must include
+at least:
 
-Official links:
+- `id` — a unique identifier (string).
+- `title` — the issue title.
+- `state` — the state Vik will match on. Case-sensitive.
 
-- GitHub CLI auth manual: <https://cli.github.com/manual/gh_auth>
-- GitHub CLI git credential setup:
-  <https://cli.github.com/manual/gh_auth_setup-git>
-- GitHub personal access tokens:
-  <https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens>
-- GitHub SSH setup:
-  <https://docs.github.com/en/authentication/connecting-to-github-with-ssh>
+Run the command by hand once to confirm it prints a JSON array
+before pasting it into `issues.pull.command`:
 
-Steps:
+```sh
+./your-pull-command | jq 'length'
+```
 
-1. Check GitHub CLI auth:
+Then add the `issues.pull` block to `workflow.yml` exactly as the
+tracker guide shows. `idle_sec` controls how long Vik waits between
+pull cycles — start at `5` for GitHub, `10` for Linear, then tune.
 
-   ```sh
-   gh auth status --active --hostname github.com
-   ```
+## 5. Tell Vik what to do per state
 
-2. If auth is missing and a browser is available, run:
+For each tracker state, Vik runs a stage: a prompt file given to your
+agent. Create a prompts folder and a starter prompt:
 
-   ```sh
-   gh auth login --hostname github.com --git-protocol ssh --web
-   gh auth setup-git --hostname github.com
-   gh auth status --active --hostname github.com
-   ```
+```sh
+mkdir -p ./prompts
+```
 
-3. If using token auth instead of browser auth, create a token at the personal
-   access token link above. Prefer fine-grained access to only `yii-labs/vik`.
-   Grant at least:
+Write `./prompts/plan.md` with whatever you want the agent to do
+when an issue is in the `todo` state. For example:
 
-   - `metadata: read`
-   - `contents: write`
-   - `pull_requests: write`
-   - `issues: write`
-   - `actions: read`
+```text
+You are working on issue {{ issue.id }}: {{ issue.title }}.
 
-4. Set Vik to use the token as `GH_TOKEN` or `GITHUB_TOKEN` in the shell,
-   service environment, or Docker environment. Do not commit the token.
+Read the issue, write a short plan as a comment on the issue, and
+move it to the `work` state.
+```
 
-5. If using GitHub CLI credentials for Git operations, run:
+Then add `issue.stages` to `workflow.yml`. The `when.state` value
+must match exactly what your pull command returns.
 
-   ```sh
-   gh auth setup-git --hostname github.com
-   ```
+```yaml
+issue:
+  stages:
+    plan:
+      when:
+        state: todo
+      agent: coder
+      prompt_file: ./prompts/plan.md
+```
 
-6. The default `WORKFLOW.md` clone hook uses SSH:
+You can add more stages over time — one per state you want Vik to
+react to. Write a prompt file for each.
 
-   ```sh
-   git clone --depth 1 git@github.com:yii-labs/vik .
-   ```
+> Vik never updates the tracker on its own. Your prompts must tell
+> the agent how to leave comments, change labels, open PRs, etc.
 
-   Therefore SSH auth must work:
+## 6. (Optional) Run something on every new issue
 
-   ```sh
-   ssh -T git@github.com || true
-   git ls-remote git@github.com:yii-labs/vik HEAD
-   ```
+If every issue should start with the same setup — cloning your repo,
+creating a branch, etc. — add an `after_create` hook. It runs once
+per issue, in the issue's working folder, before any stage starts.
 
-7. If token auth works but SSH auth is unavailable, change
-   `hooks.after_create` in `WORKFLOW.md` to HTTPS before starting Vik:
+```yaml
+issue:
+  hooks:
+    after_create: |
+      git clone --depth 1 git@github.com:your-org/your-repo .
+  stages:
+    # ... same stages as before
+```
 
-   ```yaml
-   hooks:
-     after_create: |
-       git clone --depth 1 https://github.com/yii-labs/vik .
-   ```
+The hook must be safe to run more than once: Vik replays it every
+matched cycle if the issue is still around.
 
-8. Stop with a GitHub auth blocker only after both CLI/browser and token paths
-   fail.
+## 7. Validate before running
 
-### Linear
+`vik doctor` reads your `workflow.yml` and reports problems without
+running anything:
 
-Why: With `tracker.kind: linear`, Vik reads candidate issues from Linear and
-routes Codex app-server tracker tools through the configured Linear API
-credentials.
+```sh
+vik doctor ./workflow.yml
+```
 
-Official links:
+Fix anything it flags (missing fields, unknown agents, empty
+strings, etc.) before moving on.
 
-- Linear GraphQL API: <https://linear.app/developers/graphql>
-- Linear API key settings: <https://linear.app/settings/api>
+## 8. Run Vik
 
-Steps:
+Two ways to start. Pick one for your first run.
 
-1. Open the Linear API key settings link above.
-2. Create a personal API key for the Linear workspace that contains the Vik
-   project.
-3. Set Vik to use the key as `LINEAR_API_KEY` in `.env`, the service
-   environment, or the Docker environment. Do not commit the key.
-4. Confirm the project slug in `WORKFLOW.md`. Use the slug from the Linear
-   project URL or keep the repo default when running this Vik project:
+**Foreground** — logs print in this terminal, Ctrl-C stops Vik:
 
-   ```sh
-   rg -n 'project_slug' WORKFLOW.md
-   ```
+```sh
+vik run ./workflow.yml
+```
 
-5. Stop with a Linear auth blocker if no personal API key can be created or
-   provided.
+**Detached** — Vik keeps running after you close the terminal:
 
-## 4. Run
+```sh
+vik run -d ./workflow.yml
+```
 
-1. Validate workflow config:
+Check it is alive:
 
-   ```sh
-   vik doctor ./WORKFLOW.md
-   ```
+```sh
+vik status ./workflow.yml
+```
 
-2. Start Vik:
+Stop it when you are done:
 
-   ```sh
-   vik start ./WORKFLOW.md --port 3000
-   ```
+```sh
+vik stop ./workflow.yml
+```
 
-3. Inspect state:
+## 9. See what is happening
 
-   ```sh
-   curl -fsS http://127.0.0.1:3000/api/v1/state | jq .
-   ```
+Everything Vik does ends up on disk under your workflow-scoped workspace root.
+Run `vik status ./workflow.yml` to print the exact `log_dir` and
+`sessions_dir`.
 
-4. Stop with `Ctrl-C` for foreground runs.
+Tail the main log:
 
-## 5. Related Docs
+```sh
+tail -f <log_dir>/vik.log.*
+```
 
-- [Docker](docker.md)
-- [Service Daemon](service-daemon.md)
-- [Configuration](configuration.md)
-- [Observation](observation.md)
-- [Linear Tracker](trackers/linear.md)
-- [GitHub Tracker](trackers/github.md)
+Tail errors only:
+
+```sh
+tail -f <log_dir>/vik-error.log.*
+```
+
+Browse one transcript per agent session:
+
+```sh
+find <sessions_dir> -type f -name '*.jsonl' -maxdepth 3
+```
+
+If nothing happens: confirm `vik status` reports the daemon as
+running, and check that your tracker actually returns at least one
+issue in a state one of your stages matches.
+
+## What to read next
+
+- [Configuration](configuration.md) — every field in `workflow.yml`.
+- [Service Daemon](service-daemon.md) — running Vik long-term.
+- [Observation](observation.md) — reading logs and session events.
+- [Linear Issue Source](trackers/linear.md) — Linear-specific setup.
+- [GitHub Issue Source](trackers/github.md) — GitHub-specific setup.

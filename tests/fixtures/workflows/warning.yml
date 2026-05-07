@@ -1,0 +1,21 @@
+loop:
+  wait_ms: 5000
+  unknown_field: 123
+workspace:
+  root: .vik
+agents:
+  codex:
+    runtime: codex
+    model: gpt-5.5
+    args:
+      --config: ["model_reasoning_effort=high"]
+issues:
+  pull:
+    command: ./scripts/issues-json
+issue:
+  stages:
+    plan:
+      when:
+        state: plan
+      agent: codex
+      prompt_file: ./prompts/plan.md

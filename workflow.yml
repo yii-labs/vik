@@ -1,0 +1,56 @@
+loop:
+
+workspace:
+  root: .vik
+
+agents:
+  codex:
+    runtime: codex
+    model: gpt-5.5
+    args:
+      --config:
+        - model_reasoning_effort=xhigh
+  codex-medium:
+    runtime: codex
+    model: gpt-5.5
+    args:
+      --config:
+        - model_reasoning_effort=medium
+
+issues:
+  pull:
+    command: >-
+      gh issue list --state "open" --limit 50
+      --json number,title,labels
+      --jq '[.[] | [.labels[].name] as $labels | ($labels | map(select(. == "todo" or . == "work" or . == "merging" or . == "rework"))) as $states | select(($states | length == 1) and ($labels | index("blocked") | not)) | {id: (.number | tostring), title, state: $states[0]}]'
+    idle_sec: 30
+
+issue:
+  hooks:
+    after_create: |
+      git clone --depth 1 git@github.com:yii-labs/vik .
+
+  stages:
+    plan:
+      when:
+        state: todo
+      agent: codex-medium
+      prompt_file: ./.agents/prompts/plan.md
+
+    implement:
+      when:
+        state: work
+      agent: codex
+      prompt_file: ./.agents/prompts/implement.md
+
+    rework:
+      when:
+        state: rework
+      agent: codex
+      prompt_file: ./.agents/prompts/implement.md
+
+    merge:
+      when:
+        state: merging
+      agent: codex-medium
+      prompt_file: ./.agents/prompts/merge.md

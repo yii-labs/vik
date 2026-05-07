@@ -1,6 +1,4 @@
 .env
 /target
-/.tests
-/.vik
-/logs
-/sessions
+/.dev-workspace
+.vik/

@@ -1,104 +1,84 @@
 # Observation
 
-Vik exposes runtime state through JSON logs and an optional HTTP server.
+Current Vik observation surfaces are files:
 
-## Vik Logs
+- foreground stdout logs
+- rolling daemon logs
+- daemon state JSON
+- decoded session `AgentEvent` JSONL
 
-Foreground runs write JSON logs to stdout and to `logging.dir`.
+The HTTP API is planned but not implemented. `vik run --port ...` currently
+parses the flag and then reaches the unimplemented server path.
 
-Default log directory:
+## Logs
+
+Foreground `vik run` prints compact tracing output to stdout and writes JSON log
+files under:
 
 ```text
-<workspace.root>/logs
+<workflow-workspace-root>/logs/
 ```
 
-Useful commands:
+Detached `vik run -d` disables stdout logging and writes only file logs.
 
-```sh
-tail -f "$HOME/code/vik-workspaces/logs"/vik.log.*
-tail -n 100 "$HOME/code/vik-workspaces/logs"/vik.log.*
-```
+Files:
 
-Adjust the first command when `workspace.root` or `logging.dir` differs from
-the checked-in `WORKFLOW.md`.
-
-## HTTP Server
-
-Start the daemon with HTTP observation:
-
-```sh
-vik start ./WORKFLOW.md --port 3000
-```
-
-Bind to another interface when needed:
-
-```sh
-vik start ./WORKFLOW.md \
-  --bind-address 0.0.0.0 \
-  --port 3000
-```
-
-Endpoints:
-
-- `GET /`: small HTML dashboard.
-- `GET /api/v1/state`: runtime snapshot.
-- `GET /api/v1/{issue_identifier}`: issue debug snapshot.
-- `POST /api/v1/refresh`: request poll and reconcile.
+- `vik.log.YYYY-MM-DD`: INFO and above.
+- `vik-error.log.YYYY-MM-DD`: ERROR only.
 
 Examples:
 
 ```sh
-curl -fsS http://127.0.0.1:3000/api/v1/state | jq .
-curl -fsS http://127.0.0.1:3000/api/v1/VIK-16 | jq .
-curl -fsS -X POST http://127.0.0.1:3000/api/v1/refresh | jq .
+tail -n 100 <log_dir>/vik.log.*
+tail -f <log_dir>/vik-error.log.*
 ```
 
-## State Snapshot
+## Daemon State
 
-`/api/v1/state` includes:
+The daemon state file is:
 
-- generated timestamp
-- counts by runtime bucket
-- running issue rows
-- retry rows
-- aggregate agent token totals
-- rate-limit data when available
+```text
+<workflow-workspace-root>/service/state.json
+```
 
-Running rows include issue ID, issue identifier, state, optional session ID,
-turn count, last event, last message, workspace path, and token usage.
+It records:
+
+- `workflow_path`
+- `cwd`
+- `pid`
+- `port`
+- `bind_address`
+- `started_at`
+- `log_dir`
+- `sessions_dir`
+- `command`
+
+Prefer `vik status [WORKFLOW]` over reading this file by hand.
 
 ## Sessions
 
-Persisted agent session logs require VIK-11. When the Codex runtime is in use,
-builds that include VIK-11 append raw Codex app-server JSONL messages under:
+Session JSONL files live under:
 
 ```text
-<workspace.root>/sessions/<issue-identifier>-<agent-session-id>.jsonl
+<workflow-workspace-root>/sessions/<issue.id>/<issue.state>-<uuid-v7>.jsonl
 ```
 
-The issue identifier is the human-facing key such as `VIK-16`. Filename
-components are sanitized to ASCII letters, numbers, `.`, `_`, and `-`; other
-characters become `_`.
+The file contains decoded Vik `AgentEvent` records, not raw provider JSONL.
+Records include messages, token usage, rate-limit observations, completion, and
+errors when the provider adapter maps them.
 
-Find logs for one issue:
+The provider session id, when reported, appears inside events and snapshots. It
+is not used as the filename.
 
-```sh
-find "$HOME/code/vik-workspaces/sessions" \
-  -type f \
-  -name 'VIK-16-*.jsonl' \
-  -print
-```
+## Planned HTTP API
 
-Inspect one session:
+The intended HTTP surface is still useful design context, but it is not served
+by current code:
 
-```sh
-jq . "$HOME/code/vik-workspaces/sessions/<file>.jsonl" | less
-```
+- `GET /api/v1/state`
+- `GET /api/v1/issues/{identifier}`
+- `POST /api/v1/refresh`
+- `POST /api/v1/issues/{identifier}/cancel`
 
-With the Codex runtime, session files contain raw Codex app-server messages for
-the session. They do not replace Vik daemon logs, HTTP snapshots, or tracker
-workpad notes.
-
-For builds before VIK-11, use `/api/v1/state`, `/api/v1/{issue_identifier}`,
-and JSON daemon logs only. Durable per-session JSONL files are unavailable in
-those builds.
+Do not put `curl` calls to those endpoints in operator runbooks until the
+server module lands.

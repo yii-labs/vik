@@ -1,0 +1,6 @@
+{"type":"system","subtype":"init","session_id":"sess-claude-happy","model":"claude-sonnet-4-6","cwd":"/workspace"}
+{"type":"assistant","message":{"id":"msg_1","role":"assistant","content":[{"type":"text","text":"hello there"}]}}
+{"type":"assistant","message":{"id":"msg_2","role":"assistant","content":[{"type":"tool_use","id":"tu_1","name":"Bash","input":{"command":"ls"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu_1","content":"file.txt"}]}}
+{"type":"assistant","message":{"id":"msg_3","role":"assistant","content":[{"type":"text","text":"found one file"}]}}
+{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":50,"output_tokens":30,"cache_read_input_tokens":10}}

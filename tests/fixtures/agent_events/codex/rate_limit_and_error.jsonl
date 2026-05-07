@@ -1,0 +1,6 @@
+{"id":"0","msg":{"type":"session_configured","session_id":"sess-codex-rl","model":"gpt-5.5"}}
+{"id":"1","msg":{"type":"rate_limit_warning","scope":"tokens_per_min","remaining":1500,"reset_at":"2026-05-08T12:00:00Z"}}
+{"id":"2","msg":{"type":"agent_message","message":"trying again"}}
+{"id":"3","msg":{"type":"rate_limit_reset","scope":"tokens_per_min","remaining":60000,"reset_at":"2026-05-08T12:01:00Z"}}
+{"id":"4","msg":{"type":"error","message":"tool invocation failed"}}
+{"id":"5","msg":{"type":"turn_complete"}}

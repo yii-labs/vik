@@ -1,0 +1,38 @@
+loop:
+  wait_ms: 5000
+workspace:
+  root: .vik
+agents:
+  codex:
+    runtime: codex
+    model: gpt-5.5
+    args:
+      --config: ["model_reasoning_effort=high"]
+  claude:
+    runtime: claude_code
+    model: claude-sonnet-4-6
+    args:
+      --effort: high
+issues:
+  pull:
+    command: ./scripts/issues-json
+issue:
+  hooks:
+    after_create: |
+      echo created
+  stages:
+    plan:
+      when:
+        state: plan
+      agent: codex
+      prompt_file: ./prompts/plan.md
+    implement:
+      when:
+        state: wip
+      agent: claude
+      prompt_file: ./prompts/implement.md
+      hooks:
+        before_run: |
+          echo before
+        after_run: |
+          echo after

@@ -1,0 +1,4 @@
+{"type":"system","subtype":"init","session_id":"sess-claude-multi","model":"claude-sonnet-4-6"}
+{"type":"assistant","message":{"id":"msg_1","role":"assistant","content":[{"type":"text","text":"line one"},{"type":"text","text":"line two"}]}}
+{"type":"system","subtype":"other","info":"should be ignored"}
+{"type":"result","subtype":"success","usage":{"input_tokens":1,"output_tokens":2,"cache_read_input_tokens":0}}

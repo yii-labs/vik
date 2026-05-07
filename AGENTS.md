@@ -1,7 +1,5 @@
 # Agent Instructions
 
-All committed text must be English.
-
 ## Development Docs
 
 Read the relevant docs before changing this repo:
@@ -12,24 +10,12 @@ Read the relevant docs before changing this repo:
 - [Pull requests](docs/development/pull-requests.md)
 - [Code conventions](docs/development/code-conventions.md)
 
-Usage and operator docs:
-
-- [Get Started](docs/usage/get-started.md)
-- [Docker](docs/usage/docker.md)
-- [Service Daemon](docs/usage/service-daemon.md)
-- [Configuration](docs/usage/configuration.md)
-- [Observation](docs/usage/observation.md)
-- [Specification Conformance](docs/spec-conformance.md)
-
 ## Agent Workflow
 
-1. Start from ticket scope. Do not expand scope without a separate issue.
-2. Reproduce the current signal before edits.
-3. Keep the worktree clean between milestones.
-4. Sync with `origin/main` before implementation and before handoff.
-5. Prefer narrow, reviewable changes.
-6. Run the checks listed in [Checks](docs/development/checks.md).
-7. Keep PR title, body, labels, and Linear links current.
+1. Sync with `origin/main` before implementation and before handoff.
+2. Prefer narrow, reviewable changes.
+3. Run the checks listed in [Checks](docs/development/checks.md).
+4. Keep PR title, body, labels current.
 
 ## Repo Rules
 

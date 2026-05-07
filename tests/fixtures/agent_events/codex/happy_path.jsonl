@@ -1,0 +1,5 @@
+{"type":"thread.started","thread_id":"sess-codex-happy"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"starting turn"}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"done"}}
+{"type":"turn.completed","usage":{"input_tokens":120,"cached_input_tokens":12,"output_tokens":45,"reasoning_output_tokens":8}}

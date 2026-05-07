@@ -24,7 +24,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Validate Vik workflow config
-        run: cargo run --locked -p vik-cli -- doctor ./WORKFLOW.md
+        run: cargo run -- doctor
 
   rust:
     name: Rust (${{ matrix.os }})
@@ -49,7 +49,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Check lints
-        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Run tests
-        run: cargo test --locked --workspace --all-features
+        run: cargo test --all-features

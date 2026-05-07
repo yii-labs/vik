@@ -1,196 +1,263 @@
 # Configuration
 
-Vik reads YAML front matter from `WORKFLOW.md`, then renders the markdown body
-as the issue prompt. Config values are resolved before the daemon dispatches
-work.
+Vik reads one YAML workflow file. Default path: `./workflow.yml`.
+
+Relative paths resolve from the workflow file directory. `~` expands to the
+home directory. Workflow string values do not expand `$VAR` or `${VAR}`.
 
 ## Basic
 
 Minimal shape:
 
 ```yaml
----
-tracker:
-  kind: linear
-  project_slug: "vik-08c9cf588aa7"
+loop: {}
+
 workspace:
   root: ~/code/vik-workspaces
-hooks:
-  after_create: |
-    git clone --depth 1 git@github.com:yii-labs/vik .
-agent:
-  runtime: codex
-codex:
-  command: codex --config shell_environment_policy.inherit=all app-server
----
 
-You are working on {{ issue.identifier }}.
+agents:
+  codex-medium:
+    runtime: codex
+    model: gpt-5.5
+    args:
+      --config:
+        - model_reasoning_effort=medium
+  claude-sonnet:
+    runtime: claude_code
+    model: claude-sonnet-4-6
+    args:
+      --permission-mode: acceptEdits
+
+issues:
+  pull:
+    command: ./scripts/issues-json
+    idle_sec: 5
+
+issue:
+  hooks:
+    after_create: |
+      git clone --depth 1 git@github.com:yii-labs/vik .
+  stages:
+    plan:
+      when:
+        state: plan
+      agent: codex-medium
+      prompt_file: ./.agents/prompts/plan.md
 ```
 
 Validate:
 
 ```sh
-vik doctor ./WORKFLOW.md
+vik doctor ./workflow.yml
+vik doctor --strict ./workflow.yml
+vik doctor --json ./workflow.yml
 ```
 
-## Tracker
+Current `doctor` checks YAML load and schema diagnostics. It does not check
+prompt file existence, CLI binaries, auth, or external tracker access.
 
-`tracker.kind` must name a supported tracker provider.
+## Loop
 
-Common fields:
+`loop` is required. Its fields are optional.
 
-- `endpoint`: optional provider API endpoint override.
-- `api_key`: optional when the provider token is set in the environment or
-  `.env`.
-- `active_states`: states Vik may claim.
-- `terminal_states`: states that stop tracking and may trigger cleanup.
-- `filter`: optional delegable issue filter. Omitted filter values and empty
-  lists match all issues.
+- `max_issue_concurrency`: maximum active issue identifiers. Default: `10`.
+- `wait_ms`: parsed today, but current intake scheduling uses
+  `issues.pull.idle_sec`.
+- `max_iterations`: optional intake loop cap. Omitted means run until shutdown.
 
-Provider-specific fields:
-
-- Linear requires `project_slug` and uses `LINEAR_API_KEY` by default.
-- GitHub requires `repository` and uses `GH_TOKEN` or `GITHUB_TOKEN` by
-  default.
-
-Limit delegation to issues assigned to specific users and tagged with specific
-labels:
-
-```yaml
-tracker:
-  filter:
-    assignees: [user-a, user-b]
-    tags: [agent, codex]
-```
-
-Tracker reference:
-
-- [Linear](trackers/linear.md)
-- [GitHub](trackers/github.md)
-
-During agent runs, Vik exposes one tracker-agnostic Codex app-server tool named
-`vik_issue`. Its `action` field supports common issue operations including
-`get_issue`, `list_comments`, `update_issue`, `create_comment`,
-`update_comment`, `upload_attachment`, and `link_pr`. Each tool call is routed
-to the configured tracker provider.
-
-## Polling
-
-`polling.interval_ms` controls the main poll loop. Default: `30000`.
-
-```yaml
-polling:
-  interval_ms: 5000
-```
+The orchestrator does not wait for all stages to finish before future intake
+cycles. If issue capacity is available, later intake results can dispatch more
+work.
 
 ## Workspace
 
-`workspace.root` is where Vik creates per-issue directories. Relative paths are
-resolved from the workflow directory. `~` is expanded.
+`workspace.root` is optional. It names the workspace home. Relative values
+resolve from the workflow file directory. If omitted or null, Vik uses
+`VIK_HOME` when set; otherwise it uses the OS home directory.
 
-Vik sanitizes workspace names and prevents paths from escaping the root.
-The direct-child support directory names `.vik`, `logs`, and `sessions` are
-reserved and cannot be used as issue workspace names.
-
-## Logging
-
-`logging.dir` controls daemon JSON log files. Default:
+Vik creates a workflow-scoped workspace root under that home:
 
 ```text
-<workspace.root>/logs
+<workspace.root>/workflows/<workflow-path-key>/
 ```
 
-Each run logs to stdout and to a daily file named `vik.log.<date>`.
+`<workflow-path-key>` is the absolute workflow file path with `/` replaced by
+`-`. This keeps workflows from colliding when they share one workspace home.
+Before `vik run`, create the parent directory `<workspace.root>/workflows`.
+Vik creates only the final workflow-scoped workspace root.
+
+All runtime paths below use the workflow-scoped workspace root:
+
+```text
+<workflow-workspace-root>/service/state.json
+<workflow-workspace-root>/logs/
+<workflow-workspace-root>/sessions/
+<workflow-workspace-root>/issues/<issue.id>/
+```
+
+The issue identifier is used as a path segment. Pull commands must return safe
+identifiers. Do not return identifiers that start with `.` or contain path
+separators.
+
+## Agents
+
+`agents` is a map of named profiles.
+
+Required fields:
+
+- `runtime`: `codex` or `claude_code`.
+- `model`: model name passed to the provider CLI.
+
+Optional field:
+
+- `args`: runtime-specific CLI flag map.
+
+`args` forwarding rules:
+
+- String or number: `flag value`
+- `true`: `flag`
+- `false`: omitted
+- Sequence of strings: `flag item1,item2`
+- Other YAML value types are ignored by argument forwarding
+
+Codex command shape:
+
+```text
+codex exec <args...> --json -m <model>
+```
+
+Codex receives the rendered prompt on stdin.
+
+Claude Code command shape:
+
+```text
+claude --verbose --output-format stream-json --model <model> -p <prompt> <args...>
+```
+
+Current session code uses a hardcoded one-hour child timeout. Workflow profile
+timeouts and stall-watchdog config are not implemented.
+
+## Issues
+
+`issues.pull.command` is a shell command that fetches and filters issues from an
+external tracker. Vik runs it from the workflow file directory and reads stdout.
+The command must output one raw JSON sequence:
+
+```json
+[
+  {
+    "id": "123",
+    "title": "Add retry tests",
+    "state": "plan"
+  }
+]
+```
+
+`issues.pull.idle_sec` controls the sleep after each pull cycle completes.
+Default: `5`.
+
+Required issue fields:
+
+- `id` or `identifier`: non-empty safe path segment.
+- `title`: string.
+- `state`: string. Alias: `status`.
+
+Optional fields are preserved in `issue.extra_payload` and flattened into stage
+prompt context before canonical stage bindings are applied.
+
+Duplicate identifiers in one intake result are skipped after the first one.
+
+## Stages
+
+`issue.stages` is an ordered map. Stage keys are user-defined names.
+
+Each stage requires:
+
+- `when.state`: exact issue state that triggers the stage.
+- `agent`: agent profile name.
+- `prompt_file`: prompt file for the stage.
+
+Dispatch uses exact, case-sensitive state match:
+
+```text
+issue.state == issue.stages.<stage>.when.state
+```
+
+Multiple stages may match one issue state. Vik reserves and launches every
+matching `(issue.id, stage.name)` while issue capacity allows it.
 
 ## Hooks
 
-Hooks are trusted shell snippets from `WORKFLOW.md`.
+Issue hook:
 
-Fields:
+- `issue.hooks.after_create`: runs after Vik creates or verifies the issue
+  workspace and before any matched stage launches. It runs every matched cycle,
+  even when the workspace already exists. Make it idempotent.
 
-- `after_create`: run once after a new issue workspace is created.
-- `before_run`: run before the agent runtime starts.
-- `after_run`: run after the agent runtime exits.
-- `before_remove`: run before terminal cleanup.
-- `timeout_ms`: hook timeout. Default: `60000`.
+Stage hooks:
 
-Default clone hook:
+- `issue.stages.<stage>.hooks.before_run`: runs before the agent session.
+- `issue.stages.<stage>.hooks.after_run`: runs after terminal session state,
+  except cancelled sessions.
 
-```yaml
-hooks:
-  after_create: |
-    git clone --depth 1 git@github.com:yii-labs/vik .
+Hook shell bodies are MiniJinja-rendered and then executed with the shared shell
+wrapper. Hooks do not support prompt command expansion.
+
+Hook contexts:
+
+- `after_create`: `issue`, `env`
+- stage hooks: `cwd`, `workspace`, `issue`, `stage`, `env`
+
+Hooks run with current directory set to the issue workspace.
+
+## Prompt Files
+
+Prompt files are MiniJinja templates. Unknown variables fail rendering.
+
+Prompt render order:
+
+1. MiniJinja render.
+2. Prompt-command expansion.
+
+Prompt command syntax:
+
+```text
+!`exec(gh issue view {{ issue.id }} --json title,body)`
 ```
 
-Use HTTPS when the runtime has token auth but no SSH key:
+The non-bang form also works:
 
-```yaml
-hooks:
-  after_create: |
-    git clone --depth 1 https://github.com/yii-labs/vik .
+```text
+`exec(printf ready)`
 ```
 
-## Agent
+Prompt commands run through the system shell with a 30-second timeout. They
+inject stdout text and trim one trailing newline. Non-zero exit fails prompt
+rendering.
 
-Fields:
+Stage prompt context includes:
 
-- `runtime`: agent runtime adapter. Default: `codex`.
-- `max_concurrent_agents`: global concurrency. Default: `10`.
-- `max_turns`: max runtime turns per issue attempt. Default: `20`.
-- `max_retry_backoff_ms`: retry backoff cap. Default: `300000`.
-- `max_concurrent_agents_by_state`: optional per-state concurrency limits.
+- `cwd`: issue workspace path.
+- `workspace.root`: workflow-scoped workspace root.
+- `issue`
+- `stage`
+- `workflow`
+- `loop`
+- `profile`
+- `env`
 
-Supported runtime values:
+Current agent subprocesses inherit the Vik process cwd. If an agent must run
+commands in the issue workspace, say so in the prompt, for example
+`cd {{ cwd }}`.
 
-- `codex`: run Codex app-server through the Vik Codex adapter.
+## Observation
 
-## Codex
-
-Used when `agent.runtime` is `codex`.
-
-`codex.command` launches Codex app-server. Default: `codex app-server`.
-
-Common fields:
-
-- `model`
-- `model_reasoning_effort`
-- `approval_policy`
-- `approvals_reviewer`
-- `thread_sandbox`
-- `turn_sandbox_policy`
-- `turn_timeout_ms`
-- `read_timeout_ms`
-- `stall_timeout_ms`
-
-When `model` or `model_reasoning_effort` is set, `codex.command` must contain
-the `app-server` token so Vik can inject model CLI config before it.
-
-Official Codex config reference:
-
-- <https://developers.openai.com/codex/cli/reference>
-- <https://developers.openai.com/codex/config-basic>
-- <https://developers.openai.com/codex/config-advanced>
-
-## Server
-
-Set a default observation port in workflow config:
-
-```yaml
-server:
-  port: 3000
-```
-
-CLI `--port` overrides `server.port`. CLI `--bind-address` controls the HTTP
-bind host.
+Current observation surfaces are logs, daemon state, and session JSONL files.
+The CLI parses `--port` and `--bind-address`, but the HTTP server is not
+implemented yet.
 
 ## References
 
 - [Get Started](get-started.md)
-- [Docker](docker.md)
 - [Service Daemon](service-daemon.md)
 - [Observation](observation.md)
-- [Linear Tracker](trackers/linear.md)
-- [GitHub Tracker](trackers/github.md)
-- Linear GraphQL API: <https://linear.app/developers/graphql>
-- GitHub CLI auth: <https://cli.github.com/manual/gh_auth>
-- Codex CLI reference: <https://developers.openai.com/codex/cli/reference>

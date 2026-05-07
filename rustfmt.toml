@@ -1,0 +1,25 @@
+# Rustfmt configuration for muse workspace
+
+# Edition
+edition = "2024"
+
+# Line width
+max_width = 120
+
+# Indentation
+tab_spaces = 2
+
+# Formatting
+newline_style = "Unix"
+remove_nested_parens = true
+reorder_imports = true
+reorder_modules = true
+
+# Use field init shorthand
+use_field_init_shorthand = true
+
+# Match blocks
+match_block_trailing_comma = true
+
+# Chains
+chain_width = 80

@@ -1,9 +1,0 @@
-target/
-.git/
-.github/
-.codex/
-.agents/
-.env
-.env.*
-*.log
-Dockerfile

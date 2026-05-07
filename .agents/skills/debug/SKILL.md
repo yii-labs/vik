@@ -1,241 +1,261 @@
 ---
 name: debug
-description:
-  Investigate Vik orchestrator stalls, retries, and Codex app-server failures by
-  correlating Linear issues, runtime JSON logs, HTTP observation endpoints, and
-  workspace evidence; use when runs hang, repeat, or fail unexpectedly.
+description: Debug this Vik repo after the single-crate refactor. Use when Codex needs to diagnose Vik runtime, workflow, daemon, orchestration, hook, prompt-rendering, provider-adapter, session JSONL, or workspace/log/state-file problems in /Users/yii/code/vik.
 ---
 
-# Debug
+# Debug Vik
 
-## Goals
+Use this for evidence-first debugging in this repo. Trust current source and command output over older docs when they disagree.
 
-- Identify why a Vik run is not making progress.
-- Correlate Linear issue identity to Codex session and workspace state.
-- Read observation sources in a repeatable order.
-- Archive enough evidence for another agent to continue without rerunning the
-  same discovery.
+## First Pass
 
-## Observation Sources
+Run these from repo root:
 
-- Linear issue and workpad:
-  - Current issue state decides whether the run should still be active.
-  - `## Codex Workpad` is the durable progress and handoff record.
-- Runtime JSON logs:
-  - Vik logs through `tracing_subscriber::fmt().json()`.
-  - The daemon writes logs to stdout and to daily files in `logging.dir`.
-  - If `logging.dir` is omitted, search `<workspace.root>/logs`.
-  - Daily file names use `vik.log.<date>`.
-- Codex app-server session logs:
-  - Builds with VIK-11 append raw Codex app-server JSONL messages under
-    `<workspace.root>/sessions`.
-  - Session file names use
-    `<issue-identifier>-<session-id>.jsonl`.
-  - Filename components are sanitized to ASCII letters, numbers, `.`, `_`, and
-    `-`; other characters become `_`.
-  - Use these logs for raw app-server protocol messages for one session. They
-    do not replace daemon logs, HTTP snapshots, or Linear workpad notes.
-- HTTP observation API when the daemon runs with `--port`:
-  - `GET /api/v1/state` returns running and retrying rows plus token totals.
-  - `GET /api/v1/{issue_identifier}` returns one issue debug snapshot.
-  - `POST /api/v1/refresh` queues an immediate poll and reconcile pass.
-- Workspace evidence:
-  - Workspace root comes from `WORKFLOW.md`.
-  - If `workspace.root` is omitted, the default is
-    `std::env::temp_dir()/vik_workspaces`.
-  - Per-issue workspace name is the sanitized Linear issue key.
-
-## Correlation Keys
-
-- `issue_identifier`: human ticket key, for example `VIK-9`.
-- `issue_id`: Linear UUID.
-- `session_id`: Codex thread-turn pair from `LiveSession`.
-- `session_log_path`: session JSONL path derived from `workspace.root`,
-  `issue_identifier`, and `session_id`.
-- `codex_event`: app-server event name from the JSONL stream.
-- `codex_app_server_pid`: local child process id when available.
-- `workspace_path`: per-issue workspace path.
-- `attempt`: retry attempt tracked by orchestrator state.
-
-Always pair `session_id` with `issue_identifier` or `issue_id`. Concurrent
-runs can emit similar Codex events.
-
-## Quick Triage
-
-1. Confirm issue state in Linear.
-2. Query the HTTP issue debug endpoint if available.
-3. Search runtime logs by `issue_identifier`, then by `issue_id`.
-4. Extract `workspace.root`, `workspace_path`, `session_id`, and last
-   `codex_event`.
-5. Find the matching session log in `<workspace.root>/sessions`.
-6. Trace that `session_id` from process start to terminal outcome across
-   daemon logs and the session JSONL file.
-7. Classify the failure.
-8. Archive observations in the issue workpad.
-
-## Commands
-
-```bash
-# Confirm workflow config is valid.
-LINEAR_API_KEY=ci-placeholder cargo run --locked -p vik-cli -- check ./WORKFLOW.md
-
-# Start daemon with HTTP observation enabled.
-RUST_LOG=info cargo run --locked -p vik-cli -- start ./WORKFLOW.md --port 3000
-
-# Inspect global runtime state.
-curl -s http://127.0.0.1:3000/api/v1/state | jq .
-
-# Inspect one issue.
-curl -s http://127.0.0.1:3000/api/v1/VIK-9 | jq .
-
-# Force one poll/reconcile pass.
-curl -s -X POST http://127.0.0.1:3000/api/v1/refresh | jq .
-
-# Search persisted JSON logs by issue key.
-rg -n '"issue_identifier":"VIK-9"|issue_identifier=VIK-9|VIK-9' <log-dir>
-
-# Search persisted JSON logs by Linear UUID.
-rg -n '"issue_id":"<linear-uuid>"|issue_id=<linear-uuid>' <log-dir>
-
-# Pull unique session IDs from persisted logs.
-rg -o '"session_id":"[^"]+"|session_id=[^ ,}]+' <log-dir> | sort -u
-
-# Find session logs for one issue.
-find "<workspace.root>/sessions" -type f -name 'VIK-9-*.jsonl' -print
-
-# Inspect one session log as JSONL.
-jq . "<workspace.root>/sessions/<issue-identifier>-<session-id>.jsonl" | less
-
-# Trace one session end to end.
-rg -n '<session-id>' <log-dir>
-rg -n '<session-id>|turn/|response|error|rateLimits' "<session-log-path>"
-
-# Focus on retry, stall, and terminal signals.
-rg -n 'stalled_run|retry_dispatch|worker_exit|turn_timeout|turn_failed|turn_cancelled|response_timeout|port_exit|codex_not_found|workflow_reload outcome=failed' <log-dir>
+```sh
+git status --short --branch
+cargo run -- doctor --json ./workflow.yml
+cargo run -- status ./workflow.yml
 ```
 
-Use the configured `logging.dir` from `WORKFLOW.md`. If it is omitted, use
-`<workspace.root>/logs`. Do not create committed log artifacts.
+Do not start `vik run` until you know which workflow and tracker commands it will execute. A run can spawn Codex or Claude Code and execute workflow hooks.
 
-## Investigation Flow
+For repo changes, read required docs first:
 
-1. Establish active state:
-   - Linear state must be one of the configured active states.
-   - If the issue is terminal, debug cleanup or stale state instead of worker
-     progress.
-2. Check HTTP snapshot:
-   - In `/api/v1/state`, compare `running`, `retrying`, `codex_totals`, and
-     `rate_limits`.
-   - In `/api/v1/{issue_identifier}`, read `status`, `attempts`, `running`,
-     `retry`, `recent_events`, and `last_error`.
-3. Trace lifecycle:
-   - `dispatch outcome=started`
-   - `codex_process_starting`
-   - `codex_process_started`
-   - `codex_initialize_starting`
-   - `codex_initialize_completed`
-   - `codex_thread_starting`
-   - `codex_thread_started`
-   - `codex_turn_starting`
-   - `session_started`
-   - streamed `codex_update outcome=received` events
-   - `worker_exit outcome=received`
-4. Inspect session JSONL:
-   - Derive session log directory from `workspace.root`:
-     `<workspace.root>/sessions`.
-   - Prefer the exact `session_id` from HTTP state or daemon logs.
-   - If the exact ID is unavailable, list files matching
-     `<issue_identifier>-*.jsonl` and sort by modified time.
-   - Confirm the selected file belongs to the current attempt by matching the
-     session id, nearby daemon timestamps, or lifecycle sequence.
-   - Search the selected file for app-server method names, terminal statuses,
-     errors, approvals, rate-limit messages, and the last streamed response.
-   - Do not paste full prompts, tool payloads, credentials, or full session
-     logs into Linear.
-5. Inspect workspace:
-   - Check the issue workspace path from HTTP or logs.
-   - Read git branch, git status, workpad context, and recent file changes.
-   - Do not modify the workspace until the failure target is explicit.
-6. Classify and fix:
-   - Pick one primary class from the list below.
-   - Capture the exact evidence line or endpoint field that proves it.
-   - Implement the smallest fix that addresses that class.
-
-## Failure Classes
-
-- Dispatch gate:
-  - `dispatch_preflight outcome=failed`
-  - `retry_dispatch outcome=gated`
-  - no available orchestrator slots
-- Workflow reload:
-  - `workflow_reload outcome=failed`
-  - invalid `WORKFLOW.md`
-  - reload keeps last-good config
-- Tracker:
-  - `tracker_fetch_candidates outcome=failed`
-  - `vik_issue` tool failure
-  - missing tracker credentials
-- Workspace:
-  - `hook_failed`
-  - `hook_timeout`
-  - `workspace_path_outside_root`
-  - `invalid_workspace_cwd`
-- Codex startup:
-  - `codex_not_found`
-  - `port_exit`
-  - `response_timeout` before thread start
-- Turn execution:
-  - `turn_failed`
-  - `turn_cancelled`
-  - `turn_timeout`
-  - unsupported user-input or elicitation request
-- Stall and retry:
-  - no event before `stall_timeout_ms`
-  - `stalled_run outcome=retrying`
-  - retry backoff grows without new progress
-- Rate limit or token pressure:
-  - `account/rateLimits/updated`
-  - rising token totals with no useful final event
-
-## Observation Archive
-
-Archive findings in the existing `## Codex Workpad` comment. Prefer the
-`### Notes` section for short evidence. Add this block when the investigation is
-large enough to need handoff:
-
-```md
-### Observation Archive
-
-- Timestamp:
-- Issue:
-- Environment:
-- Evidence:
-  - Linear:
-  - HTTP:
-  - Logs:
-  - Session logs:
-  - Workspace:
-- Correlation:
-  - issue_id:
-  - issue_identifier:
-  - session_id:
-  - session_log_path:
-  - codex_app_server_pid:
-  - workspace_path:
-- Classification:
-- Probable root cause:
-- Action taken:
-- Validation:
+```text
+docs/development/index.md
+docs/development/checks.md
+docs/development/pull-requests.md
+docs/development/code-conventions.md
 ```
 
-Keep archive entries factual. Include commands, endpoint paths, output snippets,
-and timestamps. Do not paste secrets, access tokens, full prompts, or full log
-files.
+Note: `docs/development/setup.md` is referenced by `AGENTS.md`, but is absent in this checkout.
 
-## Notes
+## Current Runtime Shape
 
-- Prefer `rg` over `grep` for local evidence search.
-- Prefer HTTP observation endpoints before broad log scans when the daemon is
-  still running.
-- Treat missing required log fields as an observability bug.
-- Keep debug artifacts out of commits unless they are intentional docs or tests.
+Vik is one Rust binary crate.
+
+```text
+src/main.rs              binary entry
+src/cli/                 CLI parser and command dispatch
+src/config/              workflow.yml schema and doctor diagnostics
+src/workflow/            runtime supervisor built from parsed schema
+src/workspace/           canonical path layout under resolved workflow workspace root
+src/logging/             JSON tracing setup and phase/span helpers
+src/daemon/              detach, signals, state.json, lifecycle commands
+src/orchestrator/        intake loop, dispatch, running-stage registry
+src/session/             one agent run, prompt render, JSONL writer, snapshot
+src/agent/               Codex and Claude Code provider adapters
+src/template/            MiniJinja and prompt !`exec(...)` expansion
+src/hooks/               workflow hook rendering and shell execution
+src/shell/               subprocess primitive and timeout/cancel handling
+```
+
+Debug layer direction with `docs/development/architecture.md` and `docs/development/code-conventions.md`.
+
+## Workflow Basics
+
+Default CLI shape:
+
+```sh
+cargo run -- <command> [WORKFLOW]
+cargo run -- doctor ./workflow.yml
+cargo run -- run ./workflow.yml
+cargo run -- status ./workflow.yml
+```
+
+Important workflow facts:
+
+- `workflow.yml` is source of truth.
+- YAML `workspace.root` is resolved relative to workflow file directory.
+- Vik appends `workflows/<workflow-path-key>` to make the runtime workspace root.
+- `<workflow-path-key>` is the absolute workflow file path with `/` replaced by `-`.
+- `<workspace.root>/workflows` must exist before `vik run`; Vik creates only the final workflow root.
+- `issue.state` matches `issue.stages.<stage>.when.state` by exact string equality.
+- `issues.pull.command` must print one JSON issue sequence.
+- Issue identifiers become path segments under `<workflow-workspace-root>/issues`; unsafe names break dispatch.
+- Prompt files are MiniJinja first, then prompt-command expansion.
+- Hooks are MiniJinja only; hooks do not run prompt-command expansion.
+
+Checked-in `workflow.yml` has `workspace.root: .vik`, so current Vik-owned state lives under:
+
+```text
+/Users/yii/code/vik/.vik/workflows/-Users-yii-code-vik-workflow.yml/
+```
+
+Always use `vik status` or `Workflow::workspace().*` path helpers to find current state. Ignore older leftover paths unless the status output points there.
+
+## State And Logs
+
+Canonical path layout comes from `src/workspace/mod.rs`:
+
+```text
+<workflow-workspace-root>/service/state.json
+<workflow-workspace-root>/logs/vik.log.YYYY-MM-DD
+<workflow-workspace-root>/logs/vik-error.log.YYYY-MM-DD
+<workflow-workspace-root>/sessions/<issue.id>/<issue.state>-<uuid-v7>.jsonl
+<workflow-workspace-root>/issues/<issue.id>/
+```
+
+`vik status` prints:
+
+```text
+status
+state_file
+pid
+bind_address
+started_at
+log_dir
+sessions_dir
+workflow_path
+command
+```
+
+Log files are newline-delimited JSON. Useful fields:
+
+- `timestamp`, `level`, `message`, `target`
+- `phase`: `startup`, `intake`, `dispatch`, `stage_run`, `hook`, `server`, `daemon`
+- `issue_identifier`, `stage_name`, `agent_profile`, `runtime`, `session_id`
+- `error`, `duration_ms`, `state_file`, `workflow_path`, `workspace_root`
+
+Fast log commands:
+
+```sh
+cargo run -- status ./workflow.yml
+tail -n 100 .vik/workflows/-Users-yii-code-vik-workflow.yml/logs/vik.log.*
+tail -n 100 .vik/workflows/-Users-yii-code-vik-workflow.yml/logs/vik-error.log.*
+jq -c 'select(.level=="ERROR" or .phase=="intake" or .phase=="stage_run" or .phase=="hook")' .vik/workflows/-Users-yii-code-vik-workflow.yml/logs/vik.log.*
+```
+
+If paths differ, replace the example `logs` directory with `log_dir` from `vik status`.
+
+## Session JSONL
+
+Session JSONL files store normalized `AgentEvent` records, not raw provider stdout.
+
+Event shapes:
+
+```json
+{"kind":"session_started","session_id":"..."}
+{"kind":"message","text":"..."}
+{"kind":"token_usage","input":120,"output":45,"cache_read":12}
+{"kind":"rate_limit","scope":"codex:tokens_per_min","remaining":100,"reset_at":"...","observed_at":"..."}
+{"kind":"completed"}
+{"kind":"error","detail":"..."}
+```
+
+Inspect session logs:
+
+```sh
+find .vik/workflows/-Users-yii-code-vik-workflow.yml/sessions -type f -name '*.jsonl' -print
+jq -c . .vik/workflows/-Users-yii-code-vik-workflow.yml/sessions/<issue.id>/*.jsonl
+jq -r 'select(.kind=="message") | .text' .vik/workflows/-Users-yii-code-vik-workflow.yml/sessions/<issue.id>/*.jsonl
+```
+
+Provider fixture input lives under:
+
+```text
+tests/fixtures/agent_events/codex/*.jsonl
+tests/fixtures/agent_events/claude_code/*.jsonl
+```
+
+Use adapter tests when event mapping is suspect:
+
+```sh
+cargo test agent::adapters
+```
+
+## Common Failure Routes
+
+Workflow parse or schema error:
+
+- Start in `src/workflow/loader.rs`, `src/workflow/builder.rs`, `src/config/*`.
+- Run `cargo run -- doctor --json ./workflow.yml`.
+- Unknown old top-level fields should not survive review.
+
+Wrong path or missing logs:
+
+- Start in `src/workspace/mod.rs`.
+- Then inspect `src/cli/run.rs`, `src/daemon/state.rs`, `src/logging/mod.rs`.
+- Use `vik status`; do not hand-derive workspace artifact paths outside `Workspace`.
+
+Intake returns no work or fails:
+
+- Start in `src/orchestrator/intake.rs`.
+- Check `workflow.yml -> issues.pull.command`.
+- Command stdout must be one JSON issue sequence.
+- Returned issue fields are `identifier`, `title`, `state`; aliases `desc` and `status` also parse.
+
+Stage does not run:
+
+- Start in `src/orchestrator/mod.rs::should_dispatch`.
+- Check exact state match.
+- Check `max_issue_concurrency`.
+- Check existing running reservations in logs.
+
+Hook failure:
+
+- Start in `src/hooks/mod.rs`.
+- Hooks run through `sh -c` on Unix, `cmd /C` on Windows.
+- Timeout is 30 seconds.
+- `after_create` context has only `issue` and `env`.
+- `before_run` and `after_run` context has `cwd`, `workspace`, `issue`, `stage`, `env`.
+- Nonzero stderr tail is capped at 2048 bytes.
+
+Prompt render failure:
+
+- Start in `src/session/mod.rs::render_prompt` and `src/template/*`.
+- MiniJinja is strict; missing variables fail.
+- Prompt commands use syntax ``!`exec(command)` `` and run after Jinja render.
+- Prompt command timeout is 30 seconds.
+
+Agent spawn or event mapping failure:
+
+- Start in `src/session/mod.rs::spawn_inner`, `src/agent/adapters/*`, `src/shell/command_ext.rs`.
+- Codex command shape is `codex exec ... --json -m <model>` with prompt on stdin.
+- Claude Code command shape is in `src/agent/adapters/claude_code/mod.rs`; verify actual args before assuming docs are right.
+- Missing binary or auth usually appears as spawn error, provider error event, or session JSONL error.
+
+Daemon lifecycle failure:
+
+- Start in `src/daemon/state.rs`, `src/daemon/lifecycle.rs`, `src/daemon/signals/*`, `src/daemon/detach/*`.
+- `status` missing state exits 0.
+- `stop` missing state exits nonzero.
+- `uninstall` missing state is a no-op.
+- `restart` stop phase treats missing or stale state as not running, then starts a detached daemon.
+
+Issue workspace cleanup:
+
+- No cleanup CLI exists in current source.
+- Stop active sessions before deleting `<workflow-workspace-root>/issues/<issue.id>` manually.
+
+## Known Current Gaps
+
+- HTTP API is not implemented in current source. `vik run --port` reaches `todo!` in `src/cli/run.rs`; no `src/server` module exists.
+- Some usage docs and README still mention HTTP endpoints or Codex app-server. Treat those as stale unless source confirms them.
+- `docs/development/setup.md` is missing though repo instructions reference it.
+
+## Verification
+
+For skill-only or docs-only changes, at minimum run:
+
+```sh
+cargo run -- doctor --json ./workflow.yml
+cargo fmt --all -- --check
+git diff --check
+```
+
+For Rust behavior changes, run full gate:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-features
+git diff --check
+```
+
+Before handoff, sync per repo rule:
+
+```sh
+git fetch origin main
+git pull --ff-only origin main
+```

@@ -11,29 +11,68 @@
 - Use small helpers when they remove repeated invariants.
 - Prefer receiver methods in `impl` blocks over free functions whose first
   argument is the receiver.
+- When stable options would otherwise be passed to every call, introduce a
+  reusable type that captures them once.
+- Install dependencies with `cargo add <crate>` when changing dependencies.
+- Use `<name>/mod.rs` for modules with submodules.
+- Do not duplicate cross-cutting concerns across modules. If a primitive already
+  has an owner, reuse the owner's public surface.
+- Adapter modules own provider command assembly and event mapping. Session owns
+  spawn, prompt rendering, event streaming, and JSONL writing.
+- Runtime path derivations for Vik-owned state go through `Workspace` in
+  `src/workspace/`. Do not hand-join logs, sessions, service, or issue
+  workspace paths in production code outside that module.
+- Runtime layers should receive `Workflow` or `Arc<Workflow>` when they need
+  schema, hooks, or workspace paths.
+- The parsed YAML type is `WorkflowSchema`. The runtime supervisor is
+  `Workflow`.
 
-## Orchestration
+## Current Dependency Direction
 
-- Treat the configured issue tracker as the tracker authority.
-- Treat `WORKFLOW.md` as trusted local automation code.
-- Keep workspace path safety intact.
-- Do not add behavior that can delete paths outside `workspace.root`.
-- Keep retry and terminal-state logic deterministic.
-- Keep issue state transitions observable in logs or snapshots.
+- `main` calls `cli`.
+- `cli` may compose every runtime layer.
+- `workflow` owns schema plus resolved workspace and hook runner.
+- `orchestrator` depends on `workflow`, `session`, `hooks`, `context`, and
+  `logging`.
+- `session` depends on `agent`, `template`, `shell`, `workflow`, `config`, and
+  `context`.
+- `agent` depends on `config` for profile and runtime tags.
+- `hooks` depends on `template` and `shell`.
+- `template` depends on `shell` for prompt command execution.
+- `daemon` owns detach, signal, lifecycle, and state-file mechanics.
 
-## Codex Integration
+The important review rule is not "lower modules never import higher modules" in
+the abstract. The rule is: do not skip the intended seam. Examples:
 
-- Preserve `codex app-server` protocol compatibility.
-- Do not log prompts, tool payloads, or credentials unless the surrounding code
-  already treats the data as safe.
-- Keep timeouts configurable.
-- Prefer explicit lifecycle events for startup, session, turn, and failure
-  boundaries.
+- Orchestrator should not call agent adapters directly.
+- Agent adapters should not create process trees directly.
+- Runtime code should not build workspace artifact paths outside `Workspace`.
+- Provider-specific JSON mapping should not leak into orchestrator.
+
+## SOLID And Abstractions
+
+- **Single responsibility.** A type represents one concept. `Workflow` is the
+  supervisor, `WorkflowSchema` is parsed YAML, `Workspace` is path layout,
+  `SessionFactory` is the spawn seam.
+- **Open extension through narrow traits.** `AgentAdapter` is the provider
+  extension point. Keep it small.
+- **Interface segregation.** Split traits when callers only need a subset.
+- **Dependency inversion at seams.** High-level orchestration should depend on
+  session-level behavior, not provider-specific behavior.
+- **Composition over forwarding traits.** Prefer wrappers with clear ownership
+  over traits that redeclare another trait's whole surface.
 
 ## Docs
 
 - Use kebab-case file names.
-- Keep top-level usage topics as standalone files under `docs/usage/`.
+- Keep usage topics under `docs/usage/`.
 - Keep development docs under `docs/development/`.
 - Include why, where, and exact command steps for connection docs.
+- Keep docs aligned with current code. If a feature is planned but not
+  implemented, say so.
 - Do not commit non-English text.
+
+## Updating
+
+Agents are responsible for keeping these conventions current when a refactor
+changes architecture or workflow behavior.

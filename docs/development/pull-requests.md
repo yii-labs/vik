@@ -25,16 +25,14 @@ Message shape:
 docs: add Vik usage and development guides
 
 Summary:
-- Add operator docs for startup, Docker, service, config, and observation.
+- Add operator docs for startup, service, config, and observation.
 - Add development docs and agent index.
 
 Rationale:
 - Keep README small and make setup steps executable by agents.
 
 Tests:
-- cargo test --locked --workspace --all-features
-
-Co-authored-by: Codex <codex@openai.com>
+- cargo test --all-features
 ```
 
 ## PR Body
