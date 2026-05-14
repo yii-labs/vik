@@ -31,6 +31,7 @@ After successful merge:
 - Move tracker issue to done or close it using explicit tracker commands.
 - Update the workpad with merge commit or PR merge evidence.
 - Do not delete remote branches unless repo policy or land skill says to.
+- Remove the local `{{ cwd }}` workspace.
 
 Final response: merged PR, final issue state, validation/check status,
 blockers only.

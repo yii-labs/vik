@@ -36,11 +36,12 @@ fn subcommand_help_shows_workflow_argument() {
     String::from_utf8_lossy(&output.stderr),
   );
   let stdout = String::from_utf8(output.stdout).expect("utf-8 stdout");
-  assert!(
-    stdout.contains("Usage: vik run [OPTIONS] [WORKFLOW]")
-      || stdout.contains("Usage: vik.exe run [OPTIONS] [WORKFLOW]"),
-    "got: {stdout}"
-  );
+  let usage = if cfg!(windows) {
+    "Usage: vik.exe run [OPTIONS] [WORKFLOW]"
+  } else {
+    "Usage: vik run [OPTIONS] [WORKFLOW]"
+  };
+  assert!(stdout.contains(usage), "got: {stdout}");
   assert!(
     stdout.contains("[WORKFLOW]  Path to the workflow file all subcommands act on"),
     "got: {stdout}"
