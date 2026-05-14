@@ -10,3 +10,7 @@
 *.json text eol=lf
 *.js text eol=lf
 *.sh text eol=lf
+*.ps1 text eol=lf
+.env* text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
