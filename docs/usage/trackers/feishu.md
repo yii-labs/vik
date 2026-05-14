@@ -47,7 +47,7 @@ For detached daemons, start Vik from the same OS user that configured
 `lark-cli`, or make sure that user can read the same `lark-cli`
 profile and keychain entries.
 
-## Design the Base Table
+## Design the Base table
 
 Use one Base table as the issue list. The smallest useful schema is:
 
@@ -62,7 +62,8 @@ Use one Base table as the issue list. The smallest useful schema is:
 - `PR Links`: optional URL or text field for pull request links.
 
 Field names are configurable. If you rename `Title` or `State`, update
-the `--field-id` values in your pull command and prompt snippets.
+the field names in your prompt snippets. For `+record-list`, use the
+field IDs returned by `+field-list`, not display names.
 
 `lark-cli` returns `_record_id` as record metadata. Do not create a
 Base field named `_record_id`. Vik should use that record ID as
@@ -77,13 +78,16 @@ Discover tables, fields, and views before writing `workflow.yml`:
 ```sh
 export FEISHU_BASE_TOKEN="<base_token>"
 export FEISHU_TABLE_ID="<table_id>"
+export FEISHU_VIEW_ID="<view_id>"
+export FEISHU_TITLE_FIELD_ID="<title_field_id>"
+export FEISHU_STATE_FIELD_ID="<state_field_id>"
 
 lark-cli base +table-list --base-token "$FEISHU_BASE_TOKEN" --jq .
 lark-cli base +field-list --base-token "$FEISHU_BASE_TOKEN" --table-id "$FEISHU_TABLE_ID" --jq .
 lark-cli base +view-list --base-token "$FEISHU_BASE_TOKEN" --table-id "$FEISHU_TABLE_ID" --jq .
 ```
 
-## Designing the Issue Pull Command
+## Designing the issue pull command
 
 `issues.pull.command` is a shell command Vik runs on a loop. It must
 print one JSON array of issue objects to stdout. Each issue must
@@ -95,7 +99,9 @@ include at least:
 
 Example using a filtered view. Keep the title field first and the
 state field second; the `--jq` expression maps those two projected
-columns by position.
+columns by position. Substitute field IDs discovered with
+`lark-cli base +field-list`; display names such as `Title` and `State`
+are not valid `--field-id` values for normal Base tables.
 
 ```yaml
 issues:
@@ -105,8 +111,8 @@ issues:
       --base-token "$FEISHU_BASE_TOKEN"
       --table-id "$FEISHU_TABLE_ID"
       --view-id "$FEISHU_VIEW_ID"
-      --field-id Title
-      --field-id State
+      --field-id "$FEISHU_TITLE_FIELD_ID"
+      --field-id "$FEISHU_STATE_FIELD_ID"
       --limit 50
       --format json
       --jq '
@@ -136,7 +142,7 @@ Tips:
 - Run the exact command in your shell before putting it in
   `workflow.yml`.
 
-## Reading Issue Detail in Prompts
+## Reading issue detail in prompts
 
 Stage prompts can render Vik template values directly:
 
@@ -160,7 +166,7 @@ lark-cli base +record-get \
 If your table has large attachment or rich-text fields, project only
 the fields a stage needs.
 
-## Managing State From Prompts
+## Managing state from prompts
 
 Vik never updates Feishu. Your prompt files must tell the agent how
 to move Base records between states.
@@ -192,22 +198,44 @@ lark-cli base +field-list \
   --jq .
 ```
 
-## Common Prompt Operations
+## Common prompt operations
 
-### Write a Workpad Field
+### Write a Workpad field
 
 Use this when your table has a long-text field such as `Workpad`.
 Read the existing record first, preserve the current field text, then
 write the full new field body back.
 
 ```sh
-workpad_body='## Vik Workpad
+record_json=$(
+  lark-cli base +record-get \
+    --base-token "$FEISHU_BASE_TOKEN" \
+    --table-id "$FEISHU_TABLE_ID" \
+    --record-id "{{ issue.id }}" \
+    --jq .
+)
+
+existing_workpad=$(
+  printf '%s' "$record_json" |
+    jq -r --arg field "${FEISHU_WORKPAD_FIELD:-Workpad}" \
+      '.fields[$field] // "" | if type == "string" then . else tostring end'
+)
+
+workpad_entry='## Vik Workpad
 
 ### Plan
 
 - [x] Read the record.
 - [ ] Implement the issue.
 '
+
+if [ -n "$existing_workpad" ]; then
+  workpad_body="${existing_workpad}
+
+${workpad_entry}"
+else
+  workpad_body="$workpad_entry"
+fi
 
 payload=$(
   jq -n \
@@ -223,14 +251,36 @@ lark-cli base +record-batch-update \
   --json "$payload"
 ```
 
-### Write a Comment Field
+### Write a comment field
 
 Base does not need to model comments as separate records for Vik to
 work. The simple approach is one long-text field named `Comments`.
 Append locally, then update the whole field:
 
 ```sh
-comment_body='2026-05-14 12:00 UTC Agent posted plan and moved state to work.'
+record_json=$(
+  lark-cli base +record-get \
+    --base-token "$FEISHU_BASE_TOKEN" \
+    --table-id "$FEISHU_TABLE_ID" \
+    --record-id "{{ issue.id }}" \
+    --jq .
+)
+
+existing_comments=$(
+  printf '%s' "$record_json" |
+    jq -r --arg field "${FEISHU_COMMENTS_FIELD:-Comments}" \
+      '.fields[$field] // "" | if type == "string" then . else tostring end'
+)
+
+comment_entry='2026-05-14 12:00 UTC Agent posted plan and moved state to work.'
+
+if [ -n "$existing_comments" ]; then
+  comment_body="${existing_comments}
+
+${comment_entry}"
+else
+  comment_body="$comment_entry"
+fi
 
 payload=$(
   jq -n \
@@ -246,7 +296,7 @@ lark-cli base +record-batch-update \
   --json "$payload"
 ```
 
-### Store a Pull Request Link
+### Store a pull request link
 
 ```sh
 payload=$(
@@ -263,7 +313,7 @@ lark-cli base +record-batch-update \
   --json "$payload"
 ```
 
-## Sanity Checks Before You Run Vik
+## Sanity checks before you run Vik
 
 ```sh
 # 1. CLI is installed and can see Base commands.
@@ -273,7 +323,7 @@ lark-cli base +record-batch-update --help
 
 # 2. Auth and scopes work for this OS user.
 lark-cli auth status --verify
-lark-cli auth check --scope "base:field:read base:record:read base:record:update"
+lark-cli auth check --scope "base:table:read base:field:read base:view:read base:record:read base:record:update"
 
 # 3. Field discovery works.
 lark-cli base +field-list --base-token "$FEISHU_BASE_TOKEN" --table-id "$FEISHU_TABLE_ID" --jq .
@@ -283,8 +333,8 @@ lark-cli base +record-list \
   --base-token "$FEISHU_BASE_TOKEN" \
   --table-id "$FEISHU_TABLE_ID" \
   --view-id "$FEISHU_VIEW_ID" \
-  --field-id Title \
-  --field-id State \
+  --field-id "$FEISHU_TITLE_FIELD_ID" \
+  --field-id "$FEISHU_STATE_FIELD_ID" \
   --limit 5 \
   --format json \
   --jq '[range(0; (.record_id_list | length)) as $i | {id: (.record_id_list[$i] | tostring), title: (.data[$i][0] | tostring), state: (.data[$i][1] | tostring)}]'
