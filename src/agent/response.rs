@@ -10,7 +10,8 @@ use serde_json::Value;
 /// `ProviderEvent`/`Message`/`TokenUsage`/`RateLimit` interleaved, and
 /// terminates with one [`AgentEvent::Completed`] (or trailing `Error`).
 /// Parse errors on a single JSONL line surface as [`AgentEvent::Error`]
-/// rather than tearing the subprocess down.
+/// because forward-compatible evidence beats a hard fail on one future
+/// provider event shape.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AgentEvent {

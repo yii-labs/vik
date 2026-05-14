@@ -311,13 +311,15 @@ impl SessionInner {
   }
 
   fn apply_event(&mut self, event: AgentEvent, state_notifier: &watch::Sender<SessionState>) {
+    let notify_state_watch = !matches!(&event, AgentEvent::ProviderEvent { .. });
+
     if let Some(writer) = &mut self.writer
       && let Err(err) = writer.write(&event)
     {
       tracing::error!("session jsonl write failed: {err}");
     }
 
-    if !matches!(&event, AgentEvent::ProviderEvent { .. }) {
+    if notify_state_watch {
       self.snapshot.last_event_at = Some(Utc::now());
     }
 
@@ -373,7 +375,9 @@ impl SessionInner {
       AgentEvent::ProviderEvent { runtime: _, event: _ } => {},
     }
 
-    state_notifier.send_replace(self.snapshot.state);
+    if notify_state_watch {
+      state_notifier.send_replace(self.snapshot.state);
+    }
   }
 
   /// Terminal state is sticky: once Completed/Failed/Cancelled/Stalled
@@ -437,11 +441,13 @@ fn map_agent_stdout_line(agent: &dyn AgentAdapter, line: &str) -> Vec<AgentEvent
 }
 
 fn map_provider_value(agent: &dyn AgentAdapter, value: Value) -> Vec<AgentEvent> {
-  let mut events = vec![AgentEvent::ProviderEvent {
+  let semantic_events = agent.map_event(&value);
+  let mut events = Vec::with_capacity(semantic_events.len() + 1);
+  events.push(AgentEvent::ProviderEvent {
     runtime: agent.runtime_name().to_string(),
-    event: value.clone(),
-  }];
-  events.extend(agent.map_event(value));
+    event: value,
+  });
+  events.extend(semantic_events);
   events
 }
 
@@ -616,7 +622,7 @@ mod tests {
 
   #[test]
   fn provider_event_does_not_change_snapshot_semantics() {
-    let (state_notifier, _) = watch::channel(SessionState::Running);
+    let (state_notifier, state_rx) = watch::channel(SessionState::Running);
     let mut inner = SessionInner {
       snapshot: SessionSnapshot {
         state: SessionState::Running,
@@ -640,6 +646,7 @@ mod tests {
     assert_eq!(inner.snapshot.tokens.output, 0);
     assert_eq!(inner.snapshot.tokens.cache_read, 0);
     assert!(inner.snapshot.last_event_at.is_none());
+    assert!(!state_rx.has_changed().expect("state channel open"));
   }
 
   #[test]

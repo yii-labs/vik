@@ -51,7 +51,7 @@ pub trait AgentAdapter: Send + Sync {
 
   /// Unknown shapes return `vec![]`; new provider event types still
   /// persist as raw provider records and must not crash the stream.
-  fn map_event(&self, value: Value) -> Vec<AgentEvent>;
+  fn map_event(&self, value: &Value) -> Vec<AgentEvent>;
 }
 
 /// Flatten the YAML `args` map into a flat CLI token list. Booleans
