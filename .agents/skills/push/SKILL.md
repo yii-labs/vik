@@ -80,7 +80,7 @@ Also run any issue-provided validation. Do not downgrade explicit issue tests.
 
 ```md
 ## Issue
-<issue identifier or link>
+closes <issue identifier or link>
 
 ## Summary
 - <full scope>

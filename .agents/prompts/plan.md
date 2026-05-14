@@ -52,7 +52,7 @@ Keep this exact structure and update it in place:
 
 ### Notes
 
-- <timestamp> <short note>
+- <ISO 8601 timestamp> <short note>
 
 ### Confusions
 
