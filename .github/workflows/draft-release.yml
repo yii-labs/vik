@@ -21,7 +21,6 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GITHUB_TOKEN: ${{ github.token }}
-      RELEASE_OUTPUT: ${{ runner.temp }}/vik-release-output.env
 
     steps:
       - name: Checkout
@@ -54,6 +53,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          export RELEASE_OUTPUT="${RUNNER_TEMP}/vik-release-output.env"
           rm -f "${RELEASE_OUTPUT}"
           codex exec --dangerously-bypass-approvals-and-sandbox --cd "${GITHUB_WORKSPACE}" - <<'PROMPT'
           You are preparing a Vik release inside GitHub Actions.
@@ -85,6 +85,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          RELEASE_OUTPUT="${RUNNER_TEMP}/vik-release-output.env"
           if [[ ! -s "${RELEASE_OUTPUT}" ]]; then
             echo "Codex did not write RELEASE_OUTPUT: ${RELEASE_OUTPUT}" >&2
             exit 2
