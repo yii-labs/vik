@@ -126,6 +126,11 @@ mod tests {
 
   use super::*;
 
+  #[cfg(windows)]
+  const FAILING_PROMPT_COMMAND: &str = "echo bad 1>&2 & exit /b 7";
+  #[cfg(not(windows))]
+  const FAILING_PROMPT_COMMAND: &str = "echo bad >&2; exit 7";
+
   #[tokio::test]
   async fn renders_jinja_before_executing_prompt_command() {
     let renderer = PromptRenderer::new();
@@ -159,7 +164,7 @@ mod tests {
     let context = TemplateContext::new();
 
     let err = renderer
-      .render("before !`exec(echo bad >&2; exit 7)` after", &context)
+      .render(&format!("before !`exec({FAILING_PROMPT_COMMAND})` after"), &context)
       .await
       .expect_err("command must fail");
 
