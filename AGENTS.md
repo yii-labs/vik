@@ -5,7 +5,6 @@
 Read the relevant docs before changing this repo:
 
 - [Development index](docs/development/index.md)
-- [Setup](docs/development/setup.md)
 - [Checks](docs/development/checks.md)
 - [Pull requests](docs/development/pull-requests.md)
 - [Code conventions](docs/development/code-conventions.md)
