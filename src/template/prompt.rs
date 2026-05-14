@@ -157,12 +157,20 @@ mod tests {
   async fn nonzero_prompt_command_returns_template_error() {
     let renderer = PromptRenderer::new();
     let context = TemplateContext::new();
+    let template = format!("before !`exec({})` after", failing_prompt_command());
 
-    let err = renderer
-      .render("before !`exec(echo bad >&2; exit 7)` after", &context)
-      .await
-      .expect_err("command must fail");
+    let err = renderer.render(&template, &context).await.expect_err("command must fail");
 
     assert!(matches!(err, TemplateError::PromptCommandFailed { .. }));
+  }
+
+  #[cfg(windows)]
+  fn failing_prompt_command() -> &'static str {
+    "echo bad 1>&2 & exit /B 7"
+  }
+
+  #[cfg(not(windows))]
+  fn failing_prompt_command() -> &'static str {
+    "echo bad >&2; exit 7"
   }
 }
