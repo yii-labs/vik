@@ -1,9 +1,9 @@
 # Get Started
 
-Vik is a small program that watches an issue tracker (like GitHub or
-Linear, and whatever) and lets agents (Codex or Claude Code) work on issues
-for you. You describe how you want it to behave in a single file
-called `workflow.yml`. Once that file is ready, you start Vik and
+Vik is a small program that watches an issue tracker such as GitHub,
+Linear, or Feishu Base, and lets agents (Codex or Claude Code) work
+on issues for you. You describe how you want it to behave in a single
+file called `workflow.yml`. Once that file is ready, you start Vik and
 walk away.
 
 This guide builds that file with you, one section at a time. Run
@@ -17,7 +17,7 @@ every command from the same folder you are working in.
 - A terminal you are comfortable using.
 - The `vik` binary installed and on your `PATH`.
 - One coding agent: Codex (`codex`) **or** Claude Code (`claude`).
-- One tracker account: GitHub **or** Linear.
+- One tracker account: GitHub, Linear, or Feishu Base.
 - The usual command-line tools: `git`, `jq`.
 
 Quick sanity check:
@@ -118,10 +118,11 @@ Pick the tracker you use and follow its dedicated guide for full
 setup, sample pull commands, and the prompt-side commands you will
 need later (read details, leave comments, change state, etc.).
 
-| Tracker | Auth                            | Setup guide                               |
-| ------- | ------------------------------- | ----------------------------------------- |
-| GitHub  | `gh auth login` (or `GH_TOKEN`) | [GitHub Issue Source](trackers/github.md) |
-| Linear  | `export LINEAR_API_KEY=...`     | [Linear Issue Source](trackers/linear.md) |
+| Tracker     | Auth                            | Setup guide                               |
+| ----------- | ------------------------------- | ----------------------------------------- |
+| GitHub      | `gh auth login` (or `GH_TOKEN`) | [GitHub Issue Source](trackers/github.md) |
+| Linear      | `export LINEAR_API_KEY=...`     | [Linear Issue Source](trackers/linear.md) |
+| Feishu Base | `lark-cli auth login`           | [Feishu Base Issue Source](trackers/feishu.md) |
 
 Whichever you pick, every issue your pull command emits must include
 at least:
@@ -139,7 +140,8 @@ before pasting it into `issues.pull.command`:
 
 Then add the `issues.pull` block to `workflow.yml` exactly as the
 tracker guide shows. `idle_sec` controls how long Vik waits between
-pull cycles — start at `5` for GitHub, `10` for Linear, then tune.
+pull cycles. Start at `5` for GitHub, `10` for Linear or Feishu Base,
+then tune.
 
 ## 5. Tell Vik what to do per state
 
@@ -272,3 +274,4 @@ issue in a state one of your stages matches.
 - [Observation](observation.md) — reading logs and session events.
 - [Linear Issue Source](trackers/linear.md) — Linear-specific setup.
 - [GitHub Issue Source](trackers/github.md) — GitHub-specific setup.
+- [Feishu Base Issue Source](trackers/feishu.md) — Feishu-specific setup.
