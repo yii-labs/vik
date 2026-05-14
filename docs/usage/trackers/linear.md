@@ -350,4 +350,5 @@ vik doctor ./workflow.yml
 - [Get Started](../get-started.md)
 - [Configuration](../configuration.md)
 - [GitHub Issue Source](github.md)
+- [Feishu Base Issue Source](feishu.md)
 - [Linear MCP server](https://linear.app/docs/mcp)
