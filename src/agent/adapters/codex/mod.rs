@@ -11,8 +11,8 @@
 //! Codex emits two event shapes today and we accept both: the legacy
 //! `{"msg": {"type": ...}}` envelope and the newer flat
 //! `{"type": "thread.started" | "item.completed" | "turn.completed"}`.
-//! Unknown shapes log at DEBUG and drop — the stream must survive new
-//! event kinds shipped by Codex.
+//! Unknown shapes have no semantic snapshot effect, but the session
+//! still writes their provider JSON record.
 
 use serde_json::Value;
 
@@ -25,6 +25,10 @@ const CODEX_PROGRAM: &str = "codex";
 pub struct CodexAdapter;
 
 impl AgentAdapter for CodexAdapter {
+  fn runtime_name(&self) -> &'static str {
+    "codex"
+  }
+
   fn build_command(&self, profile: &AgentProfileSchema, prompt: String) -> AgentCommand {
     let mut args: Vec<String> = vec!["exec".into()];
 
@@ -242,7 +246,7 @@ mod tests {
   }
 
   #[test]
-  fn unknown_event_is_dropped() {
+  fn unknown_event_has_no_semantic_mapping() {
     let line = r#"{"id":"evt-4","msg":{"type":"future_event_kind"}}"#;
     assert_eq!(parse(line), None);
   }

@@ -24,6 +24,10 @@ const CLAUDE_PROGRAM: &str = "claude";
 pub struct ClaudeCodeAdapter;
 
 impl AgentAdapter for ClaudeCodeAdapter {
+  fn runtime_name(&self) -> &'static str {
+    "claude_code"
+  }
+
   fn build_command(&self, profile: &AgentProfileSchema, prompt: String) -> AgentCommand {
     let mut args: Vec<String> = vec![
       "--verbose".into(),
@@ -70,8 +74,8 @@ pub(super) fn map_value(value: &Value) -> Vec<AgentEvent> {
     },
     "assistant" => {
       let text = extract_assistant_text(value);
-      // Drop tool-only turns: surfacing an empty `Message` would
-      // pollute `last_message` and confuse operators reading status.
+      // Tool-only turns have no semantic `Message`; the session still
+      // writes the raw provider event before this mapper runs.
       if text.is_empty() {
         return Vec::new();
       }
@@ -165,7 +169,7 @@ mod tests {
   }
 
   #[test]
-  fn assistant_tool_only_drops() {
+  fn assistant_tool_only_has_no_semantic_message() {
     let line = r#"{
           "type":"assistant",
           "message":{"content":[{"type":"tool_use","id":"t-1","name":"Bash","input":{}}]}
@@ -199,7 +203,7 @@ mod tests {
   }
 
   #[test]
-  fn user_event_is_dropped() {
+  fn user_event_has_no_semantic_mapping() {
     let line = r#"{"type":"user","message":{"content":[]}}"#;
     assert!(parse(line).is_empty());
   }

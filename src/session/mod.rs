@@ -12,8 +12,8 @@
 //! - [`Session::cancel`] — kill the child and force `Cancelled` (no-op
 //!   if already terminal).
 //!
-//! Decoded provider events accumulate into the snapshot and are also
-//! appended to a JSONL file as the durable record.
+//! Provider events append to JSONL as the durable record. Decoded
+//! semantic events also accumulate into the snapshot.
 #![allow(dead_code)]
 mod factory;
 mod jsonl_writer;
@@ -29,6 +29,7 @@ pub use factory::*;
 pub use snapshot::*;
 
 use chrono::Utc;
+use serde_json::Value;
 use thiserror::Error;
 use tokio::fs::{self, File};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -367,6 +368,7 @@ impl SessionInner {
       AgentEvent::Error { detail: _ } => {
         self.set_state(SessionState::Failed, state_notifier);
       },
+      AgentEvent::ProviderEvent { runtime: _, event: _ } => {},
     }
 
     state_notifier.send_replace(self.snapshot.state);
@@ -397,12 +399,7 @@ async fn stream_agent_events(
   loop {
     match lines.next_line().await {
       Ok(Some(line)) => {
-        let events = match serde_json::from_str(&line) {
-          Ok(value) => agent.map_event(value),
-          Err(err) => vec![AgentEvent::Error {
-            detail: err.to_string(),
-          }],
-        };
+        let events = map_agent_stdout_line(agent.as_ref(), &line);
 
         for event in events {
           apply_agent_event(&inner, &state_notifier, event);
@@ -426,6 +423,24 @@ async fn stream_agent_events(
     .lock()
     .expect("session mutex never poisoned")
     .finish_output_stream(&state_notifier);
+}
+
+fn map_agent_stdout_line(agent: &dyn AgentAdapter, line: &str) -> Vec<AgentEvent> {
+  match serde_json::from_str(line) {
+    Ok(value) => map_provider_value(agent, value),
+    Err(err) => vec![AgentEvent::Error {
+      detail: err.to_string(),
+    }],
+  }
+}
+
+fn map_provider_value(agent: &dyn AgentAdapter, value: Value) -> Vec<AgentEvent> {
+  let mut events = vec![AgentEvent::ProviderEvent {
+    runtime: agent.runtime_name().to_string(),
+    event: value.clone(),
+  }];
+  events.extend(agent.map_event(value));
+  events
 }
 
 fn apply_agent_event(
@@ -495,6 +510,8 @@ fn session_log_file_name(issue_state: &str, session_id: Uuid) -> String {
 
 #[cfg(test)]
 mod tests {
+  use crate::config::AgentRuntime;
+
   use super::*;
 
   #[test]
@@ -505,5 +522,121 @@ mod tests {
       session_log_file_name("todo", session_id),
       "todo-00000000-0000-0000-0000-000000000000.jsonl"
     );
+  }
+
+  #[test]
+  fn codex_provider_event_precedes_semantic_events() {
+    let agent = get_adapter(AgentRuntime::Codex);
+    let line = r#"{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"hello"}}"#;
+    let value: Value = serde_json::from_str(line).expect("fixture is valid JSON");
+
+    assert_eq!(
+      map_agent_stdout_line(agent.as_ref(), line),
+      vec![
+        AgentEvent::ProviderEvent {
+          runtime: "codex".into(),
+          event: value,
+        },
+        AgentEvent::Message { text: "hello".into() },
+      ]
+    );
+  }
+
+  #[test]
+  fn codex_tool_call_provider_event_is_retained_without_semantic_events() {
+    let agent = get_adapter(AgentRuntime::Codex);
+    let line = r#"{"type":"item.completed","item":{"id":"tool_0","type":"tool_call","name":"shell","arguments":"{}"}}"#;
+    let value: Value = serde_json::from_str(line).expect("fixture is valid JSON");
+
+    assert_eq!(
+      map_agent_stdout_line(agent.as_ref(), line),
+      vec![AgentEvent::ProviderEvent {
+        runtime: "codex".into(),
+        event: value,
+      }]
+    );
+  }
+
+  #[test]
+  fn codex_unknown_provider_event_is_retained_without_semantic_events() {
+    let agent = get_adapter(AgentRuntime::Codex);
+    let line = r#"{"type":"future.event","payload":{"ok":true}}"#;
+    let value: Value = serde_json::from_str(line).expect("fixture is valid JSON");
+
+    assert_eq!(
+      map_agent_stdout_line(agent.as_ref(), line),
+      vec![AgentEvent::ProviderEvent {
+        runtime: "codex".into(),
+        event: value,
+      }]
+    );
+  }
+
+  #[test]
+  fn claude_tool_only_provider_event_is_retained_without_semantic_message() {
+    let agent = get_adapter(AgentRuntime::ClaudeCode);
+    let line =
+      r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t-1","name":"Bash","input":{}}]}}"#;
+    let value: Value = serde_json::from_str(line).expect("fixture is valid JSON");
+
+    assert_eq!(
+      map_agent_stdout_line(agent.as_ref(), line),
+      vec![AgentEvent::ProviderEvent {
+        runtime: "claude_code".into(),
+        event: value,
+      }]
+    );
+  }
+
+  #[test]
+  fn claude_user_provider_event_is_retained_without_semantic_events() {
+    let agent = get_adapter(AgentRuntime::ClaudeCode);
+    let line = r#"{"type":"user","message":{"content":[]}}"#;
+    let value: Value = serde_json::from_str(line).expect("fixture is valid JSON");
+
+    assert_eq!(
+      map_agent_stdout_line(agent.as_ref(), line),
+      vec![AgentEvent::ProviderEvent {
+        runtime: "claude_code".into(),
+        event: value,
+      }]
+    );
+  }
+
+  #[test]
+  fn invalid_jsonl_maps_to_error_without_provider_event() {
+    let agent = get_adapter(AgentRuntime::Codex);
+    let events = map_agent_stdout_line(agent.as_ref(), "{not-json");
+
+    assert_eq!(events.len(), 1);
+    assert!(matches!(events.first(), Some(AgentEvent::Error { .. })));
+  }
+
+  #[test]
+  fn provider_event_does_not_change_snapshot_semantics() {
+    let (state_notifier, _) = watch::channel(SessionState::Running);
+    let mut inner = SessionInner {
+      snapshot: SessionSnapshot {
+        state: SessionState::Running,
+        ..Default::default()
+      },
+      writer: None,
+      child: None,
+    };
+
+    inner.apply_event(
+      AgentEvent::ProviderEvent {
+        runtime: "codex".into(),
+        event: serde_json::json!({"type":"future.event"}),
+      },
+      &state_notifier,
+    );
+
+    assert!(matches!(inner.snapshot.state, SessionState::Running));
+    assert!(inner.snapshot.last_message.is_none());
+    assert_eq!(inner.snapshot.tokens.input, 0);
+    assert_eq!(inner.snapshot.tokens.output, 0);
+    assert_eq!(inner.snapshot.tokens.cache_read, 0);
+    assert!(inner.snapshot.last_event_at.is_some());
   }
 }
