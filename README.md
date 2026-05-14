@@ -14,8 +14,9 @@ update issues, comments, pull requests, and links.
 - Run as a detached local process through
   [Service Daemon](docs/usage/service-daemon.md).
 - Tune workflow settings through [Configuration](docs/usage/configuration.md).
-- Configure tracker commands through [Linear](docs/usage/trackers/linear.md) or
-  [GitHub](docs/usage/trackers/github.md).
+- Configure tracker commands through [Linear](docs/usage/trackers/linear.md),
+  [GitHub](docs/usage/trackers/github.md), or
+  [Feishu Base](docs/usage/trackers/feishu.md).
 - Inspect logs, daemon state, and session JSONL through
   [Observation](docs/usage/observation.md).
 

@@ -110,6 +110,8 @@ Required credentials depend on pull, prompt, and hook commands:
 - GitHub CLI auth, `GH_TOKEN`, `GITHUB_TOKEN`, or SSH credentials when hooks or
   prompts use GitHub
 - `LINEAR_API_KEY` when prompts use Linear
+- `lark-cli` config and auth for the same OS user when pull commands or
+  prompts use Feishu Base
 
 Templates can read environment values through `{{ env.VAR }}`. Missing values
 fail template render under MiniJinja strict mode.

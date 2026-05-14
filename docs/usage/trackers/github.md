@@ -296,3 +296,4 @@ vik doctor ./workflow.yml
 - [Get Started](../get-started.md)
 - [Configuration](../configuration.md)
 - [Linear Issue Source](linear.md)
+- [Feishu Base Issue Source](feishu.md)

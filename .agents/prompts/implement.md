@@ -93,3 +93,8 @@ Move issue state to `review` only when:
 - Workpad is updated in place.
 
 Final response: completed actions, validation, PR URL, blockers only.
+
+## Note
+
+If you encounter blockers, document them in the workpad and report it by creating new issue with `vik` label.
+Never write patch any changes irrelevant to the issue scope.
