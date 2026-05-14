@@ -47,8 +47,8 @@ impl AgentAdapter for ClaudeCodeAdapter {
     }
   }
 
-  fn map_event(&self, value: Value) -> Vec<AgentEvent> {
-    map_value(&value)
+  fn map_event(&self, value: &Value) -> Vec<AgentEvent> {
+    map_value(value)
   }
 }
 

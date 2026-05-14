@@ -43,8 +43,8 @@ impl AgentAdapter for CodexAdapter {
     }
   }
 
-  fn map_event(&self, value: Value) -> Vec<AgentEvent> {
-    map_events(&value)
+  fn map_event(&self, value: &Value) -> Vec<AgentEvent> {
+    map_events(value)
   }
 }
 
