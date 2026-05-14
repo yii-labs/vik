@@ -173,7 +173,7 @@ Session spawn:
 6. Build provider command.
 7. Spawn the child process.
 8. Stream stdout lines into adapter event mapping.
-9. Write decoded `AgentEvent` JSONL.
+9. Write raw provider and decoded semantic `AgentEvent` JSONL.
 10. Update `SessionSnapshot`.
 
 Session logs live at:
@@ -265,7 +265,7 @@ Runtime artifacts:
 | `<root>/service/state.json`                                | daemon   | pid and lifecycle state   |
 | `<root>/logs/vik.log.YYYY-MM-DD`                           | logging  | INFO+ log events          |
 | `<root>/logs/vik-error.log.YYYY-MM-DD`                     | logging  | ERROR-only log events     |
-| `<root>/sessions/<identifier>/<state>-<uuid-v7>.jsonl`     | session  | decoded AgentEvent stream |
+| `<root>/sessions/<identifier>/<state>-<uuid-v7>.jsonl`     | session  | provider and semantic AgentEvent stream |
 | `<root>/issues/<identifier>/`                              | operator | issue workspace           |
 
 ## Daemon

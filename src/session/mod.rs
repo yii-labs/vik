@@ -317,7 +317,9 @@ impl SessionInner {
       tracing::error!("session jsonl write failed: {err}");
     }
 
-    self.snapshot.last_event_at = Some(Utc::now());
+    if !matches!(&event, AgentEvent::ProviderEvent { .. }) {
+      self.snapshot.last_event_at = Some(Utc::now());
+    }
 
     match event {
       AgentEvent::SessionStarted { session_id } => {
@@ -637,6 +639,38 @@ mod tests {
     assert_eq!(inner.snapshot.tokens.input, 0);
     assert_eq!(inner.snapshot.tokens.output, 0);
     assert_eq!(inner.snapshot.tokens.cache_read, 0);
-    assert!(inner.snapshot.last_event_at.is_some());
+    assert!(inner.snapshot.last_event_at.is_none());
+  }
+
+  #[test]
+  fn jsonl_writer_persists_provider_and_semantic_events_in_order() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let log_file = tempdir.path().join("session.jsonl");
+    let provider_event = AgentEvent::ProviderEvent {
+      runtime: "codex".into(),
+      event: serde_json::json!({
+        "type": "item.completed",
+        "item": {
+          "id": "tool_0",
+          "type": "tool_call",
+          "name": "shell"
+        }
+      }),
+    };
+    let message_event = AgentEvent::Message { text: "hello".into() };
+
+    {
+      let mut writer = JsonlWriter::open(&log_file).expect("open JSONL writer");
+      writer.write(&provider_event).expect("write provider event");
+      writer.write(&message_event).expect("write message event");
+    }
+
+    let contents = std::fs::read_to_string(&log_file).expect("read JSONL");
+    let events: Vec<AgentEvent> = contents
+      .lines()
+      .map(|line| serde_json::from_str(line).expect("event JSON"))
+      .collect();
+
+    assert_eq!(events, vec![provider_event, message_event]);
   }
 }
