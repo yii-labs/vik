@@ -28,8 +28,6 @@ docs/development/pull-requests.md
 docs/development/code-conventions.md
 ```
 
-Note: `docs/development/setup.md` is referenced by `AGENTS.md`, but is absent in this checkout.
-
 ## Current Runtime Shape
 
 Vik is one Rust binary crate.
@@ -232,7 +230,6 @@ Issue workspace cleanup:
 
 - HTTP API is not implemented in current source. `vik run --port` reaches `todo!` in `src/cli/run.rs`; no `src/server` module exists.
 - Some usage docs and README still mention HTTP endpoints or Codex app-server. Treat those as stale unless source confirms them.
-- `docs/development/setup.md` is missing though repo instructions reference it.
 
 ## Verification
 
