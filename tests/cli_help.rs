@@ -9,6 +9,13 @@ fn vik_bin() -> PathBuf {
   PathBuf::from(env!("CARGO_BIN_EXE_vik"))
 }
 
+fn assert_usage(stdout: &str, unix_usage: &str, windows_usage: &str) {
+  assert!(
+    stdout.contains(unix_usage) || stdout.contains(windows_usage),
+    "got: {stdout}"
+  );
+}
+
 #[test]
 fn top_level_help_prefers_subcommand_first_usage() {
   let output = Command::new(vik_bin()).args(["--help"]).output().expect("spawn vik");
@@ -23,7 +30,11 @@ fn top_level_help_prefers_subcommand_first_usage() {
     stdout.contains("Vik runs workflow-driven agents for issue tracker work."),
     "got: {stdout}"
   );
-  assert!(stdout.contains("Usage: vik <COMMAND> [WORKFLOW]"), "got: {stdout}");
+  assert_usage(
+    &stdout,
+    "Usage: vik <COMMAND> [WORKFLOW]",
+    "Usage: vik.exe <COMMAND> [WORKFLOW]",
+  );
 }
 
 #[test]
@@ -36,7 +47,11 @@ fn subcommand_help_shows_workflow_argument() {
     String::from_utf8_lossy(&output.stderr),
   );
   let stdout = String::from_utf8(output.stdout).expect("utf-8 stdout");
-  assert!(stdout.contains("Usage: vik run [OPTIONS] [WORKFLOW]"), "got: {stdout}");
+  assert_usage(
+    &stdout,
+    "Usage: vik run [OPTIONS] [WORKFLOW]",
+    "Usage: vik.exe run [OPTIONS] [WORKFLOW]",
+  );
   assert!(
     stdout.contains("[WORKFLOW]  Path to the workflow file all subcommands act on"),
     "got: {stdout}"
