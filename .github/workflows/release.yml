@@ -12,14 +12,15 @@ on:
         description: crates.io API token used by cargo publish.
         required: true
 
-permissions:
-  contents: write
+permissions: {}
 
 jobs:
   build:
     name: Build ${{ matrix.asset_name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -69,6 +70,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: write
     env:
       GH_TOKEN: ${{ github.token }}
 
@@ -90,6 +94,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: upload-assets
     timeout-minutes: 20
+    permissions:
+      contents: read
     env:
       CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
