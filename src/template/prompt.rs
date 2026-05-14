@@ -159,7 +159,7 @@ mod tests {
     let context = TemplateContext::new();
 
     let err = renderer
-      .render("before !`exec(echo bad >&2; exit 7)` after", &context)
+      .render("before !`exec(exit 7)` after", &context)
       .await
       .expect_err("command must fail");
 
