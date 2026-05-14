@@ -12,11 +12,12 @@
 //! `{"msg": {"type": ...}}` envelope and the newer flat
 //! `{"type": "thread.started" | "item.completed" | "turn.completed"}`.
 //! Unknown shapes have no semantic snapshot effect, but the session
-//! still writes their provider JSON record.
+//! still writes them as typed unknown Codex provider records.
 
 use serde_json::Value;
 
 use super::{AgentAdapter, AgentCommand, AgentEvent, AgentStdin, build_extra_args};
+use crate::agent::CodexProviderEventKind;
 use crate::config::AgentProfileSchema;
 
 const CODEX_PROGRAM: &str = "codex";
@@ -25,10 +26,6 @@ const CODEX_PROGRAM: &str = "codex";
 pub struct CodexAdapter;
 
 impl AgentAdapter for CodexAdapter {
-  fn runtime_name(&self) -> &'static str {
-    "codex"
-  }
-
   fn build_command(&self, profile: &AgentProfileSchema, prompt: String) -> AgentCommand {
     let mut args: Vec<String> = vec!["exec".into()];
 
@@ -43,8 +40,53 @@ impl AgentAdapter for CodexAdapter {
     }
   }
 
+  fn provider_event(&self, value: Value) -> AgentEvent {
+    AgentEvent::CodexProviderEvent {
+      event_type: provider_event_kind(&value),
+      event: value,
+    }
+  }
+
   fn map_event(&self, value: &Value) -> Vec<AgentEvent> {
     map_events(value)
+  }
+}
+
+fn provider_event_kind(value: &Value) -> CodexProviderEventKind {
+  if let Some(msg_ty) = value.get("msg").and_then(|msg| msg.get("type")).and_then(Value::as_str) {
+    return match msg_ty {
+      "session_configured" => CodexProviderEventKind::SessionConfigured,
+      "agent_message" => CodexProviderEventKind::AgentMessage,
+      "token_count" => CodexProviderEventKind::TokenCount,
+      "rate_limit_warning" => CodexProviderEventKind::RateLimitWarning,
+      "rate_limit_reset" => CodexProviderEventKind::RateLimitReset,
+      "turn_complete" => CodexProviderEventKind::TurnComplete,
+      "shutdown_complete" => CodexProviderEventKind::ShutdownComplete,
+      "error" => CodexProviderEventKind::Error,
+      other => CodexProviderEventKind::Unknown {
+        event_type: Some(other.to_string()),
+      },
+    };
+  }
+
+  let Some(ty) = value.get("type").and_then(Value::as_str) else {
+    return CodexProviderEventKind::Unknown { event_type: None };
+  };
+
+  match ty {
+    "thread.started" => CodexProviderEventKind::ThreadStarted,
+    "item.completed" => CodexProviderEventKind::ItemCompleted {
+      item_type: value
+        .get("item")
+        .and_then(|item| item.get("type"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string),
+    },
+    "turn.completed" => CodexProviderEventKind::TurnCompleted,
+    "error" => CodexProviderEventKind::Error,
+    other => CodexProviderEventKind::Unknown {
+      event_type: Some(other.to_string()),
+    },
   }
 }
 
@@ -207,6 +249,22 @@ mod tests {
   fn parse_events(line: &str) -> Vec<AgentEvent> {
     let value: Value = serde_json::from_str(line).expect("fixture is valid JSON");
     map_events(&value)
+  }
+
+  #[test]
+  fn provider_event_kind_recognizes_known_legacy_and_flat_types() {
+    let legacy: Value =
+      serde_json::from_str(r#"{"id":"evt-2","msg":{"type":"token_count","info":{}}}"#).expect("fixture");
+    assert_eq!(provider_event_kind(&legacy), CodexProviderEventKind::TokenCount);
+
+    let flat: Value =
+      serde_json::from_str(r#"{"type":"item.completed","item":{"id":"tool_0","type":"tool_call"}}"#).expect("fixture");
+    assert_eq!(
+      provider_event_kind(&flat),
+      CodexProviderEventKind::ItemCompleted {
+        item_type: Some("tool_call".into()),
+      }
+    );
   }
 
   #[test]

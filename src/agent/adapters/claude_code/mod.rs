@@ -14,6 +14,7 @@
 
 use serde_json::Value;
 
+use crate::agent::ClaudeCodeProviderEventKind;
 use crate::config::AgentProfileSchema;
 
 use super::{AgentAdapter, AgentCommand, AgentEvent, AgentStdin, build_extra_args};
@@ -24,10 +25,6 @@ const CLAUDE_PROGRAM: &str = "claude";
 pub struct ClaudeCodeAdapter;
 
 impl AgentAdapter for ClaudeCodeAdapter {
-  fn runtime_name(&self) -> &'static str {
-    "claude_code"
-  }
-
   fn build_command(&self, profile: &AgentProfileSchema, prompt: String) -> AgentCommand {
     let mut args: Vec<String> = vec![
       "--verbose".into(),
@@ -47,9 +44,50 @@ impl AgentAdapter for ClaudeCodeAdapter {
     }
   }
 
+  fn provider_event(&self, value: Value) -> AgentEvent {
+    AgentEvent::ClaudeCodeProviderEvent {
+      event_type: provider_event_kind(&value),
+      event: value,
+    }
+  }
+
   fn map_event(&self, value: &Value) -> Vec<AgentEvent> {
     map_value(value)
   }
+}
+
+fn provider_event_kind(value: &Value) -> ClaudeCodeProviderEventKind {
+  let Some(ty) = value.get("type").and_then(Value::as_str) else {
+    return ClaudeCodeProviderEventKind::Unknown { event_type: None };
+  };
+
+  match ty {
+    "system" => ClaudeCodeProviderEventKind::System {
+      subtype: value.get("subtype").and_then(Value::as_str).map(ToString::to_string),
+    },
+    "assistant" => ClaudeCodeProviderEventKind::Assistant {
+      content_types: assistant_content_types(value),
+    },
+    "user" => ClaudeCodeProviderEventKind::User,
+    "result" => ClaudeCodeProviderEventKind::Result,
+    other => ClaudeCodeProviderEventKind::Unknown {
+      event_type: Some(other.to_string()),
+    },
+  }
+}
+
+fn assistant_content_types(value: &Value) -> Vec<String> {
+  value
+    .get("message")
+    .and_then(|message| message.get("content"))
+    .and_then(Value::as_array)
+    .map(|content| {
+      content
+        .iter()
+        .filter_map(|block| block.get("type").and_then(Value::as_str).map(ToString::to_string))
+        .collect()
+    })
+    .unwrap_or_default()
 }
 
 pub(super) fn map_value(value: &Value) -> Vec<AgentEvent> {
@@ -75,7 +113,7 @@ pub(super) fn map_value(value: &Value) -> Vec<AgentEvent> {
     "assistant" => {
       let text = extract_assistant_text(value);
       // Tool-only turns have no semantic `Message`; the session still
-      // writes the raw provider event before this mapper runs.
+      // writes the typed provider event before this mapper runs.
       if text.is_empty() {
         return Vec::new();
       }
@@ -138,6 +176,28 @@ mod tests {
   fn parse(line: &str) -> Vec<AgentEvent> {
     let value: Value = serde_json::from_str(line).expect("fixture is valid JSON");
     map_value(&value)
+  }
+
+  #[test]
+  fn provider_event_kind_recognizes_system_and_assistant_details() {
+    let system: Value =
+      serde_json::from_str(r#"{"type":"system","subtype":"init","session_id":"S-42"}"#).expect("fixture");
+    assert_eq!(
+      provider_event_kind(&system),
+      ClaudeCodeProviderEventKind::System {
+        subtype: Some("init".into()),
+      }
+    );
+
+    let assistant: Value =
+      serde_json::from_str(r#"{"type":"assistant","message":{"content":[{"type":"tool_use"},{"type":"text"}]}}"#)
+        .expect("fixture");
+    assert_eq!(
+      provider_event_kind(&assistant),
+      ClaudeCodeProviderEventKind::Assistant {
+        content_types: vec!["tool_use".into(), "text".into()],
+      }
+    );
   }
 
   #[test]

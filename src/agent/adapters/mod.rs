@@ -39,18 +39,22 @@ pub enum AgentStdin {
 }
 
 /// Implementations are stateless per spawn: `build_command` is called
-/// once per run and `map_event` once per JSONL line. Returning an empty
-/// `Vec` from `map_event` means the line has no semantic snapshot
-/// effect; the session still writes a `ProviderEvent` for the parsed
-/// provider JSON. Returning multiple events fans one line out (e.g.
-/// Claude's `result` line yields both `TokenUsage` and `Completed`).
+/// once per run and `map_event` once per JSONL line. `provider_event`
+/// classifies and preserves the original parsed provider JSON for
+/// session history. Returning an empty `Vec` from `map_event` means the
+/// line has no semantic snapshot effect. Returning multiple events fans
+/// one line out (e.g. Claude's `result` line yields both `TokenUsage`
+/// and `Completed`).
 pub trait AgentAdapter: Send + Sync {
-  fn runtime_name(&self) -> &'static str;
-
   fn build_command(&self, profile: &AgentProfileSchema, prompt: String) -> AgentCommand;
 
+  /// Keep one typed provider record for every valid provider JSONL
+  /// line. Unknown future shapes should use the provider's `Unknown`
+  /// event kind instead of failing the stream.
+  fn provider_event(&self, value: Value) -> AgentEvent;
+
   /// Unknown shapes return `vec![]`; new provider event types still
-  /// persist as raw provider records and must not crash the stream.
+  /// persist through `provider_event` and must not crash the stream.
   fn map_event(&self, value: &Value) -> Vec<AgentEvent>;
 }
 

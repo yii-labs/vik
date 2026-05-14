@@ -1,8 +1,9 @@
 //! Provider abstraction.
 //!
 //! Each runtime is one [`AgentAdapter`] implementation. The trait is
-//! deliberately narrow — describe the CLI to spawn, decode one stdout
-//! line — so adding a runtime is "two pure functions" rather than a
+//! deliberately narrow: describe the CLI to spawn, classify one
+//! provider JSONL record, and decode one stdout line into semantic
+//! events. Adding a runtime stays provider-local instead of creating a
 //! fresh subprocess scaffold. Spawning, stdin wiring, and event
 //! streaming all live in [`crate::session`].
 use std::sync::Arc;

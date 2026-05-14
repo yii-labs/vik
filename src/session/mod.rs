@@ -311,7 +311,7 @@ impl SessionInner {
   }
 
   fn apply_event(&mut self, event: AgentEvent, state_notifier: &watch::Sender<SessionState>) {
-    let notify_state_watch = !matches!(&event, AgentEvent::ProviderEvent { .. });
+    let notify_state_watch = !event.is_provider_record();
 
     if let Some(writer) = &mut self.writer
       && let Err(err) = writer.write(&event)
@@ -372,7 +372,7 @@ impl SessionInner {
       AgentEvent::Error { detail: _ } => {
         self.set_state(SessionState::Failed, state_notifier);
       },
-      AgentEvent::ProviderEvent { runtime: _, event: _ } => {},
+      AgentEvent::CodexProviderEvent { .. } | AgentEvent::ClaudeCodeProviderEvent { .. } => {},
     }
 
     if notify_state_watch {
@@ -443,10 +443,7 @@ fn map_agent_stdout_line(agent: &dyn AgentAdapter, line: &str) -> Vec<AgentEvent
 fn map_provider_value(agent: &dyn AgentAdapter, value: Value) -> Vec<AgentEvent> {
   let semantic_events = agent.map_event(&value);
   let mut events = Vec::with_capacity(semantic_events.len() + 1);
-  events.push(AgentEvent::ProviderEvent {
-    runtime: agent.runtime_name().to_string(),
-    event: value,
-  });
+  events.push(agent.provider_event(value));
   events.extend(semantic_events);
   events
 }
@@ -518,7 +515,10 @@ fn session_log_file_name(issue_state: &str, session_id: Uuid) -> String {
 
 #[cfg(test)]
 mod tests {
-  use crate::config::AgentRuntime;
+  use crate::{
+    agent::{ClaudeCodeProviderEventKind, CodexProviderEventKind},
+    config::AgentRuntime,
+  };
 
   use super::*;
 
@@ -541,8 +541,10 @@ mod tests {
     assert_eq!(
       map_agent_stdout_line(agent.as_ref(), line),
       vec![
-        AgentEvent::ProviderEvent {
-          runtime: "codex".into(),
+        AgentEvent::CodexProviderEvent {
+          event_type: CodexProviderEventKind::ItemCompleted {
+            item_type: Some("agent_message".into()),
+          },
           event: value,
         },
         AgentEvent::Message { text: "hello".into() },
@@ -558,8 +560,10 @@ mod tests {
 
     assert_eq!(
       map_agent_stdout_line(agent.as_ref(), line),
-      vec![AgentEvent::ProviderEvent {
-        runtime: "codex".into(),
+      vec![AgentEvent::CodexProviderEvent {
+        event_type: CodexProviderEventKind::ItemCompleted {
+          item_type: Some("tool_call".into()),
+        },
         event: value,
       }]
     );
@@ -573,8 +577,10 @@ mod tests {
 
     assert_eq!(
       map_agent_stdout_line(agent.as_ref(), line),
-      vec![AgentEvent::ProviderEvent {
-        runtime: "codex".into(),
+      vec![AgentEvent::CodexProviderEvent {
+        event_type: CodexProviderEventKind::Unknown {
+          event_type: Some("future.event".into()),
+        },
         event: value,
       }]
     );
@@ -589,8 +595,10 @@ mod tests {
 
     assert_eq!(
       map_agent_stdout_line(agent.as_ref(), line),
-      vec![AgentEvent::ProviderEvent {
-        runtime: "claude_code".into(),
+      vec![AgentEvent::ClaudeCodeProviderEvent {
+        event_type: ClaudeCodeProviderEventKind::Assistant {
+          content_types: vec!["tool_use".into()],
+        },
         event: value,
       }]
     );
@@ -604,8 +612,8 @@ mod tests {
 
     assert_eq!(
       map_agent_stdout_line(agent.as_ref(), line),
-      vec![AgentEvent::ProviderEvent {
-        runtime: "claude_code".into(),
+      vec![AgentEvent::ClaudeCodeProviderEvent {
+        event_type: ClaudeCodeProviderEventKind::User,
         event: value,
       }]
     );
@@ -633,8 +641,10 @@ mod tests {
     };
 
     inner.apply_event(
-      AgentEvent::ProviderEvent {
-        runtime: "codex".into(),
+      AgentEvent::CodexProviderEvent {
+        event_type: CodexProviderEventKind::Unknown {
+          event_type: Some("future.event".into()),
+        },
         event: serde_json::json!({"type":"future.event"}),
       },
       &state_notifier,
@@ -653,8 +663,10 @@ mod tests {
   fn jsonl_writer_persists_provider_and_semantic_events_in_order() {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let log_file = tempdir.path().join("session.jsonl");
-    let provider_event = AgentEvent::ProviderEvent {
-      runtime: "codex".into(),
+    let provider_event = AgentEvent::CodexProviderEvent {
+      event_type: CodexProviderEventKind::ItemCompleted {
+        item_type: Some("tool_call".into()),
+      },
       event: serde_json::json!({
         "type": "item.completed",
         "item": {

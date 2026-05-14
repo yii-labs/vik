@@ -173,7 +173,7 @@ Session spawn:
 6. Build provider command.
 7. Spawn the child process.
 8. Stream stdout lines into adapter event mapping.
-9. Write raw provider and decoded semantic `AgentEvent` JSONL.
+9. Write typed provider records and decoded semantic `AgentEvent` JSONL.
 10. Update `SessionSnapshot`.
 
 Session logs live at:
@@ -187,9 +187,10 @@ watchdog config in workflow schema.
 
 ## Agents
 
-`AgentAdapter` has two methods:
+`AgentAdapter` has three methods:
 
 - `build_command(&self, profile, prompt) -> AgentCommand`
+- `provider_event(&self, value) -> AgentEvent`
 - `map_event(&self, value) -> Vec<AgentEvent>`
 
 `get_adapter(runtime)` returns a stateless adapter:

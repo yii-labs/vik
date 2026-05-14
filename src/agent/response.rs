@@ -2,24 +2,31 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Provider-agnostic event vocabulary.
+/// Session event vocabulary.
 ///
-/// Session JSONL stores both provider JSONL records and decoded
-/// semantic events. A run yields at most one
-/// [`AgentEvent::SessionStarted`], any number of
-/// `ProviderEvent`/`Message`/`TokenUsage`/`RateLimit` interleaved, and
-/// terminates with one [`AgentEvent::Completed`] (or trailing `Error`).
-/// Parse errors on a single JSONL line surface as [`AgentEvent::Error`]
-/// because forward-compatible evidence beats a hard fail on one future
-/// provider event shape.
+/// Session JSONL stores both typed provider JSONL records and decoded
+/// provider-agnostic semantic events. A run yields at most one
+/// [`AgentEvent::SessionStarted`], any number of typed provider
+/// records plus `Message`/`TokenUsage`/`RateLimit` semantic events
+/// interleaved, and terminates with one [`AgentEvent::Completed`] (or
+/// trailing `Error`). Parse errors on a single JSONL line surface as
+/// [`AgentEvent::Error`] because forward-compatible evidence beats a
+/// hard fail on one future provider event shape.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AgentEvent {
-  /// Exact provider JSON value after JSONL parsing. This preserves
-  /// tool calls and future provider event types without making them
-  /// affect the provider-agnostic session snapshot.
-  ProviderEvent {
-    runtime: String,
+  /// Exact parsed Codex JSONL event plus the recognized Codex event
+  /// type. Unknown future Codex event types are still retained.
+  CodexProviderEvent {
+    event_type: CodexProviderEventKind,
+    event: Value,
+  },
+
+  /// Exact parsed Claude Code JSONL event plus the recognized Claude
+  /// Code event type. Unknown future Claude event types are still
+  /// retained.
+  ClaudeCodeProviderEvent {
+    event_type: ClaudeCodeProviderEventKind,
     event: Value,
   },
 
@@ -59,4 +66,40 @@ pub enum AgentEvent {
   Error {
     detail: String,
   },
+}
+
+impl AgentEvent {
+  pub fn is_provider_record(&self) -> bool {
+    matches!(
+      self,
+      AgentEvent::CodexProviderEvent { .. } | AgentEvent::ClaudeCodeProviderEvent { .. }
+    )
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CodexProviderEventKind {
+  SessionConfigured,
+  AgentMessage,
+  TokenCount,
+  RateLimitWarning,
+  RateLimitReset,
+  TurnComplete,
+  ShutdownComplete,
+  ThreadStarted,
+  ItemCompleted { item_type: Option<String> },
+  TurnCompleted,
+  Error,
+  Unknown { event_type: Option<String> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ClaudeCodeProviderEventKind {
+  System { subtype: Option<String> },
+  Assistant { content_types: Vec<String> },
+  User,
+  Result,
+  Unknown { event_type: Option<String> },
 }
