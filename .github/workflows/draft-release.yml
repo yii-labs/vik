@@ -1,0 +1,114 @@
+name: Draft release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: draft-release
+  cancel-in-progress: false
+
+jobs:
+  draft-release:
+    name: Draft release
+    runs-on: self-hosted
+    timeout-minutes: 90
+    outputs:
+      tag: ${{ steps.release-tag.outputs.tag }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_TOKEN: ${{ github.token }}
+      RELEASE_OUTPUT: ${{ runner.temp }}/vik-release-output.env
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref_name }}
+
+      - name: Verify release tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v codex
+          command -v cargo
+          command -v gh
+          command -v git
+          codex --version
+          cargo --version
+          gh auth status --active --hostname github.com
+
+      - name: Prepare Git identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --force --tags origin
+
+      - name: Run Codex release preparation
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f "${RELEASE_OUTPUT}"
+          codex exec --dangerously-bypass-approvals-and-sandbox --cd "${GITHUB_WORKSPACE}" - <<'PROMPT'
+          You are preparing a Vik release inside GitHub Actions.
+
+          Hard rules:
+          - Keep all committed text in English.
+          - Only prepare the release commit, tag, and draft GitHub release.
+          - Do not run `cargo publish`; the called release workflow owns crate publishing.
+          - Do not push secrets or local logs.
+          - Write the final tag as `release_tag=vX.Y.Z` to the file path in `RELEASE_OUTPUT`.
+
+          Required release flow:
+          1. Fetch tags from `origin`.
+          2. Find the latest version tag matching `vX.Y.Z`.
+          3. Analyze commits since that tag. Include features, fixes, breaking changes, and notable maintenance in the draft release body.
+          4. Choose the next SemVer version. Use MAJOR for breaking changes, MINOR for features, PATCH for fixes or maintenance only. If no version tag exists, choose `v0.1.0` unless changes clearly justify another version.
+          5. Update root `Cargo.toml` package version to the chosen bare SemVer value without the leading `v`. Keep package metadata publishable.
+          6. Update `Cargo.lock` when Cargo needs it.
+          7. Validate with `cargo metadata --locked --no-deps --format-version 1`.
+          8. Commit the release bump with message `chore(release): vX.Y.Z`.
+          9. Create tag `vX.Y.Z` at the release commit.
+          10. Push the release commit to the current branch and push the tag to `origin`.
+          11. Create a draft GitHub release for that tag. If it already exists, update it as a draft with the generated notes.
+          12. Write `release_tag=vX.Y.Z` to `RELEASE_OUTPUT`.
+          PROMPT
+
+      - name: Read prepared release tag
+        id: release-tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -s "${RELEASE_OUTPUT}" ]]; then
+            echo "Codex did not write RELEASE_OUTPUT: ${RELEASE_OUTPUT}" >&2
+            exit 2
+          fi
+          # shellcheck source=/dev/null
+          source "${RELEASE_OUTPUT}"
+          if [[ ! "${release_tag:-}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid release tag: ${release_tag:-}" >&2
+            exit 2
+          fi
+          git rev-parse --verify "${release_tag}^{commit}"
+          git ls-remote --exit-code --tags origin "refs/tags/${release_tag}"
+          is_draft="$(gh release view "${release_tag}" --json isDraft --jq '.isDraft')"
+          if [[ "${is_draft}" != "true" ]]; then
+            echo "Release ${release_tag} is not a draft release" >&2
+            exit 2
+          fi
+          echo "tag=${release_tag}" >>"${GITHUB_OUTPUT}"
+
+  release:
+    name: Release
+    needs: draft-release
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.draft-release.outputs.tag }}
+    secrets:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
