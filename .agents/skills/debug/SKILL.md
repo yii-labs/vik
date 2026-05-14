@@ -128,12 +128,14 @@ If paths differ, replace the example `logs` directory with `log_dir` from `vik s
 
 ## Session JSONL
 
-Session JSONL files store normalized `AgentEvent` records, not raw provider stdout.
+Session JSONL files store `AgentEvent` records, including raw parsed provider
+JSON values and normalized semantic events.
 
 Event shapes:
 
 ```json
 {"kind":"session_started","session_id":"..."}
+{"kind":"provider_event","runtime":"codex","event":{"type":"item.completed"}}
 {"kind":"message","text":"..."}
 {"kind":"token_usage","input":120,"output":45,"cache_read":12}
 {"kind":"rate_limit","scope":"codex:tokens_per_min","remaining":100,"reset_at":"...","observed_at":"..."}
