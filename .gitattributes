@@ -1,0 +1,12 @@
+* text=auto
+
+# Keep source, config, docs, and CI files LF on every checkout.
+*.rs text eol=lf
+*.toml text eol=lf
+*.lock text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.js text eol=lf
+*.sh text eol=lf
