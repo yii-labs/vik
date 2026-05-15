@@ -1,0 +1,253 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    outputs:
+      package: ${{ steps.release.outputs.package }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse and validate tag
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${GITHUB_REF_NAME}"
+          if [[ ! "${tag}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)\.[0-9]+)?)$ ]]; then
+            echo "::error::Tag '${tag}' must match vX.Y.Z, vX.Y.Z-alpha.N, or vX.Y.Z-beta.N"
+            exit 1
+          fi
+
+          version="${BASH_REMATCH[1]}"
+          manifest_version="$(sed -nE 's/^version = "([^"]+)"/\1/p' Cargo.toml | head -n1)"
+          package="$(sed -nE 's/^name = "([^"]+)"/\1/p' Cargo.toml | head -n1)"
+
+          if [[ -z "${package}" ]]; then
+            echo "::error::Could not parse package name from Cargo.toml"
+            exit 1
+          fi
+
+          if [[ "${version}" != "${manifest_version}" ]]; then
+            echo "::error::Tag version ${version} does not match Cargo.toml version ${manifest_version}"
+            exit 1
+          fi
+
+          prerelease=false
+          if [[ "${version}" == *-* ]]; then
+            prerelease=true
+          fi
+
+          echo "package=${package}" >> "${GITHUB_OUTPUT}"
+          echo "prerelease=${prerelease}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+  build:
+    name: Build ${{ matrix.label }}
+    needs: validate
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux-x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: vik
+            artifact: vik-linux-x64
+          - label: linux-arm64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            binary: vik
+            artifact: vik-linux-arm64
+          - label: macos-arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            binary: vik
+            artifact: vik-macos-arm64
+          - label: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: vik.exe
+            artifact: vik-windows-x64.exe
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Stage release binary
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "dist/${{ matrix.artifact }}"
+
+          if [[ "${RUNNER_OS}" != "Windows" ]]; then
+            chmod +x "dist/${{ matrix.artifact }}"
+          fi
+
+      - name: Upload release binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
+          if-no-files-found: error
+
+  publish-crate:
+    name: Publish crate
+    needs:
+      - validate
+      - build
+    runs-on: ubuntu-latest
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      PACKAGE: ${{ needs.validate.outputs.package }}
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Publish to crates.io
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${CARGO_REGISTRY_TOKEN:-}" ]]; then
+            echo "::error::CARGO_REGISTRY_TOKEN secret is required to publish to crates.io"
+            exit 1
+          fi
+
+          if curl -fsS \
+            -H "User-Agent: forehalo/vik release workflow" \
+            "https://crates.io/api/v1/crates/${PACKAGE}/${VERSION}" >/dev/null; then
+            echo "${PACKAGE} ${VERSION} is already published on crates.io; skipping."
+            exit 0
+          fi
+
+          cargo publish --locked
+
+  github-release:
+    name: Create GitHub release
+    needs:
+      - validate
+      - build
+      - publish-crate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download release binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: vik-*
+          merge-multiple: true
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd dist
+          sha256sum vik-* > "vik-${{ needs.validate.outputs.version }}-sha256.txt"
+          cat "vik-${{ needs.validate.outputs.version }}-sha256.txt"
+
+      - name: Generate release body
+        id: release_body
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${{ needs.validate.outputs.tag }}"
+          version="${{ needs.validate.outputs.version }}"
+          notes_path="${RUNNER_TEMP}/release-body.md"
+
+          cat > "${notes_path}" <<EOF
+          ## Install
+
+          \`\`\`sh
+          cargo install vik --version ${version} --locked
+          \`\`\`
+
+          ## Binaries
+
+          - Linux x64: \`vik-linux-x64\`
+          - Linux arm64: \`vik-linux-arm64\`
+          - macOS arm64: \`vik-macos-arm64\`
+          - Windows x64: \`vik-windows-x64.exe\`
+
+          Verify downloads with \`vik-${version}-sha256.txt\`.
+          EOF
+
+          previous_tag="$(git describe --tags --match 'v[0-9]*.[0-9]*.[0-9]*' --abbrev=0 "${tag}^{commit}^" 2>/dev/null || true)"
+
+          {
+            echo
+            echo "<details>"
+            echo "<summary>Diff log</summary>"
+            echo
+
+            if [[ -n "${previous_tag}" ]]; then
+              echo "Full diff: https://github.com/${GITHUB_REPOSITORY}/compare/${previous_tag}...${tag}"
+              echo
+              git log --no-merges --pretty=format:'- %h %s' "${previous_tag}..${tag}"
+            else
+              echo "Initial release diff:"
+              echo
+              git log --no-merges --pretty=format:'- %h %s' "${tag}"
+            fi
+
+            echo
+            echo "</details>"
+          } >> "${notes_path}"
+
+          echo "path=${notes_path}" >> "${GITHUB_OUTPUT}"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.validate.outputs.tag }}
+          name: ${{ needs.validate.outputs.version }}
+          prerelease: ${{ needs.validate.outputs.prerelease == 'true' }}
+          files: dist/*
+          body_path: ${{ steps.release_body.outputs.path }}
