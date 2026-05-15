@@ -183,13 +183,24 @@ jobs:
           pattern: vik-*
           merge-multiple: true
 
+      - name: Stage installer
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sed "s/__VIK_RELEASE_TAG__/${{ needs.validate.outputs.tag }}/g" \
+            scripts/install.sh > dist/install.sh
+          chmod +x dist/install.sh
+
       - name: Generate checksums
         shell: bash
         run: |
           set -euo pipefail
 
           cd dist
-          sha256sum vik-* > "vik-${{ needs.validate.outputs.version }}-sha256.txt"
+          find . -maxdepth 1 -type f ! -name '*-sha256.txt' -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > "vik-${{ needs.validate.outputs.version }}-sha256.txt"
           cat "vik-${{ needs.validate.outputs.version }}-sha256.txt"
 
       - name: Generate release body
@@ -204,6 +215,12 @@ jobs:
 
           cat > "${notes_path}" <<EOF
           ## Install
+
+          \`\`\`sh
+          curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/install.sh | sh -
+          \`\`\`
+
+          Or install from crates.io:
 
           \`\`\`sh
           cargo install vik --version ${version} --locked
