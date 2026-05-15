@@ -19,6 +19,8 @@
   has an owner, reuse the owner's public surface.
 - Adapter modules own provider command assembly and event mapping. Session owns
   spawn, prompt rendering, event streaming, and JSONL writing.
+- A spawned `Session` holds the runtime `IssueStage` it is executing. Stage
+  hooks stay in the orchestrator launcher, outside session internals.
 - Runtime path derivations for Vik-owned state go through `Workspace` in
   `src/workspace/`. Do not hand-join logs, sessions, service, or issue
   workspace paths in production code outside that module.
@@ -26,6 +28,15 @@
   schema, hooks, or workspace paths.
 - The parsed YAML type is `WorkflowSchema`. The runtime supervisor is
   `Workflow`.
+- Runtime issue behavior belongs on `IssueRun`; keep `Issue` as plain intake
+  data.
+- `IssueRun` may construct matching runtime `IssueStage` values from workflow
+  stage order and `issue.state`; orchestrator-owned capacity checks stay in
+  `RunningMap`.
+- `IssueStage` may project canonical template context for hooks and prompts,
+  but stage lifecycle stays outside `IssueStage`.
+- Orchestrator should handle issue preparation failures through `IssueRunError`
+  instead of importing hook internals for issue setup.
 
 ## Current Dependency Direction
 
@@ -34,6 +45,8 @@
 - `workflow` owns schema plus resolved workspace and hook runner.
 - `orchestrator` depends on `workflow`, `session`, `hooks`, `context`, and
   `logging`.
+- `context` owns issue intake data plus issue-run runtime context and may depend
+  on `workflow`, `hooks`, and `template`.
 - `session` depends on `agent`, `template`, `shell`, `workflow`, `config`, and
   `context`.
 - `agent` depends on `config` for profile and runtime tags.

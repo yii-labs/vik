@@ -251,7 +251,7 @@ impl HookRunner {
       "hook",
       phase = %Phase::Hook,
       hook = kind.as_str(),
-      issue_identifier = %issue.id,
+      issue_id = %issue.id,
       stage_name = "",
     );
 
@@ -271,7 +271,7 @@ impl HookRunner {
       "hook",
       phase = %Phase::Hook,
       hook = kind.as_str(),
-      issue_identifier = %ctx.issue.id,
+      issue_id = %ctx.issue.id,
       stage_name = %ctx.stage_name,
     );
 
@@ -292,7 +292,7 @@ impl HookRunner {
       "hook",
       phase = %Phase::Hook,
       hook = kind.as_str(),
-      issue_identifier = %ctx.issue.id,
+      issue_id = %ctx.issue.id,
       stage_name = %ctx.stage_name,
     );
 

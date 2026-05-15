@@ -57,9 +57,9 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for BufferWriter {
 }
 
 /// An event emitted inside a `stage_span` must carry the span's structured
-/// fields (phase, issue_identifier, stage_name, agent_profile) in the JSON
-/// payload. Callers downstream rely on that so a single
-/// `issue_identifier="ABC-1"` filter reaches every line the stage produced.
+/// fields (phase, issue_id, stage_name, agent_profile) in the JSON payload.
+/// Callers downstream rely on that so a single `issue_id="ABC-1"` filter
+/// reaches every line the stage produced.
 #[test]
 fn span_fields_propagate_into_event_json() {
   let (capture, buffer) = CaptureLayer::new();
@@ -76,7 +76,7 @@ fn span_fields_propagate_into_event_json() {
 
   let event = &events[0];
   assert_eq!(event["phase"], serde_json::Value::String("stage_run".into()));
-  assert_eq!(event["issue_identifier"], serde_json::Value::String("ABC-1".into()));
+  assert_eq!(event["issue_id"], serde_json::Value::String("ABC-1".into()));
   assert_eq!(event["stage_name"], serde_json::Value::String("plan".into()));
   assert_eq!(event["agent_profile"], serde_json::Value::String("codex".into()));
   assert_eq!(event["event_kind"], serde_json::Value::String("stage_started".into()));

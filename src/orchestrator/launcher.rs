@@ -12,15 +12,14 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
+use crate::context::IssueStage;
 use crate::hooks::HookError;
 use crate::logging::{Phase, stage_span};
 use crate::session::{SessionError, SessionFactory, SessionState};
-use crate::template::StageContext;
 use crate::workflow::Workflow;
 
 use super::event::EventProducer;
 use super::monitor::SessionMonitor;
-use super::types::IssueStage;
 
 #[derive(Clone)]
 pub(super) struct StageLauncher {
@@ -38,27 +37,26 @@ impl StageLauncher {
     }
   }
 
-  /// Spawn the launch task. `issue_workdir` is the path created by
-  /// issue-level setup; we receive it instead of recomputing so the
-  /// launcher and `prepare_issue` can never disagree on layout.
-  pub(super) fn launch(&self, issue_stage: IssueStage, issue_workdir: std::path::PathBuf, shutdown: CancellationToken) {
+  /// Spawn the launch task. The runtime `IssueStage` already carries
+  /// the issue run context needed for hooks and session spawn.
+  pub(super) fn launch(&self, issue_stage: IssueStage, shutdown: CancellationToken) {
     let span = stage_span(
       &issue_stage.issue().id,
-      issue_stage.stage().name(),
-      &issue_stage.stage().schema().agent,
+      issue_stage.stage_name(),
+      &issue_stage.stage().agent,
     );
     let launcher = self.clone();
 
-    tokio::spawn(async move { launcher.run(issue_stage, issue_workdir, shutdown).await }.instrument(span));
+    tokio::spawn(async move { launcher.run(issue_stage, shutdown).await }.instrument(span));
   }
 
-  async fn run(self, issue_stage: IssueStage, issue_workdir: std::path::PathBuf, shutdown: CancellationToken) {
+  async fn run(self, issue_stage: IssueStage, shutdown: CancellationToken) {
     if shutdown.is_cancelled() {
       return;
     }
 
     let key = issue_stage.key();
-    let session = match self.start_session(&issue_stage, &issue_workdir).await {
+    let session = match self.start_session(&issue_stage).await {
       Ok(session) => session,
       Err(error) => {
         // No session ever existed; report under the reserved key so the
@@ -88,7 +86,7 @@ impl StageLauncher {
     // their cleanup to run. The hook's own failure is logged but not
     // propagated, so a flaky `after_run` cannot mask a stage result.
     if !matches!(terminal.state, SessionState::Cancelled)
-      && let Err(error) = self.run_after_run(&issue_stage, &issue_workdir).await
+      && let Err(error) = self.run_after_run(&issue_stage).await
     {
       tracing::error!(
         phase = %Phase::Hook,
@@ -100,67 +98,22 @@ impl StageLauncher {
     self.producer.stage_terminal(key, terminal).await;
   }
 
-  async fn start_session(
-    &self,
-    issue_stage: &IssueStage,
-    issue_workdir: &std::path::Path,
-  ) -> Result<crate::session::Session, StageLaunchError> {
-    let issue = issue_stage.issue().clone();
+  async fn start_session(&self, issue_stage: &IssueStage) -> Result<crate::session::Session, StageLaunchError> {
     // `before_run` failure aborts the stage before any agent process is
     // spawned, so a misconfigured setup hook cannot waste tokens.
-    self.run_before_run(issue_stage, &issue, issue_workdir).await?;
+    self.run_before_run(issue_stage).await?;
 
-    Ok(
-      self
-        .factory
-        .spawn_named(
-          issue,
-          issue_stage.stage().name().to_string(),
-          issue_stage.stage().schema().clone(),
-          issue_workdir.to_path_buf(),
-        )
-        .await?,
-    )
+    Ok(self.factory.spawn_stage(issue_stage.clone()).await?)
   }
 
-  async fn run_before_run(
-    &self,
-    issue_stage: &IssueStage,
-    issue: &crate::context::Issue,
-    issue_workdir: &std::path::Path,
-  ) -> Result<(), HookError> {
-    let ctx = self.stage_context(issue_stage, issue, issue_workdir);
-    self
-      .workflow
-      .hooks()
-      .run_before_run(&issue_stage.stage().schema().hooks, ctx)
-      .await
+  async fn run_before_run(&self, issue_stage: &IssueStage) -> Result<(), HookError> {
+    let ctx = issue_stage.template_context();
+    self.workflow.hooks().run_before_run(&issue_stage.stage().hooks, ctx).await
   }
 
-  async fn run_after_run(&self, issue_stage: &IssueStage, issue_workdir: &std::path::Path) -> Result<(), HookError> {
-    let issue = issue_stage.issue().clone();
-    let ctx = self.stage_context(issue_stage, &issue, issue_workdir);
-    self
-      .workflow
-      .hooks()
-      .run_after_run(&issue_stage.stage().schema().hooks, ctx)
-      .await
-  }
-
-  fn stage_context<'a>(
-    &'a self,
-    issue_stage: &'a IssueStage,
-    issue: &'a crate::context::Issue,
-    issue_workdir: &'a std::path::Path,
-  ) -> StageContext<'a> {
-    StageContext {
-      issue,
-      stage_name: issue_stage.stage().name(),
-      agent_profile: &issue_stage.stage().schema().agent,
-      stage_state: &issue_stage.stage().schema().when.state,
-      issue_workdir,
-      workspace_root: self.workflow.workspace().root(),
-    }
+  async fn run_after_run(&self, issue_stage: &IssueStage) -> Result<(), HookError> {
+    let ctx = issue_stage.template_context();
+    self.workflow.hooks().run_after_run(&issue_stage.stage().hooks, ctx).await
   }
 }
 

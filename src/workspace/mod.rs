@@ -94,12 +94,12 @@ impl Workspace {
       .get_or_init(|| self.service_dir().join(SERVICE_STATE_FILE_NAME))
   }
 
-  pub fn issue_workdir(&self, identifier: &str) -> PathBuf {
-    self.issues_dir().join(identifier)
+  pub fn issue_workdir(&self, issue_id: &str) -> PathBuf {
+    self.issues_dir().join(issue_id)
   }
 
-  pub fn issue_sessions_dir(&self, identifier: &str) -> PathBuf {
-    self.sessions_dir().join(identifier)
+  pub fn issue_sessions_dir(&self, issue_id: &str) -> PathBuf {
+    self.sessions_dir().join(issue_id)
   }
 
   /// Creates `root` if its parent already exists; refuses to create
@@ -187,7 +187,7 @@ mod tests {
   }
 
   #[test]
-  fn issue_sessions_dir_nests_identifier_under_sessions() {
+  fn issue_sessions_dir_nests_issue_id_under_sessions() {
     let p = ws();
     assert_eq!(p.issue_sessions_dir("VIK-1"), PathBuf::from("/tmp/ws/sessions/VIK-1"));
   }

@@ -15,5 +15,5 @@ truth makes Vik recoverable from crashes with no durable running-state store.
 Current runtime guards:
 
 - Deduplicate `(issue.id, stage.name)` while running or reserved.
-- Limit active issue identifiers with `loop.max_issue_concurrency`.
+- Limit active issue ids with `loop.max_issue_concurrency`.
 - Preserve stage author order when multiple stages match one state.

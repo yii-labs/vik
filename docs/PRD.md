@@ -27,7 +27,7 @@ when a run stalls, crashes, or restarts.
   through prompt-authored commands.
 - One-shot agent CLI processes for stage sessions.
 - Support Codex and Claude Code runtimes.
-- One issue workspace per issue identifier.
+- One issue workspace per issue id.
 - In-memory running state with cold-start recovery from tracker state.
 - File-based observation through logs, state file, and session JSONL.
 
@@ -83,7 +83,7 @@ when a run stalls, crashes, or restarts.
   - optional `description` or `desc`
 - Extra issue fields are preserved as payload and made available to stage
   prompt rendering.
-- Duplicate identifiers in one intake batch: first wins.
+- Duplicate issue ids in one intake batch: first wins.
 
 ## Dispatch
 
@@ -98,8 +98,8 @@ issue.state == issue.stages.<stage>.when.state
 - Multiple stages may match the same issue state.
 - Orchestrator reserves `(issue.id, stage.name)` before async issue
   setup starts.
-- `loop.max_issue_concurrency` limits active issue identifiers, not stage count.
-- If capacity is full, new issue identifiers are skipped for that cycle.
+- `loop.max_issue_concurrency` limits active issue ids, not stage count.
+- If capacity is full, new issue ids are skipped for that cycle.
 
 ## Reconciliation Model
 
@@ -169,8 +169,8 @@ tell agents to `cd {{ cwd }}` when issue-workspace cwd matters.
 
 ## Hooks
 
-- `issue.hooks.after_create` runs after `create_dir_all` and before stage
-  launch on every matched issue cycle.
+- `issue.hooks.after_create` runs after Vik first creates the issue workspace
+  and before stage launch for that setup. Existing issue workspaces skip it.
 - Stage `before_run` runs before session spawn. Failure aborts that stage.
 - Stage `after_run` runs after terminal session state except cancellation.
   Failure is logged.
@@ -232,9 +232,9 @@ not implemented. Do not document HTTP endpoints as working behavior yet.
 These endpoints remain planned design, not current behavior:
 
 - `GET /api/v1/state`
-- `GET /api/v1/issues/{identifier}`
+- `GET /api/v1/issues/{issue_id}`
 - `POST /api/v1/refresh`
-- `POST /api/v1/issues/{identifier}/cancel`
+- `POST /api/v1/issues/{issue_id}/cancel`
 
 No current CLI command depends on these planned routes.
 

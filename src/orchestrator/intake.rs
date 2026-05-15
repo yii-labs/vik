@@ -82,15 +82,15 @@ impl IntakeLoop {
 
     for issue in issues.iter().cloned() {
       // First-wins dedup inside one cycle; trackers occasionally repeat
-      // the same identifier across queries and we do not want to launch
+      // the same issue id across queries and we do not want to launch
       // duplicate dispatch attempts inside a single batch.
       if seen.insert(issue.id.clone()) {
         self.producer.intake_issue(issue).await;
       } else {
         tracing::warn!(
           phase = %Phase::Intake,
-          issue_identifier = %issue.id,
-          "duplicate issue identifier from intake; keeping first issue",
+          issue_id = %issue.id,
+          "duplicate issue id from intake; keeping first issue",
         );
       }
     }

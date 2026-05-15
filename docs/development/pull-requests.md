@@ -39,7 +39,7 @@ Tests:
 
 Include:
 
-- issue identifier
+- issue id
 - summary of changed behavior or docs
 - validation commands and results
 - risks or known gaps

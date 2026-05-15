@@ -17,11 +17,11 @@ pub fn dispatch_span() -> Span {
   tracing::info_span!("dispatch", phase = Phase::Dispatch.as_str(),)
 }
 
-pub fn stage_span(issue_identifier: &str, stage_name: &str, agent_profile: &str) -> Span {
+pub fn stage_span(issue_id: &str, stage_name: &str, agent_profile: &str) -> Span {
   tracing::info_span!(
     "stage_run",
     phase = Phase::StageRun.as_str(),
-    issue_identifier = issue_identifier,
+    issue_id = issue_id,
     stage_name = stage_name,
     agent_profile = agent_profile,
     runtime = Empty,

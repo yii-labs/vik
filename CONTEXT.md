@@ -54,6 +54,12 @@ tracker tool. Prompts must say how to read or update state, comments,
 attachments, branches, pull requests, and links.
 _Avoid_: `vik_issue`, dynamic tracker tool, hidden issue API
 
+**Issue Run**:
+Runtime handling of one Issue inside one Workflow. It carries workflow-derived
+context for the issue, prepares the issue workspace, and creates spawnable Issue
+Stages. The tracker Issue remains plain intake data.
+_Avoid_: mutating Issue into runtime state, loose parameter bag
+
 **Issue Workspace**:
 Directory at `<workspace.root>/<issue.id>/`. Issue-level and stage-level
 hooks run there. Current agent subprocesses inherit the Vik process cwd, so
@@ -77,19 +83,25 @@ _Avoid_: direct adapter calls from orchestrator
 
 - One **Workflow Definition** defines many **Agent Profiles**.
 - One **Workflow Definition** defines many **Issue Stages**.
+- The **Workflow Definition** is the parsed SSOT; **Workflow** is the runtime
+  context carrier built from it.
 - Intake runs `issues.pull.command` from the workflow file directory.
 - Intake command stdout must be one JSON sequence of issues.
 - Each issue item uses `identifier` or `id`, `title`, and `state`; `desc` and
   `status` are accepted aliases for `description` and `state`.
+- An **Issue Run** wraps one plain **Issue** with runtime context before any
+  Issue Stage can spawn.
+- A runtime **Issue Stage** belongs to one **Issue Run** and uses the Issue
+  Run context when rendering hooks, rendering prompts, and spawning a Session.
 - `issue.state == issue.stages.<name>.when.state` is the only dispatch rule.
 - Stage iteration preserves workflow author order.
 - Orchestrator reserves `(issue.id, stage.name)` before async setup so
   duplicate intake results do not launch the same stage twice.
-- `loop.max_issue_concurrency` limits active issue identifiers, not stage count.
+- `loop.max_issue_concurrency` limits active issue ids, not stage count.
 - Running stage state lives in memory. Restart loses it. Next intake cycle
   rebuilds work from tracker state.
-- `issue.hooks.after_create` runs after `create_dir_all` and before stage launch
-  every matched cycle. It must be idempotent.
+- `issue.hooks.after_create` runs after the Issue Workspace is first created
+  and before stage launch for that setup. Existing Issue Workspaces skip it.
 - Stage `before_run` runs before session spawn. Failure aborts that stage.
 - Stage `after_run` runs after terminal session state except cancellation.
   Failure is logged.

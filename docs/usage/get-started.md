@@ -148,7 +148,7 @@ need later (read details, leave comments, change state, etc.).
 Whichever you pick, every issue your pull command emits must include
 at least:
 
-- `id` — a unique identifier (string).
+- `id` — a unique issue id string.
 - `title` — the issue title.
 - `state` — the state Vik will match on. Case-sensitive.
 

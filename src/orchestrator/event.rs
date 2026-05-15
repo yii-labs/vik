@@ -6,15 +6,11 @@
 //! transition visible at one site — the only place [`super::running::RunningMap`]
 //! is mutated.
 
-use std::path::PathBuf;
-
 use tokio::sync::mpsc;
 
-use crate::context::Issue;
+use crate::context::{Issue, IssueStage, IssueStageKey};
 use crate::logging::Phase;
 use crate::session::{Session, SessionSnapshot};
-
-use super::types::{IssueStage, IssueStageKey};
 
 /// Bounded so a slow main loop applies backpressure to producers. 256 is
 /// large enough to swallow a normal intake burst without forcing intake
@@ -41,12 +37,9 @@ impl EventProducer {
     self.send(OrchestratorEvent::Intake(IntakeEvent::Stopped)).await;
   }
 
-  pub(super) async fn issue_ready(&self, issue_stages: Vec<IssueStage>, issue_workdir: PathBuf) {
+  pub(super) async fn issue_ready(&self, issue_stages: Vec<IssueStage>) {
     self
-      .send(OrchestratorEvent::Stage(StageEvent::IssueReady {
-        issue_stages,
-        issue_workdir,
-      }))
+      .send(OrchestratorEvent::Stage(StageEvent::IssueReady { issue_stages }))
       .await;
   }
 
@@ -121,7 +114,6 @@ pub(super) enum IntakeEvent {
 pub(super) enum StageEvent {
   IssueReady {
     issue_stages: Vec<IssueStage>,
-    issue_workdir: PathBuf,
   },
   Started {
     issue_stage: Box<IssueStage>,

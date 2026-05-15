@@ -33,7 +33,7 @@ src/
 |-- hooks/           after_create, before_run, after_run shell hooks
 |-- orchestrator/    intake loop, dispatch, running map, launch, monitor
 |-- daemon/          detach, signals, lifecycle, state file
-|-- context/         issue intake data model
+|-- context/         issue intake data and issue-run runtime context
 `-- utils/           shared path helpers
 ```
 
@@ -72,6 +72,10 @@ graph TD
     session --> shell[shell]
     session --> template[template]
     session --> workflow
+
+    context --> workflow
+    context --> hooks
+    context --> template
 
     hooks --> config
     hooks --> context
@@ -144,11 +148,12 @@ Dispatch flow:
 1. Intake emits an issue.
 2. Orchestrator matches stages by exact `state`.
 3. Orchestrator reserves `(issue_id, stage_name)`.
-4. Issue setup task creates
-   `<workflow-workspace-root>/issues/<issue_id>/`.
-5. Issue setup runs `after_create`.
+4. Issue setup task ensures
+   `<workflow-workspace-root>/issues/<issue_id>/` exists.
+5. If setup created the issue workspace, it runs `after_create`; existing
+   issue workspaces skip `after_create`.
 6. Launcher task runs `before_run`.
-7. Launcher spawns a `Session`.
+7. Launcher spawns a `Session` with the runtime Issue Stage context.
 8. Monitor task sends snapshots and terminal event.
 9. Launcher runs `after_run` after terminal state, except cancellation.
 
@@ -161,7 +166,8 @@ The sleep between intake cycles is `issues.pull.idle_sec`.
 
 ## Session
 
-`SessionFactory` holds `Arc<Workflow>`.
+`SessionFactory` holds `Arc<Workflow>`. Each spawned `Session` holds the runtime
+Issue Stage it is executing.
 
 Session spawn:
 
@@ -255,8 +261,8 @@ that final workflow-scoped root, so its parent must already exist.
 - `service_dir()`
 - `service_state_file()`
 - `issues_dir()`
-- `issue_workdir(identifier)`
-- `issue_sessions_dir(identifier)`
+- `issue_workdir(issue_id)`
+- `issue_sessions_dir(issue_id)`
 
 Runtime artifacts:
 
@@ -265,8 +271,8 @@ Runtime artifacts:
 | `<root>/service/state.json`                                | daemon   | pid and lifecycle state   |
 | `<root>/logs/vik.log.YYYY-MM-DD`                           | logging  | INFO+ log events          |
 | `<root>/logs/vik-error.log.YYYY-MM-DD`                     | logging  | ERROR-only log events     |
-| `<root>/sessions/<identifier>/<state>-<uuid-v7>.jsonl`     | session  | decoded AgentEvent stream |
-| `<root>/issues/<identifier>/`                              | operator | issue workspace           |
+| `<root>/sessions/<issue_id>/<state>-<uuid-v7>.jsonl`       | session  | decoded AgentEvent stream |
+| `<root>/issues/<issue_id>/`                                | operator | issue workspace           |
 
 ## Daemon
 

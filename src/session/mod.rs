@@ -37,10 +37,10 @@ use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::agent::{AgentAdapter, AgentCommand, AgentStdin, get_adapter};
-use crate::config::{AgentProfileSchema, IssueStage};
-use crate::context::Issue;
+use crate::config::AgentProfileSchema;
+use crate::context::{Issue, IssueStage};
 use crate::shell::{Child, CommandExecError, CommandExt};
-use crate::template::{Context as TemplateContext, PromptRenderer, StageContext, TemplateError};
+use crate::template::{Context as TemplateContext, PromptRenderer, TemplateError};
 use crate::workflow::Workflow;
 
 use self::jsonl_writer::JsonlWriter;
@@ -63,10 +63,7 @@ pub enum SessionError {
 struct SessionOptions {
   workflow: Arc<Workflow>,
   log_file: PathBuf,
-  issue_workdir: PathBuf,
-  issue: Issue,
-  stage_name: String,
-  stage: IssueStage,
+  issue_stage: IssueStage,
   profile: AgentProfileSchema,
 }
 
@@ -87,10 +84,7 @@ struct SessionInner {
 impl Session {
   pub(super) async fn spawn(
     workflow: Arc<Workflow>,
-    issue: Issue,
-    stage_name: String,
-    stage: IssueStage,
-    issue_workdir: PathBuf,
+    issue_stage: IssueStage,
     profile: AgentProfileSchema,
   ) -> Result<Self, SessionError> {
     let now = Utc::now();
@@ -100,16 +94,13 @@ impl Session {
     // when the file must be created.
     let log_file = workflow
       .workspace()
-      .issue_sessions_dir(&issue.id)
-      .join(session_log_file_name(&issue.state, Uuid::now_v7()));
+      .issue_sessions_dir(&issue_stage.issue().id)
+      .join(session_log_file_name(&issue_stage.issue().state, Uuid::now_v7()));
 
     let opts = SessionOptions {
       workflow,
       log_file,
-      issue_workdir,
-      issue,
-      stage_name,
-      stage,
+      issue_stage,
       profile,
     };
 
@@ -140,15 +131,15 @@ impl Session {
   }
 
   pub fn id(&self) -> &str {
-    &self.opts.issue.id
+    &self.opts.issue_stage.issue().id
   }
 
   pub fn issue(&self) -> &Issue {
-    &self.opts.issue
+    self.opts.issue_stage.issue()
   }
 
   pub fn stage(&self) -> &IssueStage {
-    &self.opts.stage
+    &self.opts.issue_stage
   }
 
   pub fn profile(&self) -> &AgentProfileSchema {
@@ -204,7 +195,7 @@ impl Session {
 
     let mut command = Command::new(&agent_command.program);
     command
-      .current_dir(&self.opts.issue_workdir)
+      .current_dir(self.opts.issue_stage.issue_workdir())
       .args(agent_command.args)
       .stdout(Stdio::piped())
       .stderr(Stdio::null());
@@ -262,8 +253,8 @@ impl Session {
     let prompt_file = self
       .opts
       .workflow
-      .resolve_path(&self.stage().prompt_file)
-      .ok_or_else(|| SessionError::PromptPath(self.stage().prompt_file.clone()))?;
+      .resolve_path(&self.stage().stage().prompt_file)
+      .ok_or_else(|| SessionError::PromptPath(self.stage().stage().prompt_file.clone()))?;
 
     let mut file = File::open(&prompt_file)
       .await
@@ -446,7 +437,7 @@ fn render_context(session: &Session) -> TemplateContext {
   // Payload first, stage bindings second: a tracker that happens to
   // include keys named `cwd`, `stage`, etc. cannot shadow the bindings
   // the prompt author depends on.
-  for (key, value) in &session.issue.extra_payload {
+  for (key, value) in &session.issue_stage.issue().extra_payload {
     let Some(key) = key.as_str() else {
       continue;
     };
@@ -454,33 +445,26 @@ fn render_context(session: &Session) -> TemplateContext {
     context.with(key, value);
   }
 
-  let workspace_root = session.workflow.workspace().root().to_path_buf();
-
   // Hook renderer and prompt renderer share `StageContext` so the two
   // template surfaces cannot disagree on what `cwd` / `issue` / `stage`
   // mean for one dispatch.
-  let stage_ctx = StageContext {
-    issue: &session.issue,
-    stage_name: &session.stage_name,
-    agent_profile: &session.stage.agent,
-    stage_state: &session.stage.when.state,
-    issue_workdir: &session.issue_workdir,
-    workspace_root: &workspace_root,
-  };
-  stage_ctx.apply(&mut context);
+  session.issue_stage.template_context().apply(&mut context);
 
   // Prompt-only extras the hook context does not need. The richer
   // `stage` value here merges the schema with the orchestrator's
   // stage name so prompts can address either form.
   context.with("workflow", session.workflow.schema());
   context.with("loop", &session.workflow.schema().loop_);
-  context.with("stage", stage_context_value(&session.stage, &session.stage_name));
+  context.with(
+    "stage",
+    stage_context_value(session.issue_stage.stage(), session.issue_stage.stage_name()),
+  );
   context.with("profile", &session.profile);
 
   context
 }
 
-fn stage_context_value(stage: &IssueStage, stage_name: &str) -> serde_json::Value {
+fn stage_context_value(stage: &crate::config::IssueStage, stage_name: &str) -> serde_json::Value {
   let mut value = serde_json::to_value(stage).unwrap_or(serde_json::Value::Null);
   if let serde_json::Value::Object(stage_value) = &mut value {
     stage_value.insert("name".to_string(), serde_json::Value::String(stage_name.to_string()));
