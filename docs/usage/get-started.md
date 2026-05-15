@@ -12,6 +12,27 @@ every command from the same folder you are working in.
 > Never paste API keys into chat, commit them to git, or print them
 > with `echo` / `cat`. Keep secrets in environment variables.
 
+## Install Vik
+
+Install the latest release binary:
+
+```sh
+curl -fsSL https://github.com/yii-labs/vik/releases/latest/download/install.sh | sh -
+```
+
+The installer supports Linux x64, Linux arm64, and macOS arm64. It installs to
+`~/.local/bin` by default. Override that with `VIK_INSTALL_DIR`:
+
+```sh
+curl -fsSL https://github.com/yii-labs/vik/releases/latest/download/install.sh | VIK_INSTALL_DIR=/usr/local/bin sh -
+```
+
+You can also install from crates.io:
+
+```sh
+cargo install vik --locked
+```
+
 ## What you need first
 
 - A terminal you are comfortable using.
