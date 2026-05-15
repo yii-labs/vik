@@ -250,7 +250,10 @@ mod tests {
     let workflow = workflow_fixture(1, None);
     let mut orchestrator = Orchestrator::new(workflow);
 
-    let planned = orchestrator.should_dispatch(issue_run(&orchestrator, "ABC-1", "todo"));
+    let planned = orchestrator.should_dispatch(Arc::new(IssueRun::new(
+      Arc::clone(&orchestrator.workflow),
+      issue("ABC-1", "todo"),
+    )));
     assert_eq!(
       planned.iter().map(|issue_stage| issue_stage.stage_name()).collect::<Vec<_>>(),
       ["plan", "implement"]
@@ -261,19 +264,28 @@ mod tests {
 
     assert!(
       orchestrator
-        .should_dispatch(issue_run(&orchestrator, "ABC-1", "todo"))
+        .should_dispatch(Arc::new(IssueRun::new(
+          Arc::clone(&orchestrator.workflow),
+          issue("ABC-1", "todo"),
+        )))
         .is_empty(),
       "same issue-stage keys are already reserved"
     );
     assert!(
       orchestrator
-        .should_dispatch(issue_run(&orchestrator, "ABC-2", "todo"))
+        .should_dispatch(Arc::new(IssueRun::new(
+          Arc::clone(&orchestrator.workflow),
+          issue("ABC-2", "todo"),
+        )))
         .is_empty(),
       "different issue is blocked by max_issue_concurrency"
     );
     assert!(
       orchestrator
-        .should_dispatch(issue_run(&orchestrator, "ABC-1", "Todo"))
+        .should_dispatch(Arc::new(IssueRun::new(
+          Arc::clone(&orchestrator.workflow),
+          issue("ABC-1", "Todo"),
+        )))
         .is_empty(),
       "state match is exact and case-sensitive"
     );
@@ -394,9 +406,5 @@ issue:
       state: state.to_string(),
       extra_payload: serde_yaml::Mapping::new(),
     }
-  }
-
-  fn issue_run(orchestrator: &Orchestrator, id: &str, state: &str) -> Arc<IssueRun> {
-    Arc::new(IssueRun::new(Arc::clone(&orchestrator.workflow), issue(id, state)))
   }
 }
