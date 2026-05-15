@@ -28,6 +28,6 @@ impl SessionFactory {
       },
     };
 
-    Session::spawn(Arc::clone(&self.workflow), issue_stage, profile.clone()).await
+    Session::spawn(issue_stage, profile.clone()).await
   }
 }

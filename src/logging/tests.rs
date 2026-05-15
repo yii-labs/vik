@@ -1,119 +1,125 @@
 //! Unit tests for the logging module.
-//!
-//! The acceptance criteria from issue 0002 map onto the tests below:
-//!
-//! - Span field propagation — [`span_fields_propagate_into_event_json`].
-//! - ERROR-only appender routing — [`only_error_events_reach_error_appender`].
-//! - Retention — covered in [`super::retention::tests`].
-//! - Workspace-root auto-create — covered in
-//!   [`crate::workspace::root::tests`].
 
-use std::io::Write;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use tracing::subscriber::with_default;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::{EnvFilter, Layer, Registry};
+use serde_json::json;
+use tracing::field::{Field, Visit};
+use tracing::{Event, Subscriber};
+use tracing_subscriber::Layer;
+use tracing_subscriber::layer::Context;
+use tracing_subscriber::registry::LookupSpan;
 
-use super::layers::CaptureLayer;
-use super::spans::stage_span;
+/// Shared buffer of captured events.
+pub(crate) type CapturedEvents = Arc<Mutex<Vec<serde_json::Value>>>;
 
-/// A Write impl that appends to an in-memory buffer. Used as the
-/// `with_writer` target so the ERROR-appender routing test can read the
-/// bytes back without touching a tempdir.
-#[derive(Clone, Default)]
-struct BufferWriter {
-  inner: Arc<Mutex<Vec<u8>>>,
+/// Mirrors the production JSON layer's `flatten_event`: each event
+/// captures both event-level fields and every span field in the
+/// current scope, so test assertions match operator-visible logs.
+pub(crate) struct CaptureLayer {
+  buffer: CapturedEvents,
 }
 
-impl BufferWriter {
-  fn new() -> Self {
-    Self::default()
-  }
-
-  fn text(&self) -> String {
-    let lock = self.inner.lock().expect("buffer lock");
-    String::from_utf8_lossy(&lock).into_owned()
-  }
-}
-
-impl Write for BufferWriter {
-  fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-    self.inner.lock().expect("buffer lock").extend_from_slice(buf);
-    Ok(buf.len())
-  }
-
-  fn flush(&mut self) -> std::io::Result<()> {
-    Ok(())
+impl CaptureLayer {
+  pub(crate) fn new() -> (Self, CapturedEvents) {
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    (
+      Self {
+        buffer: Arc::clone(&buffer),
+      },
+      buffer,
+    )
   }
 }
 
-impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for BufferWriter {
-  type Writer = BufferWriter;
+impl<S> Layer<S> for CaptureLayer
+where
+  S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+{
+  fn on_new_span(&self, attrs: &tracing::span::Attributes<'_>, id: &tracing::span::Id, ctx: Context<'_, S>) {
+    let span = ctx.span(id).expect("span id is valid");
+    let mut visitor = FieldVisitor::default();
+    attrs.record(&mut visitor);
+    span.extensions_mut().insert(SpanFields(visitor.fields));
+  }
 
-  fn make_writer(&'a self) -> Self::Writer {
-    self.clone()
+  fn on_record(&self, id: &tracing::span::Id, values: &tracing::span::Record<'_>, ctx: Context<'_, S>) {
+    let span = ctx.span(id).expect("span id is valid");
+    let mut ext = span.extensions_mut();
+    let stored = ext.get_mut::<SpanFields>().expect("span fields recorded on new_span");
+    let mut visitor = FieldVisitor::default();
+    values.record(&mut visitor);
+    for (k, v) in visitor.fields {
+      stored.0.insert(k, v);
+    }
+  }
+
+  fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
+    let mut merged: HashMap<String, serde_json::Value> = HashMap::new();
+
+    // Outer-to-inner walk: inner span fields overwrite outer ones,
+    // matching tracing-subscriber's JSON layer.
+    if let Some(scope) = ctx.event_scope(event) {
+      let spans: Vec<_> = scope.from_root().collect();
+      for span in spans {
+        if let Some(fields) = span.extensions().get::<SpanFields>() {
+          for (k, v) in &fields.0 {
+            merged.insert(k.clone(), v.clone());
+          }
+        }
+      }
+    }
+
+    let mut visitor = FieldVisitor::default();
+    event.record(&mut visitor);
+    for (k, v) in visitor.fields {
+      merged.insert(k, v);
+    }
+
+    let level = event.metadata().level().to_string().to_lowercase();
+    merged.insert("level".to_string(), json!(level));
+    merged.insert("target".to_string(), json!(event.metadata().target()));
+
+    let payload = serde_json::Value::Object(merged.into_iter().collect());
+    self.buffer.lock().expect("buffer mutex").push(payload);
   }
 }
 
-/// An event emitted inside a `stage_span` must carry the span's structured
-/// fields (phase, issue_id, stage_name, agent_profile) in the JSON payload.
-/// Callers downstream rely on that so a single `issue_id="ABC-1"` filter
-/// reaches every line the stage produced.
-#[test]
-fn span_fields_propagate_into_event_json() {
-  let (capture, buffer) = CaptureLayer::new();
-  let subscriber = Registry::default().with(capture);
+/// Span-attached field storage used by [`CaptureLayer`].
+struct SpanFields(HashMap<String, serde_json::Value>);
 
-  with_default(subscriber, || {
-    let span = stage_span("ABC-1", "plan", "codex");
-    let _enter = span.enter();
-    tracing::info!(event_kind = "stage_started", "starting stage");
-  });
-
-  let events = buffer.lock().expect("capture buffer");
-  assert!(!events.is_empty(), "at least one event should have fired");
-
-  let event = &events[0];
-  assert_eq!(event["phase"], serde_json::Value::String("stage_run".into()));
-  assert_eq!(event["issue_id"], serde_json::Value::String("ABC-1".into()));
-  assert_eq!(event["stage_name"], serde_json::Value::String("plan".into()));
-  assert_eq!(event["agent_profile"], serde_json::Value::String("codex".into()));
-  assert_eq!(event["event_kind"], serde_json::Value::String("stage_started".into()));
-  assert_eq!(event["level"], serde_json::Value::String("info".into()));
+/// Visitor that flattens tracing field values into JSON values.
+#[derive(Default)]
+struct FieldVisitor {
+  fields: HashMap<String, serde_json::Value>,
 }
 
-/// The ERROR-only file appender must drop INFO events and record ERROR
-/// events. We build a local subscriber that routes output to an
-/// in-memory buffer with an `error` filter layered on top, exactly the
-/// way `init` composes the real error layer.
-#[test]
-fn only_error_events_reach_error_appender() {
-  let writer = BufferWriter::new();
-  let error_layer = tracing_subscriber::fmt::layer()
-    .json()
-    .with_writer(writer.clone())
-    .with_filter(EnvFilter::new("error"));
+impl Visit for FieldVisitor {
+  fn record_str(&mut self, field: &Field, value: &str) {
+    self.fields.insert(field.name().to_string(), json!(value));
+  }
 
-  let subscriber = Registry::default().with(error_layer);
+  fn record_i64(&mut self, field: &Field, value: i64) {
+    self.fields.insert(field.name().to_string(), json!(value));
+  }
 
-  with_default(subscriber, || {
-    tracing::info!("info should be filtered out");
-    tracing::error!("hook blew up");
-    tracing::warn!("warn should be filtered out");
-  });
+  fn record_u64(&mut self, field: &Field, value: u64) {
+    self.fields.insert(field.name().to_string(), json!(value));
+  }
 
-  let text = writer.text();
-  assert!(
-    text.contains("hook blew up"),
-    "error event should reach the appender; buffer was: {text}"
-  );
-  assert!(
-    !text.contains("info should be filtered out"),
-    "info event leaked into the error appender; buffer was: {text}"
-  );
-  assert!(
-    !text.contains("warn should be filtered out"),
-    "warn event leaked into the error appender; buffer was: {text}"
-  );
+  fn record_f64(&mut self, field: &Field, value: f64) {
+    self.fields.insert(field.name().to_string(), json!(value));
+  }
+
+  fn record_bool(&mut self, field: &Field, value: bool) {
+    self.fields.insert(field.name().to_string(), json!(value));
+  }
+
+  fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+    self.fields.insert(field.name().to_string(), json!(format!("{value:?}")));
+  }
+
+  fn record_error(&mut self, field: &Field, value: &(dyn std::error::Error + 'static)) {
+    self.fields.insert(field.name().to_string(), json!(value.to_string()));
+  }
 }

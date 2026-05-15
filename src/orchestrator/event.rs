@@ -97,6 +97,8 @@ pub(super) fn event_channel() -> (EventProducer, EventConsumer) {
   (EventProducer { sender }, EventConsumer { receiver })
 }
 
+// TODO: FIXME
+#[allow(clippy::large_enum_variant)]
 pub(super) enum OrchestratorEvent {
   Intake(IntakeEvent),
   Stage(StageEvent),
@@ -111,6 +113,8 @@ pub(super) enum IntakeEvent {
   Stopped,
 }
 
+// TODO: FIXME
+#[allow(clippy::large_enum_variant)]
 pub(super) enum StageEvent {
   IssueReady {
     issue_stages: Vec<IssueStage>,

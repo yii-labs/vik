@@ -61,7 +61,7 @@ Stages. The tracker Issue remains plain intake data.
 _Avoid_: mutating Issue into runtime state, loose parameter bag
 
 **Issue Workspace**:
-Directory at `<workspace.root>/<issue.id>/`. Issue-level and stage-level
+Directory at `<workspace.root>/issues/<issue_id>/`. Issue-level and stage-level
 hooks run there. Current agent subprocesses inherit the Vik process cwd, so
 prompts should use the `cwd` template value or explicit `cd` commands when
 workspace-local execution matters.

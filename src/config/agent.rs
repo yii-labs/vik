@@ -16,6 +16,7 @@
 //!         - model_reasoning_effort=high
 //! ```
 
+use std::fmt::Display;
 use std::ops::Deref;
 
 use indexmap::IndexMap;
@@ -29,6 +30,21 @@ use super::diagnose::*;
 pub enum AgentRuntime {
   Codex,
   ClaudeCode,
+}
+
+impl AsRef<str> for AgentRuntime {
+  fn as_ref(&self) -> &str {
+    match self {
+      AgentRuntime::Codex => "codex",
+      AgentRuntime::ClaudeCode => "claude_code",
+    }
+  }
+}
+
+impl Display for AgentRuntime {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(f, "{}", self.as_ref())
+  }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

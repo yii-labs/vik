@@ -30,8 +30,8 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
-use crate::context::{IssueRun, IssueRunError, IssueStage};
-use crate::logging::{Phase, dispatch_span};
+use crate::context::{Issue, IssueRun, IssueRunError, IssueStage};
+use crate::logging::{Phase, issue_span};
 use crate::session::SessionFactory;
 use crate::workflow::Workflow;
 
@@ -118,12 +118,7 @@ impl Orchestrator {
   fn handle_event(&mut self, event: OrchestratorEvent, shutdown: &CancellationToken) -> bool {
     match event {
       OrchestratorEvent::Intake(IntakeEvent::Issue(issue)) => {
-        let _entered = dispatch_span().entered();
-        let issue_run = Arc::new(IssueRun::new(Arc::clone(&self.workflow), issue));
-        let issue_stages = self.reserve_issue_stages(self.should_dispatch(issue_run));
-        if !issue_stages.is_empty() {
-          self.prepare_issue(issue_stages, shutdown.clone());
-        }
+        self.prepare_issue(issue, shutdown.clone());
         false
       },
       OrchestratorEvent::Intake(IntakeEvent::Failed(error)) => {
@@ -203,32 +198,33 @@ impl Orchestrator {
   /// issue (not each stage), then reports back via `IssueReady`. Spawning
   /// matters: hooks are user shell snippets that can stall, and the main
   /// loop must stay responsive.
-  fn prepare_issue(&self, issue_stages: Vec<IssueStage>, shutdown: CancellationToken) {
+  fn prepare_issue(&mut self, issue: Issue, shutdown: CancellationToken) {
+    let _span = issue_span(&issue.id).entered();
+
+    let issue_run = Arc::new(IssueRun::new(Arc::clone(&self.workflow), issue));
+    let issue_stages = self.reserve_issue_stages(self.should_dispatch(Arc::clone(&issue_run)));
+    if issue_stages.is_empty() {
+      tracing::warn!("issue fetch but no stage matched to run");
+      return;
+    }
+
     let producer = self.producer.clone();
-    let issue_id = issue_stages[0].issue().id.clone();
-    let span = tracing::info_span!(
-      "issue_setup",
-      phase = Phase::Dispatch.as_str(),
-      issue_id = %issue_id,
-    );
 
     tokio::spawn(
       async move {
         let result: Result<(), IssueRunError> = tokio::select! {
-          result = issue_stages[0].issue_run().prepare() => result,
+          result = issue_run.prepare() => result,
           _ = shutdown.cancelled() => return,
         };
 
         match result {
           Ok(()) => producer.issue_ready(issue_stages).await,
           Err(error) => {
-            for issue_stage in issue_stages {
-              producer.stage_failed(issue_stage.key(), error.to_string()).await;
-            }
+            tracing::error!(error = %error, "Failed to prepare for issue");
           },
         }
       }
-      .instrument(span),
+      .in_current_span(),
     );
   }
 }
@@ -314,7 +310,7 @@ mod tests {
     let OrchestratorEvent::Stage(StageEvent::IssueReady { issue_stages }) = event else {
       panic!("expected issue-ready event");
     };
-    let issue_workdir = issue_stages[0].issue_workdir().to_path_buf();
+    let issue_workdir = issue_stages[0].workdir().to_path_buf();
 
     assert_eq!(
       issue_stages

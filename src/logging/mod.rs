@@ -6,8 +6,6 @@
 //! 7 days, enforced eagerly at [`init`] instead of on each write — log
 //! emission is hot-path and scanning the directory there would dominate
 //! the writer budget for no operational gain.
-#[cfg(test)]
-mod layers;
 pub mod phase;
 pub(crate) mod retention;
 pub mod spans;
@@ -25,7 +23,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
 
 pub use phase::Phase;
-pub use spans::{daemon_span, dispatch_span, stage_span};
+pub use spans::{daemon_span, issue_span, session_span, stage_span};
 
 pub(crate) const INFO_LOG_PREFIX: &str = "vik.log";
 pub(crate) const ERROR_LOG_PREFIX: &str = "vik-error.log";

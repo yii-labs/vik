@@ -5,14 +5,13 @@
 //! - Hooks render Jinja only — no `!`exec(...)`` substitution.
 //! - Prompts render Jinja first, then expand `!`exec(...)`` and ``exec(...)``
 //!   markers as a second pass. The shell commands run with a 30s timeout.
+#![allow(dead_code)]
 
-mod context;
 mod jinja;
 mod prompt;
 
 use thiserror::Error;
 
-pub use context::{Context, StageContext, issue_value};
 pub use jinja::*;
 pub use prompt::*;
 
@@ -20,7 +19,7 @@ use crate::shell::CommandExecError;
 
 #[derive(Debug, Error)]
 pub enum TemplateError {
-  #[error("template render failed: {0}")]
+  #[error(transparent)]
   Render(#[from] minijinja::Error),
 
   /// `stderr_tail` would belong here too, but the prompt expander is a

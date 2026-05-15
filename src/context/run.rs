@@ -1,18 +1,19 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use serde::Serialize;
 use thiserror::Error;
+use uuid::Uuid;
 
 use crate::config::IssueStage as StageSchema;
 use crate::hooks::HookError;
-use crate::template::StageContext;
 use crate::workflow::Workflow;
 
 use super::Issue;
 
 #[derive(Debug, Error)]
 pub enum IssueRunError {
-  #[error("failed to create issue workspace `{path}`: {source}")]
+  #[error("failed to create issue workdir `{path}`: {source}")]
   CreateWorkspace {
     path: PathBuf,
     #[source]
@@ -26,16 +27,45 @@ pub enum IssueRunError {
 pub struct IssueRun {
   workflow: Arc<Workflow>,
   issue: Issue,
-  issue_workdir: PathBuf,
+  workdir: PathBuf,
+}
+
+impl Serialize for IssueRun {
+  fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+  where
+    S: serde::Serializer,
+  {
+    let json = serde_json::to_value(&self.issue).map_err(serde::ser::Error::custom)?;
+
+    let mut map = serde_json::Map::new();
+    map.insert(
+      "workflow_path".into(),
+      self.workflow().workflow_path().to_string_lossy().into(),
+    );
+    map.insert(
+      "workspace_root".into(),
+      self.workflow().workspace().root().to_string_lossy().into(),
+    );
+    map.insert("workdir".into(), self.workdir.to_string_lossy().into());
+
+    if let serde_json::Value::Object(issue_map) = json {
+      for (k, v) in issue_map {
+        map.insert(k, v);
+      }
+    }
+
+    map.serialize(serializer)
+  }
 }
 
 impl IssueRun {
   pub fn new(workflow: Arc<Workflow>, issue: Issue) -> Self {
-    let issue_workdir = workflow.workspace().issue_workdir(&issue.id);
+    let workdir = workflow.workspace().issue_workdir(&issue.id);
+
     Self {
       workflow,
       issue,
-      issue_workdir,
+      workdir,
     }
   }
 
@@ -43,12 +73,16 @@ impl IssueRun {
     self.workflow.as_ref()
   }
 
+  pub fn id(&self) -> &str {
+    &self.issue.id
+  }
+
   pub fn issue(&self) -> &Issue {
     &self.issue
   }
 
-  pub fn issue_workdir(&self) -> &Path {
-    &self.issue_workdir
+  pub fn workdir(&self) -> &Path {
+    &self.workdir
   }
 
   pub fn matching_stages(issue_run: Arc<Self>) -> Vec<IssueStage> {
@@ -62,37 +96,39 @@ impl IssueRun {
   }
 
   pub async fn prepare(&self) -> Result<(), IssueRunError> {
-    match tokio::fs::metadata(&self.issue_workdir).await {
+    match tokio::fs::metadata(&self.workdir).await {
       Ok(metadata) if metadata.is_dir() => {
-        tracing::debug!(path = %self.issue_workdir.display(), "issue workspace already exists; skipping creation");
+        tracing::debug!(path = %self.workdir.display(), "issue workdir already exists; skipping creation");
         return Ok(());
       },
       Ok(_) => {
         return Err(IssueRunError::CreateWorkspace {
-          path: self.issue_workdir.clone(),
+          path: self.workdir.clone(),
           source: std::io::Error::other("path exists but is not a directory"),
         });
       },
       Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
       Err(e) => {
         return Err(IssueRunError::CreateWorkspace {
-          path: self.issue_workdir.clone(),
+          path: self.workdir.clone(),
           source: e,
         });
       },
     };
 
-    tokio::fs::create_dir_all(&self.issue_workdir)
+    tokio::fs::create_dir_all(&self.workdir)
       .await
       .map_err(|source| IssueRunError::CreateWorkspace {
-        path: self.issue_workdir.clone(),
+        path: self.workdir.clone(),
         source,
       })?;
+
+    tracing::debug!(path = %self.workdir.display(), "created issue workdir");
 
     self
       .workflow()
       .hooks()
-      .run_after_create(&self.workflow().schema().issue.hooks, &self.issue, &self.issue_workdir)
+      .after_issue_workdir_created(self, &self.workflow().schema().issue.hooks.after_create)
       .await?;
 
     Ok(())
@@ -116,57 +152,68 @@ impl IssueStageKey {
 
 #[derive(Debug, Clone)]
 pub struct IssueStage {
-  issue_run: Arc<IssueRun>,
-  stage_name: String,
-  stage: StageSchema,
+  issue: Arc<IssueRun>,
+  name: String,
+  schema: StageSchema,
+  log_file: PathBuf,
+}
+
+impl Serialize for IssueStage {
+  fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+  where
+    S: serde::Serializer,
+  {
+    self.issue.serialize(serializer)
+  }
 }
 
 impl IssueStage {
-  pub fn new(issue_run: Arc<IssueRun>, stage_name: String, stage_schema: StageSchema) -> Self {
-    Self {
-      issue_run,
-      stage_name,
-      stage: stage_schema,
-    }
-  }
+  pub fn new(issue: Arc<IssueRun>, name: String, stage_schema: StageSchema) -> Self {
+    // State prefix is for human eyeballing; UUIDv7 keeps names unique
+    // and sorts runs within one state. Provider session ids land inside
+    // the JSONL, not in the filename, because they are not always known
+    // when the file must be created.
+    let log_file =
+      issue
+        .workflow()
+        .workspace()
+        .issue_sessions_dir(issue.id())
+        .join(format!("{}-{}.jsonl", &name, Uuid::now_v7()));
 
-  pub fn issue_run(&self) -> &IssueRun {
-    self.issue_run.as_ref()
+    Self {
+      issue,
+      name,
+      schema: stage_schema,
+      log_file,
+    }
   }
 
   pub fn workflow(&self) -> &Workflow {
-    self.issue_run.workflow()
+    self.issue.workflow()
   }
 
   pub fn issue(&self) -> &Issue {
-    self.issue_run.issue()
+    self.issue.issue()
   }
 
-  pub fn issue_workdir(&self) -> &Path {
-    self.issue_run.issue_workdir()
+  pub fn workdir(&self) -> &Path {
+    self.issue.workdir()
+  }
+
+  pub fn log_file(&self) -> &Path {
+    &self.log_file
   }
 
   pub fn stage_name(&self) -> &str {
-    &self.stage_name
+    &self.name
   }
 
   pub fn stage(&self) -> &StageSchema {
-    &self.stage
+    &self.schema
   }
 
   pub fn key(&self) -> IssueStageKey {
-    IssueStageKey::new(self.issue().id.clone(), self.stage_name.clone())
-  }
-
-  pub fn template_context(&self) -> StageContext<'_> {
-    StageContext {
-      issue: self.issue(),
-      stage_name: self.stage_name(),
-      agent_profile: &self.stage.agent,
-      stage_state: &self.stage.when.state,
-      issue_workdir: self.issue_workdir(),
-      workspace_root: self.workflow().workspace().root(),
-    }
+    IssueStageKey::new(self.issue().id.clone(), self.name.clone())
   }
 }
 
@@ -186,12 +233,12 @@ mod tests {
     let workflow = workflow_fixture(&root, workflow_path, "echo should-not-run >> after_create.log");
     let issue_run = IssueRun::new(Arc::new(workflow), issue("ABC-1", "todo"));
 
-    std::fs::create_dir_all(issue_run.issue_workdir()).expect("issue workdir exists");
+    std::fs::create_dir_all(issue_run.workdir()).expect("issue workdir exists");
 
     issue_run.prepare().await.expect("prepare succeeds");
 
     assert!(
-      !issue_run.issue_workdir().join("after_create.log").exists(),
+      !issue_run.workdir().join("after_create.log").exists(),
       "existing issue workdir skips after_create"
     );
   }

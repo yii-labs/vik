@@ -14,7 +14,7 @@ use tracing::Instrument;
 
 use crate::context::IssueStage;
 use crate::hooks::HookError;
-use crate::logging::{Phase, stage_span};
+use crate::logging::stage_span;
 use crate::session::{SessionError, SessionFactory, SessionState};
 use crate::workflow::Workflow;
 
@@ -40,11 +40,7 @@ impl StageLauncher {
   /// Spawn the launch task. The runtime `IssueStage` already carries
   /// the issue run context needed for hooks and session spawn.
   pub(super) fn launch(&self, issue_stage: IssueStage, shutdown: CancellationToken) {
-    let span = stage_span(
-      &issue_stage.issue().id,
-      issue_stage.stage_name(),
-      &issue_stage.stage().agent,
-    );
+    let span = stage_span(issue_stage.stage_name(), &issue_stage.stage().agent);
     let launcher = self.clone();
 
     tokio::spawn(async move { launcher.run(issue_stage, shutdown).await }.instrument(span));
@@ -59,6 +55,7 @@ impl StageLauncher {
     let session = match self.start_session(&issue_stage).await {
       Ok(session) => session,
       Err(error) => {
+        tracing::error!(error = %error, "Failed to start session for issue stage");
         // No session ever existed; report under the reserved key so the
         // main loop can release the reservation.
         self.producer.stage_failed(key, error).await;
@@ -66,8 +63,6 @@ impl StageLauncher {
       },
     };
 
-    let runtime = format!("{:?}", session.profile().runtime);
-    tracing::Span::current().record("runtime", runtime.as_str());
     self.producer.stage_started(issue_stage.clone(), session.clone()).await;
 
     let monitor = SessionMonitor::new(key.clone(), session.clone(), self.producer.clone());
@@ -86,12 +81,15 @@ impl StageLauncher {
     // their cleanup to run. The hook's own failure is logged but not
     // propagated, so a flaky `after_run` cannot mask a stage result.
     if !matches!(terminal.state, SessionState::Cancelled)
-      && let Err(error) = self.run_after_run(&issue_stage).await
+      && let Err(error) = self
+        .workflow
+        .hooks()
+        .after_issue_stage_run(&issue_stage, &issue_stage.stage().hooks.after_run)
+        .await
     {
       tracing::error!(
-        phase = %Phase::Hook,
         error = %error,
-        "after_run hook failed",
+        "issue stage after_run hook failed",
       );
     }
 
@@ -101,19 +99,20 @@ impl StageLauncher {
   async fn start_session(&self, issue_stage: &IssueStage) -> Result<crate::session::Session, StageLaunchError> {
     // `before_run` failure aborts the stage before any agent process is
     // spawned, so a misconfigured setup hook cannot waste tokens.
-    self.run_before_run(issue_stage).await?;
+    if let Err(err) = self
+      .workflow
+      .hooks()
+      .before_issue_stage_run(issue_stage, &issue_stage.stage().hooks.before_run)
+      .await
+    {
+      tracing::error!(
+        error = %err,
+        "issue stage before_run hook failed",
+      );
+      return Err(StageLaunchError::Hook(err));
+    }
 
     Ok(self.factory.spawn_stage(issue_stage.clone()).await?)
-  }
-
-  async fn run_before_run(&self, issue_stage: &IssueStage) -> Result<(), HookError> {
-    let ctx = issue_stage.template_context();
-    self.workflow.hooks().run_before_run(&issue_stage.stage().hooks, ctx).await
-  }
-
-  async fn run_after_run(&self, issue_stage: &IssueStage) -> Result<(), HookError> {
-    let ctx = issue_stage.template_context();
-    self.workflow.hooks().run_after_run(&issue_stage.stage().hooks, ctx).await
   }
 }
 
