@@ -20,13 +20,14 @@ Work only in `{{ cwd }}`. Do not touch paths outside this issue workspace.
 
 3. Read the fresh issue body, comments, attached pull requests, branch links, and the
    active `## Vik Workpad`.
-4. Read relevant repo docs before edits:
+4. Read the latest pr non-outdated review comments if a PR is linked
+5. Read relevant repo docs before edits:
    - `docs/development/index.md`
    - `docs/development/checks.md`
    - `docs/development/pull-requests.md`
    - `docs/development/code-conventions.md`
-5. Open and follow `.agents/skills/pull/SKILL.md` before code edits.
-6. Record pull evidence in the workpad: source, result, resulting `HEAD`.
+6. Open and follow `.agents/skills/pull/SKILL.md` before code edits.
+7. Record pull evidence in the workpad: source, result, resulting `HEAD`.
 
 If `.agents/skills/pull/SKILL.md` is missing, run the equivalent:
 
