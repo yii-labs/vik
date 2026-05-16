@@ -127,6 +127,24 @@ fn extend_pointer(parent: &str, child: &str) -> String {
   }
 }
 
+fn join_fields_with_or(fields: &[String]) -> String {
+  join_fields_with_conjunction(fields, "or")
+}
+
+fn join_fields_with_and(fields: &[String]) -> String {
+  join_fields_with_conjunction(fields, "and")
+}
+
+fn join_fields_with_conjunction(fields: &[String], conjunction: &str) -> String {
+  let quoted: Vec<String> = fields.iter().map(|field| format!("'{field}'")).collect();
+  match quoted.as_slice() {
+    [] => String::new(),
+    [only] => only.clone(),
+    [a, b] => format!("{a} {conjunction} {b}"),
+    [head @ .., tail] => format!("{}, {conjunction} {tail}", head.join(", ")),
+  }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Diagnostic {
   pub severity: DiagnosticSeverity,
@@ -186,15 +204,15 @@ impl Display for Diagnostic {
       ),
       DiagnosticCode::MissingOneOf(fields) => write!(
         f,
-        "'{}' must define one of {}",
+        "'{}' must define exactly one of {}",
         self.pointer,
-        fields.iter().map(|field| format!("'{field}'")).collect::<Vec<_>>().join(", ")
+        join_fields_with_or(fields)
       ),
       DiagnosticCode::MutuallyExclusiveFields(fields) => write!(
         f,
-        "'{}' fields are mutually exclusive: {}",
+        "'{}' has mutually exclusive fields: {}",
         self.pointer,
-        fields.iter().map(|field| format!("'{field}'")).collect::<Vec<_>>().join(", ")
+        join_fields_with_and(fields)
       ),
     }
   }
@@ -244,6 +262,32 @@ mod tests {
     assert_eq!(diagnostics.errors.len(), 1);
     assert_eq!(diagnostics.errors[0].pointer, "agents");
     assert!(matches!(diagnostics.errors[0].code, DiagnosticCode::EmptyMap));
+  }
+
+  #[test]
+  fn missing_one_of_message_lists_fields_with_or() {
+    let diag = Diagnostic::error(
+      "issue.stages.plan",
+      DiagnosticCode::MissingOneOf(vec!["prompt_file".into(), "prompt".into()]),
+    );
+
+    assert_eq!(
+      format!("{diag}"),
+      "'issue.stages.plan' must define exactly one of 'prompt_file' or 'prompt'"
+    );
+  }
+
+  #[test]
+  fn mutually_exclusive_fields_message_lists_fields_with_and() {
+    let diag = Diagnostic::error(
+      "issue.stages.plan",
+      DiagnosticCode::MutuallyExclusiveFields(vec!["prompt_file".into(), "prompt".into()]),
+    );
+
+    assert_eq!(
+      format!("{diag}"),
+      "'issue.stages.plan' has mutually exclusive fields: 'prompt_file' and 'prompt'"
+    );
   }
 
   #[test]

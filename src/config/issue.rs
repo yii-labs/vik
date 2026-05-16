@@ -225,11 +225,11 @@ impl Diagnose for IssueStageSchema {
     }
     match (&self.prompt_file, &self.prompt) {
       (None, None) => diagnostics.push(Diagnostic::error(
-        "prompt",
+        "",
         DiagnosticCode::MissingOneOf(vec!["prompt_file".into(), "prompt".into()]),
       )),
       (Some(_), Some(_)) => diagnostics.push(Diagnostic::error(
-        "prompt",
+        "",
         DiagnosticCode::MutuallyExclusiveFields(vec!["prompt_file".into(), "prompt".into()]),
       )),
       _ => {},
@@ -370,7 +370,7 @@ prompt: |
       diagnostics
         .errors
         .iter()
-        .any(|diag| { diag.pointer == "prompt" && matches!(diag.code, DiagnosticCode::MutuallyExclusiveFields(_)) })
+        .any(|diag| { diag.pointer.is_empty() && matches!(diag.code, DiagnosticCode::MutuallyExclusiveFields(_)) })
     );
     assert!(stage.prompt_source().is_none());
   }
@@ -393,7 +393,7 @@ agent: codex
       diagnostics
         .errors
         .iter()
-        .any(|diag| { diag.pointer == "prompt" && matches!(diag.code, DiagnosticCode::MissingOneOf(_)) })
+        .any(|diag| { diag.pointer.is_empty() && matches!(diag.code, DiagnosticCode::MissingOneOf(_)) })
     );
     assert!(stage.prompt_source().is_none());
   }
