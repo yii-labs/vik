@@ -149,7 +149,7 @@ Stage prompts can render Vik template values directly:
 ```text
 You are working on Feishu Base record {{ issue.id }}: {{ issue.title }}.
 State: {{ issue.state }}
-Workdir: {{ cwd }}
+Workdir: {{ issue.workdir }}
 ```
 
 The pull command only carries the small fields you projected. Fetch

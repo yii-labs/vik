@@ -121,15 +121,14 @@ fail template render under MiniJinja strict mode.
 `workspace.root` in YAML names a workspace home. Vik appends
 `workflows/<workflow-path-key>/` to build the workflow-scoped workspace root.
 `<workflow-path-key>` is the absolute workflow file path with `/` replaced by
-`-`. Create `<workspace.root>/workflows` before the first run; Vik creates only
-the final workflow-scoped root.
+`-`. `vik run` creates the full workflow-scoped root if it is missing.
 
 All Vik-owned state for one workflow lives under that workflow-scoped root:
 
 ```text
 <workflow-workspace-root>/service/state.json
 <workflow-workspace-root>/logs/
-<workflow-workspace-root>/sessions/<issue.id>/<issue.state>-<uuid-v7>.jsonl
+<workflow-workspace-root>/sessions/<issue.id>/<stage.name>-<uuid-v7>.jsonl
 ```
 
 Issue workspaces live under `issues/`:

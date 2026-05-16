@@ -37,24 +37,26 @@ impl Serialize for IssueRun {
   {
     let json = serde_json::to_value(&self.issue).map_err(serde::ser::Error::custom)?;
 
-    let mut map = serde_json::Map::new();
-    map.insert(
+    let mut issue = serde_json::Map::new();
+    if let serde_json::Value::Object(issue_map) = json {
+      for (k, v) in issue_map {
+        issue.insert(k, v);
+      }
+      issue.insert("workdir".into(), self.workdir.to_string_lossy().into());
+    }
+
+    let mut root = serde_json::Map::new();
+    root.insert("issue".into(), issue.into());
+    root.insert(
       "workflow_path".into(),
       self.workflow().workflow_path().to_string_lossy().into(),
     );
-    map.insert(
+    root.insert(
       "workspace_root".into(),
       self.workflow().workspace().root().to_string_lossy().into(),
     );
-    map.insert("workdir".into(), self.workdir.to_string_lossy().into());
 
-    if let serde_json::Value::Object(issue_map) = json {
-      for (k, v) in issue_map {
-        map.insert(k, v);
-      }
-    }
-
-    map.serialize(serializer)
+    root.serialize(serializer)
   }
 }
 

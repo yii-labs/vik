@@ -33,8 +33,9 @@
 - `IssueRun` may construct matching runtime `IssueStage` values from workflow
   stage order and `issue.state`; orchestrator-owned capacity checks stay in
   `RunningMap`.
-- `IssueStage` may project canonical template context for hooks and prompts,
-  but stage lifecycle stays outside `IssueStage`.
+- `IssueRun` owns the serializable `issue` context shared by hooks and prompts;
+  keep template-context changes there instead of rebuilding maps in session or
+  hook code.
 - Orchestrator should handle issue preparation failures through `IssueRunError`
   instead of importing hook internals for issue setup.
 
@@ -46,7 +47,7 @@
 - `orchestrator` depends on `workflow`, `session`, `hooks`, `context`, and
   `logging`.
 - `context` owns issue intake data plus issue-run runtime context and may depend
-  on `workflow`, `hooks`, and `template`.
+  on `workflow` and `hooks`.
 - `session` depends on `agent`, `template`, `shell`, `workflow`, `config`, and
   `context`.
 - `agent` depends on `config` for profile and runtime tags.

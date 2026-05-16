@@ -83,8 +83,7 @@ Vik creates a workflow-scoped workspace root under that home:
 
 `<workflow-path-key>` is the absolute workflow file path with `/` replaced by
 `-`. This keeps workflows from colliding when they share one workspace home.
-Before `vik run`, create the parent directory `<workspace.root>/workflows`.
-Vik creates only the final workflow-scoped workspace root.
+`vik run` creates the full workflow-scoped workspace root if it is missing.
 
 All runtime paths below use the workflow-scoped workspace root:
 
@@ -161,8 +160,9 @@ Required issue fields:
 - `title`: string.
 - `state`: string. Alias: `status`.
 
-Optional fields are preserved in `issue.extra_payload` and flattened into stage
-prompt context before canonical stage bindings are applied.
+Optional issue fields are preserved under `issue` in the prompt and hook
+context. Avoid extra field names that collide with Vik issue bindings such as
+`id`, `title`, `description`, `state`, or `workdir`.
 
 Duplicate issue ids in one intake result are skipped after the first one.
 
@@ -204,8 +204,11 @@ wrapper. Hooks do not support prompt command expansion.
 
 Hook contexts:
 
-- `after_create`: `issue`, `env`
-- stage hooks: `cwd`, `workspace`, `issue`, `stage`, `env`
+- `after_create`: `issue`, `workspace_root`, `workflow_path`, and `env`.
+- stage hooks: same context as `after_create`.
+
+`issue` contains `id`, `title`, `description`, `state`, `workdir`, and optional
+extra issue fields.
 
 Hooks run with current directory set to the issue workspace.
 
@@ -236,18 +239,18 @@ rendering.
 
 Stage prompt context includes:
 
-- `cwd`: issue workspace path.
-- `workspace.root`: workflow-scoped workspace root.
-- `issue`
-- `stage`
-- `workflow`
-- `loop`
-- `profile`
+- `issue.id`, `issue.title`, `issue.description`, and `issue.state`.
+- `issue.workdir`: issue workspace path.
+- optional extra issue fields returned by `issues.pull.command` as
+  `issue.<field>`.
+- `workspace_root`: workflow-scoped workspace root.
+- `workflow_path`: absolute workflow file path.
 - `env`
 
-Current agent subprocesses inherit the Vik process cwd. If an agent must run
-commands in the issue workspace, say so in the prompt, for example
-`cd {{ cwd }}`.
+Current agent subprocesses run with current directory set to the issue
+workspace. `issue.workdir` exists for prompts that need to print or pass the
+path. Current code does not expose `stage`, `workflow`, `loop`, or `profile`
+template objects.
 
 ## Observation
 

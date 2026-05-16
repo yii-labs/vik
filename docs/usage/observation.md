@@ -60,7 +60,7 @@ Prefer `vik status [WORKFLOW]` over reading this file by hand.
 Session JSONL files live under:
 
 ```text
-<workflow-workspace-root>/sessions/<issue.id>/<issue.state>-<uuid-v7>.jsonl
+<workflow-workspace-root>/sessions/<issue.id>/<stage.name>-<uuid-v7>.jsonl
 ```
 
 The file contains decoded Vik `AgentEvent` records, not raw provider JSONL.

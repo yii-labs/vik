@@ -1,8 +1,8 @@
 # Stateless Reconciliation Model
 
-Vik does not own issue state. Each intake cycle asks the issue prompt for
-current issues, matches `issue.state` to `issue.stages.<stage>.when.state`, and
-dispatches every matched stage that is not already running or reserved.
+Vik does not own issue state. Each intake cycle runs `issues.pull.command`,
+matches `issue.state` to `issue.stages.<stage>.when.state`, and dispatches
+every matched stage that is not already running or reserved.
 
 State transitions between stages happen through prompt-authored commands that
 update the external tracker. Vik observes the new state on a later intake
