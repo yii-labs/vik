@@ -11,7 +11,7 @@ pub(crate) mod retention;
 pub mod spans;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::path::Path;
 
