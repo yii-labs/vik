@@ -7,10 +7,10 @@
 
 use tracing::Span;
 
+use crate::context::IssueStageKey;
 use crate::session::{Session, SessionSnapshot};
 
 use super::event::EventProducer;
-use super::types::IssueStageKey;
 
 pub(super) struct SessionMonitor {
   key: IssueStageKey,

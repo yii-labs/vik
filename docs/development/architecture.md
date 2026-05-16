@@ -27,13 +27,13 @@ src/
 |-- workspace/       workflow-scoped workspace path layout
 |-- logging/         tracing subscriber, phases, spans, retention
 |-- shell/           CommandExt wrapper for timeout and cancellation
-|-- template/        MiniJinja context plus prompt command expansion
+|-- template/        MiniJinja renderer plus prompt command expansion
 |-- agent/           AgentAdapter trait, Codex and Claude Code adapters
 |-- session/         session spawn, event stream, snapshots, JSONL writer
 |-- hooks/           after_create, before_run, after_run shell hooks
 |-- orchestrator/    intake loop, dispatch, running map, launch, monitor
 |-- daemon/          detach, signals, lifecycle, state file
-|-- context/         issue intake data model
+|-- context/         issue intake data and issue-run runtime context
 `-- utils/           shared path helpers
 ```
 
@@ -73,7 +73,10 @@ graph TD
     session --> template[template]
     session --> workflow
 
-    hooks --> config
+    context --> workflow
+    context --> config
+    context --> hooks
+
     hooks --> context
     hooks --> logging
     hooks --> shell
@@ -91,6 +94,8 @@ Important current boundaries:
 - `SessionFactory` is the orchestrator-to-session spawn seam.
 - `Workflow` is the path/config carrier passed into runtime layers.
 - `Workspace` accessors produce logs, sessions, service, and issue paths.
+- `IssueRun` owns issue workspace preparation and `after_create`.
+- `IssueStage` carries issue run context, stage schema, and session log path.
 
 ## Startup
 
@@ -128,7 +133,9 @@ sequenceDiagram
 - shutdown token
 - orchestrator event channel
 
-Main loop owns `RunningMap`. Other tasks send events:
+Main loop owns `RunningMap`. It reserves stage keys before async setup starts.
+Reserved stages have no `Session` yet. The concurrency cap counts distinct
+issue ids, not stage count. Other tasks send events:
 
 - `IntakeEvent::Issue`
 - `IntakeEvent::Failed`
@@ -142,13 +149,14 @@ Main loop owns `RunningMap`. Other tasks send events:
 Dispatch flow:
 
 1. Intake emits an issue.
-2. Orchestrator matches stages by exact `state`.
+2. Orchestrator wraps it in `IssueRun` and matches stages by exact `state`.
 3. Orchestrator reserves `(issue_id, stage_name)`.
-4. Issue setup task creates
-   `<workflow-workspace-root>/issues/<issue_id>/`.
-5. Issue setup runs `after_create`.
+4. Issue setup task ensures
+   `<workflow-workspace-root>/issues/<issue_id>/` exists.
+5. If setup created the issue workspace, it runs `after_create`; existing
+   issue workspaces skip `after_create`.
 6. Launcher task runs `before_run`.
-7. Launcher spawns a `Session`.
+7. Launcher spawns a `Session` with the runtime `IssueStage`.
 8. Monitor task sends snapshots and terminal event.
 9. Launcher runs `after_run` after terminal state, except cancellation.
 
@@ -161,13 +169,15 @@ The sleep between intake cycles is `issues.pull.idle_sec`.
 
 ## Session
 
-`SessionFactory` holds `Arc<Workflow>`.
+`SessionFactory` holds `Arc<Workflow>` and resolves the agent profile for each
+runtime `IssueStage`. Each spawned `Session` holds the `IssueStage` it is
+executing.
 
 Session spawn:
 
-1. Resolve the stage prompt path through `Workflow::resolve_path`.
-2. Build prompt context.
-3. Render MiniJinja.
+1. Resolve the stage prompt path through `IssueStage.workflow().resolve_path`.
+2. Read the prompt file.
+3. Render MiniJinja with serialized `IssueStage` context.
 4. Expand prompt commands with ``!`exec(command)` ``.
 5. Pick adapter with `agent::get_adapter(profile.runtime)`.
 6. Build provider command.
@@ -179,7 +189,7 @@ Session spawn:
 Session logs live at:
 
 ```text
-<workflow-workspace-root>/sessions/<issue.id>/<issue.state>-<uuid-v7>.jsonl
+<workflow-workspace-root>/sessions/<issue.id>/<stage_name>-<uuid-v7>.jsonl
 ```
 
 Current code uses a hardcoded one-hour child timeout. There is no stall
@@ -202,40 +212,55 @@ provider flags.
 
 ## Template Context
 
-`Context::new()` captures process env under `env`.
+`JinjaRenderer::new()` captures process env under `env` and uses strict
+undefined-variable behavior.
 
-Stage context applies:
+There is no `src/template/context.rs` module. Prompt and hook renderers pass
+`Serialize` values directly into MiniJinja.
 
-- `cwd`
-- `workspace.root`
+Runtime template contexts:
+
+- `IssueRun` is used for `after_create`.
+- `IssueStage` is used for stage `before_run`, stage `after_run`, and prompts.
+
+Both serialize to the same current field shape:
+
+- `workflow_path`
+- `workspace_root`
 - `issue`
-- `stage`
 
-Stage prompt rendering then adds:
+The `issue` object contains:
 
-- `workflow`
-- `loop`
-- `profile`
-- extra issue payload fields
+- `id`, `title`, `description`, and `state`
+- `workdir`
+- extra issue payload fields from the pull command
 
-`after_create` hook context is intentionally smaller: `issue` and `env`.
+`IssueStage` keeps stage name, stage schema, and log path for Rust callers. Its
+current `Serialize` implementation delegates to `IssueRun`.
+
+`JinjaRenderer` also adds process env under `env`. Bindings like `stage.name`,
+`workspace.root`, `workflow`, `loop`, `profile`, `cwd`, and root-level issue
+fields like `id` are not produced by current code.
 
 ## Hooks
 
-`HookRunner` owns:
+`HookRunner` owns direct async methods:
 
-- `schedule_after_create`
-- `schedule_before_run`
-- `schedule_after_run`
-- fire-and-wait wrappers for each hook
+- `after_issue_workdir_created`
+- `before_issue_stage_run`
+- `after_issue_stage_run`
+
+Workflow field names remain `after_create`, `before_run`, and `after_run`.
+Internal hook names used for logging are `after_issue_workdir_create`,
+`before_issue_stage_run`, and `after_issue_stage_run`.
 
 Hook execution:
 
-1. Render with strict MiniJinja.
-2. Wait for the one-shot trigger.
+1. Return `Ok(())` immediately when the hook body is missing.
+2. Render with strict MiniJinja.
 3. Run `sh -c` or `cmd /C` in the issue workspace.
 4. Apply a hardcoded 30-second timeout.
-5. Return `HookOutcome`.
+5. Return `Result<(), HookError>`.
 
 Hooks do not run prompt-command expansion.
 
@@ -244,8 +269,8 @@ Hooks do not run prompt-command expansion.
 The YAML `workspace.root` names a workspace home. `Workflow` resolves it against
 the workflow file directory when relative, then appends
 `workflows/<workflow-path-key>/`. `<workflow-path-key>` is the absolute workflow
-file path with `/` replaced by `-`. `Workspace::ensure_root()` creates only
-that final workflow-scoped root, so its parent must already exist.
+file path with `/` replaced by `-`. `Workspace::ensure_root()` creates the
+workflow-scoped root recursively when it is missing.
 
 `Workspace` memoizes these path helpers:
 
@@ -255,8 +280,8 @@ that final workflow-scoped root, so its parent must already exist.
 - `service_dir()`
 - `service_state_file()`
 - `issues_dir()`
-- `issue_workdir(identifier)`
-- `issue_sessions_dir(identifier)`
+- `issue_workdir(issue_id)`
+- `issue_sessions_dir(issue_id)`
 
 Runtime artifacts:
 
@@ -265,8 +290,8 @@ Runtime artifacts:
 | `<root>/service/state.json`                                | daemon   | pid and lifecycle state   |
 | `<root>/logs/vik.log.YYYY-MM-DD`                           | logging  | INFO+ log events          |
 | `<root>/logs/vik-error.log.YYYY-MM-DD`                     | logging  | ERROR-only log events     |
-| `<root>/sessions/<identifier>/<state>-<uuid-v7>.jsonl`     | session  | decoded AgentEvent stream |
-| `<root>/issues/<identifier>/`                              | operator | issue workspace           |
+| `<root>/sessions/<issue_id>/<stage_name>-<uuid-v7>.jsonl`  | session  | decoded AgentEvent stream |
+| `<root>/issues/<issue_id>/`                                | operator | issue workspace           |
 
 ## Daemon
 
@@ -289,7 +314,7 @@ trips.
 | new CLI subcommand              | `src/cli/<name>.rs` and `src/cli/mod.rs`         |
 | new Vik-owned path              | `src/workspace/mod.rs`                           |
 | new agent provider              | `src/agent/adapters/<provider>/` and `get_adapter` |
-| new prompt binding              | `src/template/context.rs` or session render code |
+| new prompt or hook binding      | `src/context/run.rs` serialization or renderer call site |
 | new hook trigger point          | `src/hooks/` plus orchestrator or launcher call site |
 | HTTP API implementation         | new server module plus CLI `drive_runtime`       |
 

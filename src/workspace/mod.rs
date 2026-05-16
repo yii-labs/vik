@@ -33,9 +33,6 @@ pub struct Workspace {
 /// Errors surfaced while preparing `workspace.root`.
 #[derive(Debug, Error)]
 pub enum WorkspaceRootError {
-  #[error("workspace.root {path} does not exist and its parent {parent} is also missing; create the parent first")]
-  ParentMissing { path: PathBuf, parent: PathBuf },
-
   #[error("workspace.root {path} exists but is not a directory")]
   NotADirectory { path: PathBuf },
 
@@ -94,12 +91,12 @@ impl Workspace {
       .get_or_init(|| self.service_dir().join(SERVICE_STATE_FILE_NAME))
   }
 
-  pub fn issue_workdir(&self, identifier: &str) -> PathBuf {
-    self.issues_dir().join(identifier)
+  pub fn issue_workdir(&self, issue_id: &str) -> PathBuf {
+    self.issues_dir().join(issue_id)
   }
 
-  pub fn issue_sessions_dir(&self, identifier: &str) -> PathBuf {
-    self.sessions_dir().join(identifier)
+  pub fn issue_sessions_dir(&self, issue_id: &str) -> PathBuf {
+    self.sessions_dir().join(issue_id)
   }
 
   /// Creates `root` if its parent already exists; refuses to create
@@ -107,32 +104,18 @@ impl Workspace {
   /// produce a workspace far from the intended path.
   pub fn ensure_root(&self) -> Result<(), WorkspaceRootError> {
     let workspace_root = self.root();
+
     match std::fs::metadata(workspace_root) {
       Ok(meta) if meta.is_dir() => Ok(()),
       Ok(_) => Err(WorkspaceRootError::NotADirectory {
         path: workspace_root.to_path_buf(),
       }),
       Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-        let parent = workspace_root.parent().ok_or_else(|| WorkspaceRootError::NoParent {
+        let _parent = workspace_root.parent().ok_or_else(|| WorkspaceRootError::NoParent {
           path: workspace_root.to_path_buf(),
         })?;
 
-        // `Path::new(".vik").parent()` returns `Some("")` rather than
-        // `None`, which would otherwise look like "parent missing."
-        // Treat empty as "cwd," which by definition exists.
-        let parent_exists = if parent.as_os_str().is_empty() {
-          true
-        } else {
-          parent.is_dir()
-        };
-
-        if !parent_exists {
-          return Err(WorkspaceRootError::ParentMissing {
-            path: workspace_root.to_path_buf(),
-            parent: parent.to_path_buf(),
-          });
-        }
-        std::fs::create_dir(workspace_root).map_err(|source| WorkspaceRootError::Create {
+        std::fs::create_dir_all(workspace_root).map_err(|source| WorkspaceRootError::Create {
           path: workspace_root.to_path_buf(),
           source,
         })
@@ -187,7 +170,7 @@ mod tests {
   }
 
   #[test]
-  fn issue_sessions_dir_nests_identifier_under_sessions() {
+  fn issue_sessions_dir_nests_issue_id_under_sessions() {
     let p = ws();
     assert_eq!(p.issue_sessions_dir("VIK-1"), PathBuf::from("/tmp/ws/sessions/VIK-1"));
   }
@@ -242,18 +225,6 @@ mod tests {
     let path = tempdir.path();
     Workspace::new(path.to_path_buf()).ensure_root().expect("noop ok");
     assert!(path.is_dir());
-  }
-
-  #[test]
-  fn fails_when_parent_missing() {
-    let anchor = tempfile::TempDir::new().unwrap();
-    // Build a path whose parent does not exist.
-    let target = anchor.path().join("missing-parent").join("root");
-    let err = Workspace::new(target).ensure_root().expect_err("parent missing must fail");
-    assert!(
-      matches!(err, WorkspaceRootError::ParentMissing { .. }),
-      "expected ParentMissing, got {err:?}"
-    );
   }
 
   #[test]

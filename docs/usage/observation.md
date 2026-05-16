@@ -60,7 +60,7 @@ Prefer `vik status [WORKFLOW]` over reading this file by hand.
 Session JSONL files live under:
 
 ```text
-<workflow-workspace-root>/sessions/<issue.id>/<issue.state>-<uuid-v7>.jsonl
+<workflow-workspace-root>/sessions/<issue.id>/<stage.name>-<uuid-v7>.jsonl
 ```
 
 The file contains decoded Vik `AgentEvent` records, not raw provider JSONL.
@@ -76,9 +76,9 @@ The intended HTTP surface is still useful design context, but it is not served
 by current code:
 
 - `GET /api/v1/state`
-- `GET /api/v1/issues/{identifier}`
+- `GET /api/v1/issues/{issue_id}`
 - `POST /api/v1/refresh`
-- `POST /api/v1/issues/{identifier}/cancel`
+- `POST /api/v1/issues/{issue_id}/cancel`
 
 Do not put `curl` calls to those endpoints in operator runbooks until the
 server module lands.

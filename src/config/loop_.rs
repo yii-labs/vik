@@ -7,7 +7,7 @@ use super::diagnose::*;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LoopSchema {
-  /// Cap on distinct issue identifiers running concurrently. A single
+  /// Cap on distinct issue ids running concurrently. A single
   /// issue with several matching stages still counts as one — this is the
   /// safety valve against runaway intake, not against per-stage fan-out.
   #[serde(default = "default_max_issue_concurrency")]

@@ -1,18 +1,14 @@
 # Merge Stage
 
-Issue: `{{ issue.id }}`
-Stage: `{{ stage.name }}`
-State: `{{ issue.state }}`
-Workdir: `{{ cwd }}`
+Issue: `{{ issue.id }}`: `{{ issue.title }}`
 
-You land the approved PR. Work only in `{{ cwd }}`.
+You are landing an approved PR.
 
 ## Start
 
-1. `cd {{ cwd }}`
-2. Open and follow `.agents/skills/land/SKILL.md`.
-3. Do not merge by hand without following the land skill.
-4. Keep the existing `## Vik Workpad` current.
+1. Open and follow `.agents/skills/land/SKILL.md`.
+2. Do not merge by hand without following the land skill.
+3. Keep the existing `## Vik Workpad` current.
 
 ## Required Checks
 
@@ -31,7 +27,7 @@ After successful merge:
 - Move tracker issue to done or close it using explicit tracker commands.
 - Update the workpad with merge commit or PR merge evidence.
 - Do not delete remote branches unless repo policy or land skill says to.
-- Remove the local `{{ cwd }}` workspace.
+- Remove the local `{{ issue.workdir }}` workspace.
 
 Final response: merged PR, final issue state, validation/check status,
 blockers only.

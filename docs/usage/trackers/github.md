@@ -127,12 +127,13 @@ You can find the exact key name with `gh project field-list <number> --owner <or
 
 Stage prompts can render Vik template values directly:
 
-> If you returned extra fields in the result of issues.pull.command, for example `issue.branch`, they are available here by `{{ issue.branch }}` as well.
+> If `issues.pull.command` returned extra fields, for example `branch`, they
+> are available as issue template values such as `{{ issue.branch }}`.
 
 ```text
 You are working on issue {{ issue.id }}: {{ issue.title }}.
 State: {{ issue.state }}
-Workdir: {{ cwd }}
+Workdir: {{ issue.workdir }}
 ```
 
 But the pull command only carries the small subset of fields you

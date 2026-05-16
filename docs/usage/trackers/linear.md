@@ -200,11 +200,11 @@ Stage prompts can render Vik template values directly:
 ```text
 You are working on Linear issue {{ issue.id }}: {{ issue.title }}.
 State: {{ issue.state }}
-Workdir: {{ cwd }}
+Workdir: {{ issue.workdir }}
 ```
 
-> If your pull command returned extra fields (for example
-> `issue.priority`), they are also available as `{{ issue.priority }}`.
+> If your pull command returned extra fields, for example `priority`, they are
+> available as issue template values such as `{{ issue.priority }}`.
 
 For everything richer, instruct the agent to call the MCP tool by
 name. Example fragment from a `plan.md` prompt:

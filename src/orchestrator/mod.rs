@@ -15,7 +15,7 @@
 //!    work — without this, duplicate intake events could re-launch a
 //!    stage while its setup is still pending.
 //! 3. [`prepare_issue`] runs once per matched issue (not per stage):
-//!    creates the workdir, runs `after_create`, emits `IssueReady`.
+//!    prepares the issue run, then emits `IssueReady`.
 //! 4. [`launcher`] spawns one session per stage; [`monitor`] forwards
 //!    snapshots and terminal state.
 mod event;
@@ -23,18 +23,15 @@ mod intake;
 mod launcher;
 mod monitor;
 mod running;
-mod types;
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
-use crate::context::Issue;
-use crate::hooks::HookError;
-use crate::logging::{Phase, dispatch_span};
+use crate::context::{Issue, IssueRun, IssueRunError, IssueStage};
+use crate::logging::{Phase, issue_span};
 use crate::session::SessionFactory;
 use crate::workflow::Workflow;
 
@@ -42,7 +39,6 @@ use self::event::{EventConsumer, EventProducer, IntakeEvent, OrchestratorEvent, 
 use self::intake::IntakeLoop;
 use self::launcher::StageLauncher;
 use self::running::RunningMap;
-use self::types::IssueStage;
 
 #[derive(Debug, Error)]
 pub enum OrchestratorError {
@@ -122,11 +118,7 @@ impl Orchestrator {
   fn handle_event(&mut self, event: OrchestratorEvent, shutdown: &CancellationToken) -> bool {
     match event {
       OrchestratorEvent::Intake(IntakeEvent::Issue(issue)) => {
-        let _entered = dispatch_span().entered();
-        let issue_stages = self.reserve_issue_stages(self.should_dispatch(issue));
-        if !issue_stages.is_empty() {
-          self.prepare_issue(issue_stages, shutdown.clone());
-        }
+        self.prepare_issue(issue, shutdown.clone());
         false
       },
       OrchestratorEvent::Intake(IntakeEvent::Failed(error)) => {
@@ -134,19 +126,16 @@ impl Orchestrator {
         false
       },
       OrchestratorEvent::Intake(IntakeEvent::Stopped) => true,
-      OrchestratorEvent::Stage(StageEvent::IssueReady {
-        issue_stages,
-        issue_workdir,
-      }) => {
+      OrchestratorEvent::Stage(StageEvent::IssueReady { issue_stages }) => {
         for issue_stage in issue_stages {
-          self.launcher.launch(issue_stage, issue_workdir.clone(), shutdown.clone());
+          self.launcher.launch(issue_stage, shutdown.clone());
         }
         false
       },
       OrchestratorEvent::Stage(StageEvent::Started { issue_stage, session }) => {
         let key = issue_stage.key();
         self.running.start(*issue_stage, session);
-        tracing::debug!(phase = %Phase::Dispatch, issue_identifier = %key.issue_id, stage_name = %key.stage_name, "stage session started");
+        tracing::debug!(phase = %Phase::Dispatch, issue_id = %key.issue_id, stage_name = %key.stage_name, "stage session started");
         false
       },
       OrchestratorEvent::Stage(StageEvent::Snapshot { key, snapshot }) => {
@@ -161,7 +150,7 @@ impl Orchestrator {
         self.running.fail(&key);
         tracing::error!(
           phase = %Phase::StageRun,
-          issue_identifier = %key.issue_id,
+          issue_id = %key.issue_id,
           stage_name = %key.stage_name,
           error = %error,
           "stage launch failed",
@@ -178,22 +167,19 @@ impl Orchestrator {
   /// order is deterministic. Concurrency and running-key filters happen
   /// here, before any background work — the central loop is the only
   /// place these decisions are made.
-  fn should_dispatch(&self, issue: Issue) -> Vec<IssueStage> {
+  fn should_dispatch(&self, issue_run: Arc<IssueRun>) -> Vec<IssueStage> {
+    let issue = issue_run.issue();
     if !self.running.can_accept_issue(&issue.id) {
       tracing::debug!(
         phase = %Phase::Dispatch,
-        issue_identifier = %issue.id,
+        issue_id = %issue.id,
         "issue concurrency full; skipping issue this cycle",
       );
       return Vec::new();
     }
 
-    self
-      .workflow
-      .stages()
-      .iter()
-      .filter(|(_, stage)| stage.when.state == issue.state)
-      .map(|(name, stage)| IssueStage::new(issue.clone(), name.clone(), stage.clone()))
+    IssueRun::matching_stages(issue_run)
+      .into_iter()
       .filter(|issue_stage| !self.running.contains_key(&issue_stage.key()))
       .collect()
   }
@@ -208,95 +194,39 @@ impl Orchestrator {
       .collect()
   }
 
-  /// Spawn issue setup off the main loop. Setup runs `after_create` once
-  /// for the whole matched issue (not per stage), then reports back via
-  /// `IssueReady`. Spawning matters: hooks are user shell snippets that
-  /// can stall, and the main loop must stay responsive.
-  fn prepare_issue(&self, issue_stages: Vec<IssueStage>, shutdown: CancellationToken) {
-    let workflow = Arc::clone(&self.workflow);
+  /// Spawn issue setup off the main loop. Setup prepares the whole matched
+  /// issue (not each stage), then reports back via `IssueReady`. Spawning
+  /// matters: hooks are user shell snippets that can stall, and the main
+  /// loop must stay responsive.
+  fn prepare_issue(&mut self, issue: Issue, shutdown: CancellationToken) {
+    let _span = issue_span(&issue.id).entered();
+
+    let issue_run = Arc::new(IssueRun::new(Arc::clone(&self.workflow), issue));
+    let issue_stages = self.reserve_issue_stages(self.should_dispatch(Arc::clone(&issue_run)));
+    if issue_stages.is_empty() {
+      tracing::warn!("issue fetch but no stage matched to run");
+      return;
+    }
+
     let producer = self.producer.clone();
-    let issue = issue_stages[0].issue().clone();
-    let span = tracing::info_span!(
-      "issue_setup",
-      phase = Phase::Dispatch.as_str(),
-      issue_identifier = %issue.id,
-    );
 
     tokio::spawn(
       async move {
-        let result = tokio::select! {
-          result = prepare_issue_workdir(Arc::clone(&workflow), &issue) => result,
+        let result: Result<(), IssueRunError> = tokio::select! {
+          result = issue_run.prepare() => result,
           _ = shutdown.cancelled() => return,
         };
 
         match result {
-          Ok(issue_workdir) => producer.issue_ready(issue_stages, issue_workdir).await,
+          Ok(()) => producer.issue_ready(issue_stages).await,
           Err(error) => {
-            for issue_stage in issue_stages {
-              producer.stage_failed(issue_stage.key(), error.to_string()).await;
-            }
+            tracing::error!(error = %error, "Failed to prepare for issue");
           },
         }
       }
-      .instrument(span),
+      .in_current_span(),
     );
   }
-}
-
-/// No completion marker by design. The tracker is the source of truth;
-/// if setup fails partway, the next intake cycle will see the issue
-/// still in scope and retry. A `.done` file would silently mask real
-/// failures.
-async fn prepare_issue_workdir(workflow: Arc<Workflow>, issue: &Issue) -> Result<PathBuf, IssueSetupError> {
-  let issue_workdir = workflow.workspace().issue_workdir(&issue.id);
-
-  match tokio::fs::metadata(&issue_workdir).await {
-    Ok(metadata) if metadata.is_dir() => {
-      tracing::debug!(path = %issue_workdir.display(), "issue workspace already exists; skipping creation");
-      return Ok(issue_workdir);
-    },
-    Ok(_) => {
-      return Err(IssueSetupError::CreateWorkspace {
-        path: issue_workdir.clone(),
-        source: std::io::Error::other("path exists but is not a directory"),
-      });
-    },
-    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-      // Expected case: workspace doesn't exist yet, will be created below.
-    },
-    Err(e) => {
-      return Err(IssueSetupError::CreateWorkspace {
-        path: issue_workdir.clone(),
-        source: e,
-      });
-    },
-  };
-
-  tokio::fs::create_dir_all(&issue_workdir)
-    .await
-    .map_err(|source| IssueSetupError::CreateWorkspace {
-      path: issue_workdir.clone(),
-      source,
-    })?;
-
-  workflow
-    .hooks()
-    .run_after_create(&workflow.schema().issue.hooks, issue, &issue_workdir)
-    .await?;
-
-  Ok(issue_workdir)
-}
-
-#[derive(Debug, Error)]
-enum IssueSetupError {
-  #[error("failed to create issue workspace `{path}`: {source}")]
-  CreateWorkspace {
-    path: PathBuf,
-    #[source]
-    source: std::io::Error,
-  },
-  #[error(transparent)]
-  Hook(#[from] HookError),
 }
 
 #[cfg(test)]
@@ -307,6 +237,7 @@ mod tests {
   use tokio::time::timeout;
 
   use super::*;
+  use crate::context::Issue;
   use crate::workflow::Workflow;
   use crate::workflow::loader::WorkflowSchemaLoader;
 
@@ -315,9 +246,12 @@ mod tests {
     let workflow = workflow_fixture(1, None);
     let mut orchestrator = Orchestrator::new(workflow);
 
-    let planned = orchestrator.should_dispatch(issue("ABC-1", "todo"));
+    let planned = orchestrator.should_dispatch(Arc::new(IssueRun::new(
+      Arc::clone(&orchestrator.workflow),
+      issue("ABC-1", "todo"),
+    )));
     assert_eq!(
-      planned.iter().map(|issue_stage| issue_stage.stage().name()).collect::<Vec<_>>(),
+      planned.iter().map(|issue_stage| issue_stage.stage_name()).collect::<Vec<_>>(),
       ["plan", "implement"]
     );
 
@@ -325,15 +259,30 @@ mod tests {
     assert_eq!(reserved.len(), 2);
 
     assert!(
-      orchestrator.should_dispatch(issue("ABC-1", "todo")).is_empty(),
+      orchestrator
+        .should_dispatch(Arc::new(IssueRun::new(
+          Arc::clone(&orchestrator.workflow),
+          issue("ABC-1", "todo"),
+        )))
+        .is_empty(),
       "same issue-stage keys are already reserved"
     );
     assert!(
-      orchestrator.should_dispatch(issue("ABC-2", "todo")).is_empty(),
+      orchestrator
+        .should_dispatch(Arc::new(IssueRun::new(
+          Arc::clone(&orchestrator.workflow),
+          issue("ABC-2", "todo"),
+        )))
+        .is_empty(),
       "different issue is blocked by max_issue_concurrency"
     );
     assert!(
-      orchestrator.should_dispatch(issue("ABC-1", "Todo")).is_empty(),
+      orchestrator
+        .should_dispatch(Arc::new(IssueRun::new(
+          Arc::clone(&orchestrator.workflow),
+          issue("ABC-1", "Todo"),
+        )))
+        .is_empty(),
       "state match is exact and case-sensitive"
     );
   }
@@ -358,18 +307,15 @@ mod tests {
       .expect("issue setup event")
       .expect("event channel open");
 
-    let OrchestratorEvent::Stage(StageEvent::IssueReady {
-      issue_stages,
-      issue_workdir,
-    }) = event
-    else {
+    let OrchestratorEvent::Stage(StageEvent::IssueReady { issue_stages }) = event else {
       panic!("expected issue-ready event");
     };
+    let issue_workdir = issue_stages[0].workdir().to_path_buf();
 
     assert_eq!(
       issue_stages
         .iter()
-        .map(|issue_stage| issue_stage.stage().name())
+        .map(|issue_stage| issue_stage.stage_name())
         .collect::<Vec<_>>(),
       ["plan", "implement"]
     );
