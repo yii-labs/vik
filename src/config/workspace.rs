@@ -41,3 +41,49 @@ impl Diagnose for WorkspaceSchema {
     diagnostics
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use std::path::Path;
+
+  use crate::config::WorkflowSchema;
+  use crate::config::diagnose::Diagnose;
+  use crate::config::diagnose::DiagnosticCode;
+
+  use super::*;
+
+  #[test]
+  fn workspace_schema_defaults_to_repo_local_root() {
+    let workspace = WorkspaceSchema::default();
+
+    let diagnostics = workspace.diagnose(&WorkflowSchema::default());
+
+    assert_eq!(workspace.root.as_deref(), Some(Path::new(".vik")));
+    assert!(!diagnostics.has_errors());
+    assert!(!diagnostics.has_warnings());
+  }
+
+  #[test]
+  fn workspace_schema_accepts_null_root() {
+    let workspace: WorkspaceSchema = serde_yaml::from_str("root: null").expect("workspace schema parses");
+
+    let diagnostics = workspace.diagnose(&WorkflowSchema::default());
+
+    assert_eq!(workspace.root, None);
+    assert!(!diagnostics.has_errors());
+  }
+
+  #[test]
+  fn workspace_schema_diagnoses_empty_root() {
+    let workspace: WorkspaceSchema = serde_yaml::from_str("root: ''").expect("workspace schema parses");
+
+    let diagnostics = workspace.diagnose(&WorkflowSchema::default());
+
+    assert!(
+      diagnostics
+        .errors
+        .iter()
+        .any(|diag| diag.pointer == "root" && matches!(diag.code, DiagnosticCode::EmptyStr))
+    );
+  }
+}

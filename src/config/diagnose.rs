@@ -214,3 +214,38 @@ impl Diagnostic {
 pub trait Diagnose {
   fn diagnose(&self, workflow: &WorkflowSchema) -> Diagnostics;
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn diagnostics_extend_root_child_pointer_to_parent() {
+    let mut child = Diagnostics::new();
+    child.push(Diagnostic::error("", DiagnosticCode::EmptyMap));
+    let mut diagnostics = Diagnostics::new();
+
+    diagnostics.extends_with_pointer("agents", child);
+
+    assert_eq!(diagnostics.errors.len(), 1);
+    assert_eq!(diagnostics.errors[0].pointer, "agents");
+    assert!(matches!(diagnostics.errors[0].code, DiagnosticCode::EmptyMap));
+  }
+
+  #[test]
+  fn diagnostics_warn_unknown_fields_for_string_keys_only() {
+    let mut fields = serde_yaml::Mapping::new();
+    fields.insert(
+      serde_yaml::Value::String("typo".to_string()),
+      serde_yaml::Value::Bool(true),
+    );
+    fields.insert(serde_yaml::Value::Number(7.into()), serde_yaml::Value::Bool(true));
+    let mut diagnostics = Diagnostics::new();
+
+    diagnostics.warn_unknown_fields(&fields);
+
+    assert_eq!(diagnostics.warnings.len(), 1);
+    assert_eq!(diagnostics.warnings[0].pointer, "typo");
+    assert!(matches!(diagnostics.warnings[0].code, DiagnosticCode::UnknownField));
+  }
+}

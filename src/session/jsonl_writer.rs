@@ -39,3 +39,53 @@ impl JsonlWriter {
     Ok(len)
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use serde_json::json;
+
+  use super::*;
+
+  #[test]
+  fn appends_events_as_json_lines_without_truncating_existing_file() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("session.jsonl");
+    std::fs::write(&path, "{\"kind\":\"message\",\"text\":\"before\"}\n").expect("seed JSONL file");
+
+    {
+      let mut writer = JsonlWriter::open(&path).expect("writer opens");
+      assert!(
+        writer
+          .write(&AgentEvent::SessionStarted {
+            session_id: "session-1".into(),
+          })
+          .expect("session-started event writes")
+          > 0
+      );
+      assert!(writer.write(&AgentEvent::Completed).expect("completed event writes") > 0);
+    }
+
+    let lines = std::fs::read_to_string(&path)
+      .expect("JSONL file reads")
+      .lines()
+      .map(|line| serde_json::from_str(line).expect("line is JSON"))
+      .collect::<Vec<serde_json::Value>>();
+
+    assert_eq!(
+      lines,
+      vec![
+        json!({
+          "kind": "message",
+          "text": "before"
+        }),
+        json!({
+          "kind": "session_started",
+          "session_id": "session-1"
+        }),
+        json!({
+          "kind": "completed"
+        }),
+      ]
+    );
+  }
+}

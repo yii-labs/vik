@@ -391,3 +391,86 @@ async fn stream_agent_events(
     .expect("session mutex never poisoned")
     .finish_output_stream(&state_notifier);
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn session_inner() -> (SessionInner, watch::Sender<SessionState>) {
+    let snapshot = SessionSnapshot {
+      started_at: Utc::now(),
+      ..Default::default()
+    };
+    let (state_notifier, _) = watch::channel(snapshot.state);
+
+    (
+      SessionInner {
+        snapshot,
+        writer: None,
+        child: None,
+      },
+      state_notifier,
+    )
+  }
+
+  #[test]
+  fn token_usage_events_accumulate_without_overflow() {
+    let (mut inner, state_notifier) = session_inner();
+
+    inner.apply_event(
+      AgentEvent::TokenUsage {
+        input: u64::MAX - 1,
+        output: 10,
+        cache_read: 20,
+      },
+      &state_notifier,
+    );
+    inner.apply_event(
+      AgentEvent::TokenUsage {
+        input: 10,
+        output: u64::MAX,
+        cache_read: 30,
+      },
+      &state_notifier,
+    );
+
+    assert_eq!(inner.snapshot.tokens.input, u64::MAX);
+    assert_eq!(inner.snapshot.tokens.output, u64::MAX);
+    assert_eq!(inner.snapshot.tokens.cache_read, 50);
+  }
+
+  #[test]
+  fn rate_limit_observation_keeps_latest_event_per_scope() {
+    let (mut inner, state_notifier) = session_inner();
+    let reset_at = "2026-05-16T10:15:30Z".parse().expect("test timestamp parses");
+    let stale = "2026-05-16T10:00:00Z".parse().expect("test timestamp parses");
+    let fresh = "2026-05-16T10:05:00Z".parse().expect("test timestamp parses");
+
+    inner.apply_event(
+      AgentEvent::RateLimit {
+        scope: "codex:tokens_per_min".into(),
+        remaining: 50,
+        reset_at,
+        observed_at: fresh,
+      },
+      &state_notifier,
+    );
+    inner.apply_event(
+      AgentEvent::RateLimit {
+        scope: "codex:tokens_per_min".into(),
+        remaining: 10,
+        reset_at,
+        observed_at: stale,
+      },
+      &state_notifier,
+    );
+
+    let observation = inner
+      .snapshot
+      .rate_limits
+      .get("codex:tokens_per_min")
+      .expect("rate limit observation stored");
+    assert_eq!(observation.remaining, 50);
+    assert_eq!(observation.observed_at, fresh);
+  }
+}

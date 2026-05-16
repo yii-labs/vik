@@ -229,3 +229,63 @@ impl Diagnose for IssueStageHooks {
     diagnostics
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use crate::config::AgentProfileSchema;
+  use crate::config::AgentRuntime;
+  use crate::config::WorkflowSchema;
+  use crate::config::diagnose::Diagnose;
+  use crate::config::diagnose::DiagnosticCode;
+
+  use super::*;
+
+  #[test]
+  fn issue_pull_defaults_idle_sec_when_omitted() {
+    let pull: IssuePullSchema = serde_yaml::from_str(
+      r#"
+command: ./scripts/issues-json
+"#,
+    )
+    .expect("pull schema parses");
+
+    let diagnostics = pull.diagnose(&WorkflowSchema::default());
+
+    assert_eq!(pull.command, "./scripts/issues-json");
+    assert_eq!(pull.idle_sec, 5);
+    assert!(!diagnostics.has_errors());
+  }
+
+  #[test]
+  fn issue_stage_accepts_known_agent_and_reports_empty_prompt_file() {
+    let mut workflow = WorkflowSchema::default();
+    workflow.agents.insert(
+      "codex".to_string(),
+      AgentProfileSchema::new(AgentRuntime::Codex, "gpt-5.5".to_string()),
+    );
+    let stage: IssueStageSchema = serde_yaml::from_str(
+      r#"
+when:
+  state: Todo
+agent: codex
+prompt_file: ''
+"#,
+    )
+    .expect("stage schema parses");
+
+    let diagnostics = stage.diagnose(&workflow);
+
+    assert!(
+      diagnostics
+        .errors
+        .iter()
+        .any(|diag| { diag.pointer == "prompt_file" && matches!(diag.code, DiagnosticCode::EmptyStr) })
+    );
+    assert!(
+      !diagnostics
+        .errors
+        .iter()
+        .any(|diag| matches!(diag.code, DiagnosticCode::UnknownAgent(_)))
+    );
+  }
+}
