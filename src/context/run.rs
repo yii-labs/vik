@@ -36,7 +36,7 @@ impl Serialize for IssueRun {
     S: serde::Serializer,
   {
     self
-      .template_context(None)
+      .template_context()
       .map_err(serde::ser::Error::custom)?
       .serialize(serializer)
   }
@@ -69,30 +69,9 @@ impl IssueRun {
     &self.workdir
   }
 
-  fn template_context(
-    &self,
-    stage: Option<&StageSchema>,
-  ) -> Result<serde_json::Map<String, serde_json::Value>, serde_json::Error> {
-    let json = serde_json::to_value(&self.issue)?;
-
-    let mut issue = serde_json::Map::new();
-    if let serde_json::Value::Object(issue_map) = json {
-      for (k, v) in issue_map {
-        issue.insert(k, v);
-      }
-      issue.insert("workdir".into(), self.workdir.to_string_lossy().into());
-      if let Some(stage) = stage {
-        issue.insert(
-          "stage".into(),
-          serde_json::json!({
-            "name": stage.name.as_str(),
-          }),
-        );
-      }
-    }
-
+  fn template_context(&self) -> Result<serde_json::Map<String, serde_json::Value>, serde_json::Error> {
     let mut root = serde_json::Map::new();
-    root.insert("issue".into(), issue.into());
+    root.insert("issue".into(), serde_json::Value::Object(self.issue_value()?));
     root.insert(
       "workflow_path".into(),
       self.workflow().workflow_path().to_string_lossy().into(),
@@ -103,6 +82,17 @@ impl IssueRun {
     );
 
     Ok(root)
+  }
+
+  fn issue_value(&self) -> Result<serde_json::Map<String, serde_json::Value>, serde_json::Error> {
+    let mut issue = serde_json::Map::new();
+    if let serde_json::Value::Object(issue_map) = serde_json::to_value(&self.issue)? {
+      for (k, v) in issue_map {
+        issue.insert(k, v);
+      }
+    }
+    issue.insert("workdir".into(), self.workdir.to_string_lossy().into());
+    Ok(issue)
   }
 
   pub fn matching_stages(issue_run: Arc<Self>) -> Vec<IssueStage> {
@@ -183,8 +173,7 @@ impl Serialize for IssueStage {
     S: serde::Serializer,
   {
     self
-      .issue
-      .template_context(Some(&self.schema))
+      .template_context()
       .map_err(serde::ser::Error::custom)?
       .serialize(serializer)
   }
@@ -235,6 +224,29 @@ impl IssueStage {
 
   pub fn key(&self) -> IssueStageKey {
     IssueStageKey::new(self.issue().id.clone(), self.stage_name().to_string())
+  }
+
+  fn template_context(&self) -> Result<serde_json::Map<String, serde_json::Value>, serde_json::Error> {
+    let mut issue = self.issue.issue_value()?;
+    issue.insert(
+      "stage".into(),
+      serde_json::json!({
+        "name": self.schema.name.as_str(),
+      }),
+    );
+
+    let mut root = serde_json::Map::new();
+    root.insert("issue".into(), issue.into());
+    root.insert(
+      "workflow_path".into(),
+      self.workflow().workflow_path().to_string_lossy().into(),
+    );
+    root.insert(
+      "workspace_root".into(),
+      self.workflow().workspace().root().to_string_lossy().into(),
+    );
+
+    Ok(root)
   }
 }
 
