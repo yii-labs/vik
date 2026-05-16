@@ -26,6 +26,7 @@ mod running;
 
 use std::sync::Arc;
 
+use chrono::Utc;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
@@ -175,6 +176,15 @@ impl Orchestrator {
       },
       OrchestratorEvent::Intake(IntakeEvent::Stopped) => true,
       OrchestratorEvent::Stage(StageEvent::IssueReady { issue_stages }) => {
+        if let Some(first) = issue_stages.first() {
+          let stage_names: Vec<&str> = issue_stages.iter().map(|s| s.stage_name()).collect();
+          tracing::info!(
+            phase = %Phase::Dispatch,
+            issue_id = %first.issue().id,
+            stage_names = ?stage_names,
+            "issue ready; launching stages",
+          );
+        }
         for issue_stage in issue_stages {
           self.launcher.launch(issue_stage, shutdown.clone());
         }
@@ -183,7 +193,7 @@ impl Orchestrator {
       OrchestratorEvent::Stage(StageEvent::Started { issue_stage, session }) => {
         let key = issue_stage.key();
         self.running.start(*issue_stage, session);
-        tracing::debug!(phase = %Phase::Dispatch, issue_id = %key.issue_id, stage_name = %key.stage_name, "stage session started");
+        tracing::info!(phase = %Phase::Dispatch, issue_id = %key.issue_id, stage_name = %key.stage_name, "stage session started");
         false
       },
       OrchestratorEvent::Stage(StageEvent::Snapshot { key, snapshot }) => {
@@ -191,6 +201,15 @@ impl Orchestrator {
         false
       },
       OrchestratorEvent::Stage(StageEvent::Terminal { key, snapshot }) => {
+        let duration_ms = (Utc::now() - snapshot.started_at).num_milliseconds().max(0) as u64;
+        tracing::info!(
+          phase = %Phase::Dispatch,
+          issue_id = %key.issue_id,
+          stage_name = %key.stage_name,
+          state = ?snapshot.state,
+          duration_ms,
+          "stage terminal",
+        );
         self.running.finish(&key, snapshot);
         false
       },
@@ -417,6 +436,58 @@ mod tests {
     assert_eq!(no_match["phase"], Phase::Dispatch.to_string());
     assert_eq!(no_match["issue_id"], "ABC-3");
     assert_eq!(no_match["issue_state"], "review");
+  }
+
+  #[tokio::test]
+  async fn issue_ready_and_terminal_emit_dispatch_lifecycle_logs() {
+    let (layer, events) = CaptureLayer::new();
+    let subscriber = Registry::default().with(layer);
+
+    with_default(subscriber, || {
+      let mut orchestrator = Orchestrator::new(workflow_fixture(2, None));
+      let shutdown = CancellationToken::new();
+
+      let issue_run = Arc::new(IssueRun::new(
+        Arc::clone(&orchestrator.workflow),
+        issue("ABC-1", "todo"),
+      ));
+      let issue_stages = IssueRun::matching_stages(Arc::clone(&issue_run));
+      let key = issue_stages[0].key();
+      // Reserve the keys so that `Terminal` can release them without
+      // tripping `RunningMap`'s key-exists invariant.
+      orchestrator.reserve_issue_stages(issue_stages.clone());
+
+      orchestrator.handle_event(
+        OrchestratorEvent::Stage(StageEvent::IssueReady {
+          issue_stages: issue_stages.clone(),
+        }),
+        &shutdown,
+      );
+
+      let snapshot = crate::session::SessionSnapshot {
+        state: crate::session::SessionState::Completed,
+        ..Default::default()
+      };
+      orchestrator.handle_event(
+        OrchestratorEvent::Stage(StageEvent::Terminal {
+          key: key.clone(),
+          snapshot,
+        }),
+        &shutdown,
+      );
+    });
+
+    let events = events.lock().expect("events mutex");
+    let ready = captured_event(&events, "issue ready; launching stages");
+    assert_eq!(ready["phase"], Phase::Dispatch.to_string());
+    assert_eq!(ready["issue_id"], "ABC-1");
+    assert_eq!(ready["stage_names"], "[\"plan\", \"implement\"]");
+
+    let terminal = captured_event(&events, "stage terminal");
+    assert_eq!(terminal["phase"], Phase::Dispatch.to_string());
+    assert_eq!(terminal["issue_id"], "ABC-1");
+    assert_eq!(terminal["stage_name"], "plan");
+    assert_eq!(terminal["state"], "Completed");
   }
 
   #[tokio::test]

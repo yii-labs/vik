@@ -7,6 +7,7 @@
 //! sole owner of [`super::running::RunningMap`].
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
@@ -40,7 +41,11 @@ impl StageLauncher {
   /// Spawn the launch task. The runtime `IssueStage` already carries
   /// the issue run context needed for hooks and session spawn.
   pub(super) fn launch(&self, issue_stage: IssueStage, shutdown: CancellationToken) {
-    let span = stage_span(issue_stage.stage_name(), &issue_stage.stage().agent);
+    let span = stage_span(
+      &issue_stage.issue().id,
+      issue_stage.stage_name(),
+      &issue_stage.stage().agent,
+    );
     let launcher = self.clone();
 
     tokio::spawn(async move { launcher.run(issue_stage, shutdown).await }.instrument(span));
@@ -51,7 +56,10 @@ impl StageLauncher {
       return;
     }
 
+    tracing::info!("stage launching");
+
     let key = issue_stage.key();
+    let started_at = Instant::now();
     let session = match self.start_session(&issue_stage).await {
       Ok(session) => session,
       Err(error) => {
@@ -63,6 +71,7 @@ impl StageLauncher {
       },
     };
 
+    tracing::info!("stage session started");
     self.producer.stage_started(issue_stage.clone(), session.clone()).await;
 
     let monitor = SessionMonitor::new(key.clone(), session.clone(), self.producer.clone());
@@ -72,6 +81,7 @@ impl StageLauncher {
         // Cooperative shutdown: cancel the child then wait for the
         // session's own state machine to mark itself Cancelled. Without
         // the wait, `terminal` could observe a stale state.
+        tracing::info!("stage cancellation requested");
         session.cancel();
         session.wait().await
       }
@@ -92,6 +102,16 @@ impl StageLauncher {
         "issue stage after_run hook failed",
       );
     }
+
+    let duration_ms = started_at.elapsed().as_millis() as u64;
+    tracing::info!(
+      state = ?terminal.state,
+      duration_ms,
+      tokens_input = terminal.tokens.input,
+      tokens_output = terminal.tokens.output,
+      tokens_cache_read = terminal.tokens.cache_read,
+      "stage terminal",
+    );
 
     self.producer.stage_terminal(key, terminal).await;
   }
@@ -129,9 +149,12 @@ mod tests {
   use std::sync::Arc;
 
   use tokio_util::sync::CancellationToken;
+  use tracing::subscriber::with_default;
+  use tracing_subscriber::{Registry, layer::SubscriberExt};
 
   use super::*;
   use crate::context::{Issue, IssueRun};
+  use crate::logging::tests::{CaptureLayer, captured_event, captured_message_exists};
   use crate::orchestrator::event::{OrchestratorEvent, StageEvent, event_channel};
 
   #[tokio::test]
@@ -164,6 +187,51 @@ mod tests {
       },
       _ => panic!("expected stage failure"),
     }
+  }
+
+  #[test]
+  fn run_emits_stage_launching_lifecycle_log() {
+    let (layer, events) = CaptureLayer::new();
+    let subscriber = Registry::default().with(layer);
+
+    with_default(subscriber, || {
+      let temp = tempfile::tempdir().expect("tempdir");
+      let workflow = Arc::new(
+        Workflow::builder()
+          .workflow_path(temp.path().join("workflow.yml"))
+          .workspace_root(temp.path().join("workspace"))
+          .add_stage("plan", "todo", "./plan.md")
+          .build(),
+      );
+      let issue_stage = issue_stage(Arc::clone(&workflow), "ABC-1", "plan", "exit 7");
+      std::fs::create_dir_all(issue_stage.workdir()).expect("issue workdir exists");
+      let (producer, _consumer) = event_channel();
+      let launcher = StageLauncher::new(
+        Arc::clone(&workflow),
+        SessionFactory::new(Arc::clone(&workflow)),
+        producer,
+      );
+
+      let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime");
+      let span = stage_span(
+        &issue_stage.issue().id,
+        issue_stage.stage_name(),
+        &issue_stage.stage().agent,
+      );
+      runtime.block_on(async move {
+        launcher.run(issue_stage, CancellationToken::new()).instrument(span).await;
+      });
+    });
+
+    let events = events.lock().expect("events mutex");
+    assert!(captured_message_exists(&events, "stage launching"));
+    let event = captured_event(&events, "stage launching");
+    assert_eq!(event["issue_id"], "ABC-1");
+    assert_eq!(event["stage_name"], "plan");
+    assert_eq!(event["phase"], crate::logging::Phase::StageRun.to_string());
   }
 
   fn issue_stage(workflow: Arc<Workflow>, issue_id: &str, stage_name: &str, before_run: &str) -> IssueStage {
