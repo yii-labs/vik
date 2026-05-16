@@ -123,3 +123,67 @@ enum StageLaunchError {
   #[error(transparent)]
   Session(#[from] SessionError),
 }
+
+#[cfg(test)]
+mod tests {
+  use std::sync::Arc;
+
+  use tokio_util::sync::CancellationToken;
+
+  use super::*;
+  use crate::context::{Issue, IssueRun};
+  use crate::orchestrator::event::{OrchestratorEvent, StageEvent, event_channel};
+
+  #[tokio::test]
+  async fn run_reports_stage_failed_when_before_run_hook_fails() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workflow = Arc::new(
+      Workflow::builder()
+        .workflow_path(temp.path().join("workflow.yml"))
+        .workspace_root(temp.path().join("workspace"))
+        .add_stage("plan", "todo", "./plan.md")
+        .build(),
+    );
+    let issue_stage = issue_stage(Arc::clone(&workflow), "ABC-1", "plan", "exit 7");
+    let key = issue_stage.key();
+    std::fs::create_dir_all(issue_stage.workdir()).expect("issue workdir exists");
+    let (producer, mut consumer) = event_channel();
+    let launcher = StageLauncher::new(
+      Arc::clone(&workflow),
+      SessionFactory::new(Arc::clone(&workflow)),
+      producer,
+    );
+
+    launcher.run(issue_stage, CancellationToken::new()).await;
+
+    match consumer.recv().await.expect("stage failure event") {
+      OrchestratorEvent::Stage(StageEvent::Failed { key: failed_key, error }) => {
+        assert_eq!(failed_key, key);
+        assert!(error.contains("before_issue_stage_run"));
+        assert!(error.contains("7"));
+      },
+      _ => panic!("expected stage failure"),
+    }
+  }
+
+  fn issue_stage(workflow: Arc<Workflow>, issue_id: &str, stage_name: &str, before_run: &str) -> IssueStage {
+    let mut schema = workflow.stages().get(stage_name).expect("stage fixture exists").clone();
+    schema.hooks.before_run = Some(before_run.to_string());
+    let issue_run = Arc::new(IssueRun::new(
+      Arc::clone(&workflow),
+      issue(issue_id, &schema.when.state),
+    ));
+
+    IssueStage::new(issue_run, stage_name.to_string(), schema)
+  }
+
+  fn issue(id: &str, state: &str) -> Issue {
+    Issue {
+      id: id.to_string(),
+      title: "title".to_string(),
+      description: String::new(),
+      state: state.to_string(),
+      extra_payload: serde_yaml::Mapping::new(),
+    }
+  }
+}

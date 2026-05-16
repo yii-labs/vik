@@ -26,14 +26,18 @@ pub fn execute(loaded: LoadedWorkflowSchema, args: DoctorArgs) -> ExitCode {
   let printer = Printer { json: args.json };
   let diagnostics = loaded.schema.diagnose();
 
-  let code = if diagnostics.has_errors() || (diagnostics.has_warnings() && args.strict) {
-    ExitCode::FAILURE
-  } else {
-    ExitCode::SUCCESS
-  };
+  let code = doctor_exit_code(&diagnostics, args.strict);
 
   printer.print(diagnostics);
   code
+}
+
+fn doctor_exit_code(diagnostics: &Diagnostics, strict: bool) -> ExitCode {
+  if diagnostics.has_errors() || (diagnostics.has_warnings() && strict) {
+    ExitCode::FAILURE
+  } else {
+    ExitCode::SUCCESS
+  }
 }
 
 struct Printer {
@@ -55,5 +59,28 @@ impl Printer {
         diagnostics.warnings.len()
       );
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::config::diagnose::{Diagnostic, DiagnosticCode};
+
+  #[test]
+  fn strict_mode_fails_when_diagnostics_only_have_warnings() {
+    let mut diagnostics = Diagnostics::new();
+    diagnostics.push(Diagnostic::warning("extra_field", DiagnosticCode::UnknownField));
+
+    assert_eq!(doctor_exit_code(&diagnostics, false), ExitCode::SUCCESS);
+    assert_eq!(doctor_exit_code(&diagnostics, true), ExitCode::FAILURE);
+  }
+
+  #[test]
+  fn errors_fail_even_when_strict_mode_is_disabled() {
+    let mut diagnostics = Diagnostics::new();
+    diagnostics.push(Diagnostic::error("agents", DiagnosticCode::EmptyMap));
+
+    assert_eq!(doctor_exit_code(&diagnostics, false), ExitCode::FAILURE);
   }
 }

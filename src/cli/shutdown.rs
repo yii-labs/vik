@@ -59,3 +59,18 @@ where
     },
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[tokio::test]
+  async fn graceful_returns_ready_future_even_if_shutdown_already_cancelled() {
+    let shutdown = CancellationToken::new();
+    shutdown.cancel();
+
+    let output = graceful(shutdown, async { "finished" }).await;
+
+    assert_eq!(output, "finished");
+  }
+}

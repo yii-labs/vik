@@ -5,7 +5,7 @@ use serde::Serialize;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::config::IssueStage as StageSchema;
+use crate::config::IssueStageSchema as StageSchema;
 use crate::hooks::HookError;
 use crate::workflow::Workflow;
 
@@ -224,8 +224,108 @@ mod tests {
   use std::sync::Arc;
 
   use super::*;
+  use crate::template::JinjaRenderer;
   use crate::workflow::Workflow;
-  use crate::workflow::loader::WorkflowSchemaLoader;
+
+  #[test]
+  fn issue_run_serializes_template_context_shape() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workflow = Arc::new(workflow_fixture(
+      &temp.path().join("workspace"),
+      temp.path().join("workflow.yml"),
+      "echo created",
+    ));
+    let issue_run = IssueRun::new(Arc::clone(&workflow), issue_with_extra("ABC-1", "todo"));
+
+    let context = serde_json::to_value(&issue_run).expect("issue run serializes");
+
+    assert_eq!(
+      context["workflow_path"].as_str(),
+      Some(workflow.workflow_path().to_string_lossy().as_ref())
+    );
+    assert_eq!(
+      context["workspace_root"].as_str(),
+      Some(workflow.workspace().root().to_string_lossy().as_ref())
+    );
+    assert_eq!(context["issue"]["id"], "ABC-1");
+    assert_eq!(context["issue"]["title"], "title");
+    assert_eq!(context["issue"]["description"], "");
+    assert_eq!(context["issue"]["state"], "todo");
+    assert_eq!(
+      context["issue"]["workdir"].as_str(),
+      Some(issue_run.workdir().to_string_lossy().as_ref())
+    );
+    assert_eq!(context["issue"]["priority"], "high");
+    assert!(context.get("id").is_none());
+    assert!(context.get("workdir").is_none());
+  }
+
+  #[test]
+  fn issue_run_serialized_context_renders_jinja_template() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workflow = Arc::new(workflow_fixture(
+      &temp.path().join("workspace"),
+      temp.path().join("workflow.yml"),
+      "echo created",
+    ));
+    let issue_run = IssueRun::new(Arc::clone(&workflow), issue_with_extra("ABC-1", "todo"));
+
+    let rendered = JinjaRenderer::new()
+      .render(
+        "{{ issue.id }}|{{ issue.priority }}|{{ issue.workdir }}|{{ workflow_path }}|{{ workspace_root }}",
+        &issue_run,
+      )
+      .expect("issue run context renders");
+
+    assert_eq!(
+      rendered,
+      format!(
+        "ABC-1|high|{}|{}|{}",
+        issue_run.workdir().display(),
+        workflow.workflow_path().display(),
+        workflow.workspace().root().display()
+      )
+    );
+  }
+
+  #[test]
+  fn issue_stage_serializes_same_template_context_as_issue_run() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workflow = Arc::new(
+      Workflow::builder()
+        .workflow_path(temp.path().join("workflow.yml"))
+        .workspace_root(temp.path().join("workspace"))
+        .add_stage("plan", "todo", "./plan.md")
+        .build(),
+    );
+    let issue_run = Arc::new(IssueRun::new(Arc::clone(&workflow), issue_with_extra("ABC-1", "todo")));
+    let stage = IssueRun::matching_stages(Arc::clone(&issue_run))
+      .into_iter()
+      .next()
+      .expect("stage matches issue state");
+
+    assert_eq!(
+      serde_json::to_value(&stage).expect("issue stage serializes"),
+      serde_json::to_value(issue_run.as_ref()).expect("issue run serializes")
+    );
+
+    let rendered = JinjaRenderer::new()
+      .render(
+        "{{ issue.id }}|{{ issue.priority }}|{{ issue.workdir }}|{{ workflow_path }}|{{ workspace_root }}",
+        &stage,
+      )
+      .expect("issue stage context renders");
+
+    assert_eq!(
+      rendered,
+      format!(
+        "ABC-1|high|{}|{}|{}",
+        stage.workdir().display(),
+        workflow.workflow_path().display(),
+        workflow.workspace().root().display()
+      )
+    );
+  }
 
   #[tokio::test]
   async fn prepare_skips_after_create_when_issue_workdir_exists() {
@@ -246,41 +346,11 @@ mod tests {
   }
 
   fn workflow_fixture(root: &std::path::Path, workflow_path: std::path::PathBuf, after_create: &str) -> Workflow {
-    let root_yaml = root.to_string_lossy();
-    let loaded = WorkflowSchemaLoader
-      .load_from_str(&workflow_yaml(root_yaml.as_ref(), after_create), Some(workflow_path))
-      .expect("workflow schema parses");
-
-    Workflow::try_from(loaded).expect("load workflow")
-  }
-
-  fn workflow_yaml(root_yaml: &str, after_create: &str) -> String {
-    format!(
-      r#"
-loop:
-  max_issue_concurrency: 1
-  wait_ms: 10
-workspace:
-  root: '{root_yaml}'
-agents:
-  codex:
-    runtime: codex
-    model: gpt-5.5
-issues:
-  pull:
-    command: ./issues-json
-    idle_sec: 1
-issue:
-  hooks:
-    after_create: {after_create}
-  stages:
-    plan:
-      when:
-        state: todo
-      agent: codex
-      prompt_file: ./plan.md
-"#
-    )
+    Workflow::builder()
+      .workflow_path(workflow_path)
+      .workspace_root(root)
+      .after_issue_workdir_create_hook(after_create)
+      .build()
   }
 
   fn issue(id: &str, state: &str) -> Issue {
@@ -291,5 +361,14 @@ issue:
       state: state.to_string(),
       extra_payload: serde_yaml::Mapping::new(),
     }
+  }
+
+  fn issue_with_extra(id: &str, state: &str) -> Issue {
+    let mut issue = issue(id, state);
+    issue.extra_payload.insert(
+      serde_yaml::Value::String("priority".to_string()),
+      serde_yaml::Value::String("high".to_string()),
+    );
+    issue
   }
 }

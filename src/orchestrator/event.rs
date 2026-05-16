@@ -136,3 +136,26 @@ pub(super) enum StageEvent {
     error: String,
   },
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[tokio::test]
+  async fn producer_delivers_intake_events_in_order() {
+    let (producer, mut consumer) = event_channel();
+
+    producer.intake_failed("pull failed").await;
+    producer.intake_stopped().await;
+
+    match consumer.recv().await.expect("first event") {
+      OrchestratorEvent::Intake(IntakeEvent::Failed(error)) => assert_eq!(error, "pull failed"),
+      _ => panic!("expected intake failure"),
+    }
+
+    match consumer.recv().await.expect("second event") {
+      OrchestratorEvent::Intake(IntakeEvent::Stopped) => {},
+      _ => panic!("expected intake stopped"),
+    }
+  }
+}

@@ -1,58 +1,137 @@
-use crate::{hooks::HookRunner, utils, workspace::Workspace};
+use std::path::PathBuf;
 
-use super::{Workflow, WorkflowError, loader::LoadedWorkflowSchema};
+use crate::config::IssueStageSchema;
+use crate::config::WorkflowSchema;
 
-impl TryFrom<LoadedWorkflowSchema> for Workflow {
-  type Error = WorkflowError;
+use super::Workflow;
 
-  fn try_from(LoadedWorkflowSchema { path, schema }: LoadedWorkflowSchema) -> Result<Self, Self::Error> {
-    // Diagnose runs here, not in the loader, so the doctor command can
-    // surface warnings on a parsed-but-not-promoted schema.
-    let diagnostics = schema.diagnose();
+impl Workflow {
+  pub fn builder() -> WorkflowBuilder {
+    WorkflowBuilder::new()
+  }
+}
 
-    if diagnostics.has_errors() {
-      return Err(WorkflowError::Diagnose(diagnostics));
+pub struct WorkflowBuilder {
+  workflow_path: PathBuf,
+  schema: WorkflowSchema,
+}
+
+#[cfg(test)]
+impl WorkflowBuilder {
+  pub fn new() -> Self {
+    Self {
+      workflow_path: "/virtual/path/to/workflow.yml".into(),
+      schema: WorkflowSchema::default(),
     }
+  }
 
-    let workflow_dir = path
-      .parent()
-      .expect("path to workflow.yml must be valid because we've already read from it.")
-      .to_path_buf();
+  pub fn workflow_path(mut self, workflow_path: impl Into<PathBuf>) -> Self {
+    self.workflow_path = workflow_path.into();
+    self
+  }
 
-    // Workspace root in YAML is optional; the supervisor needs an
-    // absolute path so resolution happens here, anchored at the
-    // workflow file's directory rather than process cwd.
-    let unresolved_workspace_home_dir = schema.workspace.root.clone().unwrap_or_else(utils::paths::default_home);
+  pub fn max_issue_concurrency(mut self, max_issue_concurrency: u32) -> Self {
+    self.schema.loop_.max_issue_concurrency = max_issue_concurrency;
+    self
+  }
 
-    let workspace_root_dir = utils::paths::resolve_from(&workflow_dir, &unresolved_workspace_home_dir)
-      .ok_or(WorkflowError::WorkspaceRoot(unresolved_workspace_home_dir))?
-      .join("workflows")
-      .join(path.to_string_lossy().replace('/', "-"));
+  pub fn workspace_root(mut self, workspace_root: impl Into<PathBuf>) -> Self {
+    self.schema.workspace.root = Some(workspace_root.into());
+    self
+  }
 
-    Ok(Workflow {
-      workflow_dir: workflow_dir.clone(),
-      workflow_path: path,
-      schema,
-      workspace: Workspace::new(workspace_root_dir),
-      hooks: HookRunner::new(),
-    })
+  pub fn without_workspace_root(mut self) -> Self {
+    self.schema.workspace.root = None;
+    self
+  }
+
+  pub fn pull_command(mut self, pull_command: impl Into<String>) -> Self {
+    self.schema.issues.pull.command = pull_command.into();
+    self
+  }
+
+  pub fn after_issue_workdir_create_hook(mut self, after_create: impl Into<String>) -> Self {
+    self.schema.issue.hooks.after_create = Some(after_create.into());
+    self
+  }
+
+  pub fn add_stage(
+    mut self,
+    name: impl Into<String>,
+    state: impl Into<String>,
+    prompt_file: impl Into<PathBuf>,
+  ) -> Self {
+    self
+      .schema
+      .issue
+      .stages
+      .insert(name.into(), IssueStageSchema::new(state).with_prompt_file(prompt_file));
+    self
+  }
+
+  pub fn build(self) -> Workflow {
+    Workflow::from_schema_unchecked(self.workflow_path, self.schema)
+      .expect("Test workflow builder must build successfully")
   }
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::workflow::loader::WorkflowSchemaLoader;
+  use crate::utils;
+
+  #[test]
+  fn workflow_builder_starts_without_test_fixture_data() {
+    let builder: crate::workflow::WorkflowBuilder = Workflow::builder();
+    let workflow = builder.build();
+
+    assert!(workflow.schema().agents.is_empty());
+    assert!(workflow.schema().issues.pull.command.is_empty());
+    assert!(workflow.schema().issue.stages.is_empty());
+  }
+
+  #[test]
+  fn workflow_builder_applies_fluent_overrides() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workflow_path = temp.path().join("workflow.yml");
+
+    let workflow = Workflow::builder()
+      .max_issue_concurrency(10)
+      .workspace_root(temp.path())
+      .workflow_path(workflow_path.clone())
+      .pull_command("printf '%s' '[]'")
+      .after_issue_workdir_create_hook("echo created")
+      .add_stage("implement", "todo", "./implement.md")
+      .build();
+
+    assert_eq!(workflow.schema().loop_.max_issue_concurrency, 10);
+    assert_eq!(workflow.schema().workspace.root.as_deref(), Some(temp.path()));
+    assert_eq!(workflow.schema().issues.pull.command, "printf '%s' '[]'");
+    assert_eq!(
+      workflow.schema().issue.hooks.after_create.as_deref(),
+      Some("echo created")
+    );
+    assert_eq!(
+      workflow.schema().issue.stages.keys().map(String::as_str).collect::<Vec<_>>(),
+      ["implement"]
+    );
+    assert_eq!(
+      workflow.workspace().root(),
+      temp
+        .path()
+        .join("workflows")
+        .join(workflow_path.to_string_lossy().replace('/', "-"))
+    );
+  }
 
   #[test]
   fn workflow_root_resolution() {
     let temp = tempfile::tempdir().expect("tempdir");
     let workflow_path = temp.path().join("workflow.yml");
-    let loaded = WorkflowSchemaLoader
-      .load_from_str(&workflow_yaml("workspace: { root: .vik }"), Some(workflow_path.clone()))
-      .expect("workflow schema parses");
-
-    let workflow = Workflow::try_from(loaded).expect("workflow builds");
+    let workflow = Workflow::builder()
+      .workspace_root(".vik")
+      .workflow_path(workflow_path.clone())
+      .build();
 
     assert_eq!(
       workflow.workspace().root(),
@@ -65,14 +144,13 @@ mod tests {
   }
 
   #[test]
-  fn missing_workspace_root_defaults_to_home_vik_and_workflow_namespace() {
+  fn workflow_without_workspace_root_defaults_to_home_vik_and_workflow_namespace() {
     let temp = tempfile::tempdir().expect("tempdir");
     let workflow_path = temp.path().join("workflow.yml");
-    let loaded = WorkflowSchemaLoader
-      .load_from_str(&workflow_yaml("workspace: {}"), Some(workflow_path.clone()))
-      .expect("workflow schema parses");
-
-    let workflow = Workflow::try_from(loaded).expect("workflow builds");
+    let workflow = Workflow::builder()
+      .workflow_path(workflow_path.clone())
+      .without_workspace_root()
+      .build();
 
     assert_eq!(
       workflow.workspace().root(),
@@ -80,57 +158,5 @@ mod tests {
         .join("workflows")
         .join(workflow_path.to_string_lossy().replace('/', "-"))
     );
-  }
-
-  #[test]
-  fn null_workspace_root_defaults_to_home_vik_and_workflow_namespace() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let workflow_path = temp.path().join("workflow.yml");
-    let loaded = WorkflowSchemaLoader
-      .load_from_str(
-        &workflow_yaml(
-          r#"
-workspace:
-  root:
-"#,
-        ),
-        Some(workflow_path.clone()),
-      )
-      .expect("workflow schema parses");
-
-    let workflow = Workflow::try_from(loaded).expect("workflow builds");
-
-    assert_eq!(
-      workflow.workspace().root(),
-      utils::paths::default_home()
-        .join("workflows")
-        .join(workflow_path.to_string_lossy().replace('/', "-"))
-    );
-  }
-
-  fn workflow_yaml(workspace_section: &str) -> String {
-    format!(
-      r#"
-loop:
-  max_issue_concurrency: 1
-  wait_ms: 100
-{workspace_section}
-agents:
-  codex:
-    runtime: codex
-    model: gpt-5.5
-issues:
-  pull:
-    command: ./scripts/issues-json
-    idle_sec: 5
-issue:
-  stages:
-    plan:
-      when:
-        state: todo
-      agent: codex
-      prompt_file: ./prompts/plan.md
-"#
-    )
   }
 }

@@ -239,7 +239,6 @@ mod tests {
   use super::*;
   use crate::context::Issue;
   use crate::workflow::Workflow;
-  use crate::workflow::loader::WorkflowSchemaLoader;
 
   #[test]
   fn should_dispatch_preserves_author_order_and_respects_running_policy() {
@@ -338,7 +337,17 @@ mod tests {
   }
 
   fn workflow_fixture(max_issue_concurrency: u32, after_create: Option<&str>) -> Workflow {
-    Workflow::load_from_str(&workflow_yaml(max_issue_concurrency, after_create, "workspace")).expect("load workflow")
+    let mut builder = Workflow::builder()
+      .max_issue_concurrency(max_issue_concurrency)
+      .add_stage("plan", "todo", "./plan.md")
+      .add_stage("implement", "todo", "./implement.md")
+      .workspace_root("workspace");
+
+    if let Some(after_create) = after_create {
+      builder = builder.after_issue_workdir_create_hook(after_create);
+    }
+
+    builder.build()
   }
 
   fn workflow_fixture_with_path(
@@ -347,51 +356,18 @@ mod tests {
     root: &std::path::Path,
     workflow_path: std::path::PathBuf,
   ) -> Workflow {
-    let root_yaml = root.to_string_lossy();
-    let loaded = WorkflowSchemaLoader
-      .load_from_str(
-        &workflow_yaml(max_issue_concurrency, after_create, root_yaml.as_ref()),
-        Some(workflow_path),
-      )
-      .expect("workflow schema parses");
+    let mut builder = Workflow::builder()
+      .max_issue_concurrency(max_issue_concurrency)
+      .add_stage("plan", "todo", "./plan.md")
+      .add_stage("implement", "todo", "./implement.md")
+      .workspace_root(root)
+      .workflow_path(workflow_path);
 
-    Workflow::try_from(loaded).expect("load workflow")
-  }
+    if let Some(after_create) = after_create {
+      builder = builder.after_issue_workdir_create_hook(after_create);
+    }
 
-  fn workflow_yaml(max_issue_concurrency: u32, after_create: Option<&str>, root_yaml: &str) -> String {
-    let hook = after_create
-      .map(|body| format!("  hooks:\n    after_create: {body}\n"))
-      .unwrap_or_else(|| "  hooks: {}\n".to_string());
-
-    format!(
-      r#"
-loop:
-  max_issue_concurrency: {max_issue_concurrency}
-  wait_ms: 10
-workspace:
-  root: '{root_yaml}'
-agents:
-  codex:
-    runtime: codex
-    model: gpt-5.5
-issues:
-  pull:
-    command: ./issues-json
-    idle_sec: 1
-issue:
-{hook}  stages:
-    plan:
-      when:
-        state: todo
-      agent: codex
-      prompt_file: ./plan.md
-    implement:
-      when:
-        state: todo
-      agent: codex
-      prompt_file: ./implement.md
-"#
-    )
+    builder.build()
   }
 
   fn issue(id: &str, state: &str) -> Issue {

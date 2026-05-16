@@ -18,6 +18,7 @@
 
 use std::fmt::Display;
 use std::ops::Deref;
+use std::ops::DerefMut;
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -81,7 +82,7 @@ impl AgentProfileSchema {
   }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AgentProfilesSchema(IndexMap<String, AgentProfileSchema>);
 
 impl Diagnose for AgentProfileSchema {
@@ -113,5 +114,56 @@ impl Deref for AgentProfilesSchema {
 
   fn deref(&self) -> &Self::Target {
     &self.0
+  }
+}
+
+impl DerefMut for AgentProfilesSchema {
+  fn deref_mut(&mut self) -> &mut Self::Target {
+    &mut self.0
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use crate::config::WorkflowSchema;
+  use crate::config::diagnose::Diagnose;
+  use crate::config::diagnose::DiagnosticCode;
+
+  use super::*;
+
+  #[test]
+  fn agent_runtime_uses_snake_case_yaml_values() {
+    let codex: AgentRuntime = serde_yaml::from_str("codex").expect("codex runtime parses");
+    let claude_code: AgentRuntime = serde_yaml::from_str("claude_code").expect("claude code runtime parses");
+
+    assert!(matches!(codex, AgentRuntime::Codex));
+    assert!(matches!(claude_code, AgentRuntime::ClaudeCode));
+    assert_eq!(
+      serde_yaml::to_string(&AgentRuntime::ClaudeCode).expect("runtime serializes"),
+      "claude_code\n"
+    );
+  }
+
+  #[test]
+  fn agent_profile_defaults_args_and_warns_unknown_fields() {
+    let profile: AgentProfileSchema = serde_yaml::from_str(
+      r#"
+runtime: codex
+model: gpt-5.5
+typo: true
+"#,
+    )
+    .expect("profile parses");
+
+    let diagnostics = profile.diagnose(&WorkflowSchema::default());
+
+    assert!(profile.args.is_empty());
+    assert!(!diagnostics.has_errors());
+    assert!(
+      diagnostics
+        .warnings
+        .iter()
+        .any(|diag| diag.pointer == "typo" && matches!(diag.code, DiagnosticCode::UnknownField))
+    );
   }
 }

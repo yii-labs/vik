@@ -61,3 +61,24 @@ pub struct SessionSnapshot {
   /// streaming nature better than a fixed struct.
   pub rate_limits: HashMap<String, RateLimitObservation>,
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn session_state_reports_only_terminal_states_as_terminated() {
+    for state in [SessionState::UnStarted, SessionState::Preparing, SessionState::Running] {
+      assert!(!state.is_terminated());
+    }
+
+    for state in [
+      SessionState::Completed,
+      SessionState::Failed,
+      SessionState::Cancelled,
+      SessionState::Stalled,
+    ] {
+      assert!(state.is_terminated());
+    }
+  }
+}

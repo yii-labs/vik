@@ -236,3 +236,81 @@ fn shell_command(body: &str) -> Command {
   cmd.args(["-c", body]);
   cmd
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn hook_kind_names_match_workflow_keys() {
+    assert_eq!(HookKind::AfterIssueWorkdirCreate.as_str(), "after_issue_workdir_create");
+    assert_eq!(HookKind::BeforeIssueStageRun.as_str(), "before_issue_stage_run");
+    assert_eq!(HookKind::AfterIssueStageRun.as_str(), "after_issue_stage_run");
+  }
+
+  #[tokio::test]
+  async fn unconfigured_hook_skips_without_requiring_cwd() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let missing_cwd = temp.path().join("missing");
+
+    HookRunner::new()
+      .schedule_inner(
+        HookKind::BeforeIssueStageRun,
+        &missing_cwd,
+        &None,
+        serde_json::json!({}),
+      )
+      .await
+      .expect("unconfigured hook skips");
+
+    assert!(!missing_cwd.exists());
+  }
+
+  #[tokio::test]
+  async fn configured_hook_renders_template_and_executes_in_cwd() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let hook = Some("echo {{ issue.id }}:{{ stage.name }}>hook-output.txt".to_string());
+
+    HookRunner::new()
+      .schedule_inner(
+        HookKind::BeforeIssueStageRun,
+        temp.path(),
+        &hook,
+        serde_json::json!({
+          "issue": { "id": "ISS-7" },
+          "stage": { "name": "plan" }
+        }),
+      )
+      .await
+      .expect("configured hook runs");
+
+    let output = std::fs::read_to_string(temp.path().join("hook-output.txt")).expect("hook output");
+    assert_eq!(output.lines().next(), Some("ISS-7:plan"));
+  }
+
+  #[cfg(not(windows))]
+  #[tokio::test]
+  async fn nonzero_hook_reports_bounded_stderr_tail() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let stderr = format!("{}TAIL", "x".repeat(STDERR_TAIL_BYTES + 10));
+    let hook = Some(format!("printf '%s' '{stderr}' >&2; exit 7"));
+
+    let err = HookRunner::new()
+      .schedule_inner(HookKind::AfterIssueStageRun, temp.path(), &hook, serde_json::json!({}))
+      .await
+      .expect_err("nonzero hook fails");
+
+    match err {
+      HookError::NonZeroExit {
+        hook,
+        code,
+        stderr_tail,
+      } => {
+        assert_eq!(hook, "after_issue_stage_run");
+        assert_eq!(code, 7);
+        assert_eq!(stderr_tail, format!("{}TAIL", "x".repeat(STDERR_TAIL_BYTES - 4)));
+      },
+      other => panic!("expected nonzero exit, got {other:?}"),
+    }
+  }
+}
