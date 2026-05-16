@@ -88,25 +88,15 @@ impl DispatchSkipReason {
     match self {
       Self::NoMatchingStage => {
         tracing::warn!(
-          phase = %Phase::Dispatch,
-          issue_id = %issue.id,
           issue_state = %issue.state,
           "no workflow stage matched issue state; skipping issue this cycle",
         );
       },
       Self::IssueConcurrencyFull => {
-        tracing::info!(
-          phase = %Phase::Dispatch,
-          issue_id = %issue.id,
-          "issue concurrency is full; skipping issue this cycle",
-        );
+        tracing::info!("issue concurrency is full; skipping issue this cycle");
       },
       Self::MatchingStagesAlreadyActive => {
-        tracing::info!(
-          phase = %Phase::Dispatch,
-          issue_id = %issue.id,
-          "matching stages are already active; skipping issue this cycle",
-        );
+        tracing::info!("matching stages are already active; skipping issue this cycle");
       },
     }
   }
@@ -302,15 +292,15 @@ impl Orchestrator {
 #[cfg(test)]
 mod tests {
   use std::fs;
-  use std::io::{self, Write};
-  use std::sync::Mutex;
   use std::time::Duration;
 
   use tokio::time::timeout;
-  use tracing_subscriber::fmt::MakeWriter;
+  use tracing::subscriber::with_default;
+  use tracing_subscriber::{Registry, layer::SubscriberExt};
 
   use super::*;
   use crate::context::Issue;
+  use crate::logging::tests::CaptureLayer;
   use crate::workflow::Workflow;
 
   #[test]
@@ -371,15 +361,10 @@ mod tests {
 
   #[test]
   fn dispatch_skip_reason_tracing_separates_no_match_concurrency_and_active_stage() {
-    let (writer, buffer) = CapturedTraceWriter::new();
-    let subscriber = tracing_subscriber::fmt()
-      .with_max_level(tracing::Level::DEBUG)
-      .with_ansi(false)
-      .without_time()
-      .with_writer(writer)
-      .finish();
+    let (layer, events) = CaptureLayer::new();
+    let subscriber = Registry::default().with(layer);
 
-    tracing::subscriber::with_default(subscriber, || {
+    with_default(subscriber, || {
       let mut no_match = Orchestrator::new(workflow_fixture(1, None));
       no_match.prepare_issue(issue("ABC-3", "review"), CancellationToken::new());
 
@@ -394,11 +379,31 @@ mod tests {
       busy.prepare_issue(issue("ABC-1", "todo"), CancellationToken::new());
     });
 
-    let logs = captured_logs(&buffer);
-    assert!(logs.contains("no workflow stage matched issue state; skipping issue this cycle"));
-    assert!(logs.contains("issue concurrency is full; skipping issue this cycle"));
-    assert!(logs.contains("matching stages are already active; skipping issue this cycle"));
-    assert!(!logs.contains("issue fetch but no stage matched to run"));
+    let events = events.lock().expect("events mutex");
+    assert!(captured_message_exists(
+      &events,
+      "no workflow stage matched issue state; skipping issue this cycle"
+    ));
+    assert!(captured_message_exists(
+      &events,
+      "issue concurrency is full; skipping issue this cycle"
+    ));
+    assert!(captured_message_exists(
+      &events,
+      "matching stages are already active; skipping issue this cycle"
+    ));
+    assert!(!captured_message_exists(
+      &events,
+      "issue fetch but no stage matched to run"
+    ));
+
+    let no_match = captured_event(
+      &events,
+      "no workflow stage matched issue state; skipping issue this cycle",
+    );
+    assert_eq!(no_match["phase"], Phase::Dispatch.to_string());
+    assert_eq!(no_match["issue_id"], "ABC-3");
+    assert_eq!(no_match["issue_state"], "review");
   }
 
   #[tokio::test]
@@ -495,50 +500,14 @@ mod tests {
     }
   }
 
-  #[derive(Clone)]
-  struct CapturedTraceWriter {
-    buffer: Arc<Mutex<Vec<u8>>>,
+  fn captured_event<'event>(events: &'event [serde_json::Value], message: &str) -> &'event serde_json::Value {
+    events
+      .iter()
+      .find(|event| event["message"] == message)
+      .unwrap_or_else(|| panic!("missing captured message: {message}"))
   }
 
-  impl CapturedTraceWriter {
-    fn new() -> (Self, Arc<Mutex<Vec<u8>>>) {
-      let buffer = Arc::new(Mutex::new(Vec::new()));
-      (
-        Self {
-          buffer: Arc::clone(&buffer),
-        },
-        buffer,
-      )
-    }
-  }
-
-  impl<'writer> MakeWriter<'writer> for CapturedTraceWriter {
-    type Writer = CapturedTraceSink;
-
-    fn make_writer(&'writer self) -> Self::Writer {
-      CapturedTraceSink {
-        buffer: Arc::clone(&self.buffer),
-      }
-    }
-  }
-
-  struct CapturedTraceSink {
-    buffer: Arc<Mutex<Vec<u8>>>,
-  }
-
-  impl Write for CapturedTraceSink {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-      self.buffer.lock().expect("trace buffer mutex").extend_from_slice(buf);
-      Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-      Ok(())
-    }
-  }
-
-  fn captured_logs(buffer: &Arc<Mutex<Vec<u8>>>) -> String {
-    let bytes = buffer.lock().expect("trace buffer mutex").clone();
-    String::from_utf8(bytes).expect("trace output is utf-8")
+  fn captured_message_exists(events: &[serde_json::Value], message: &str) -> bool {
+    events.iter().any(|event| event["message"] == message)
   }
 }
