@@ -116,7 +116,7 @@ sequenceDiagram
     CLI->>Wf: workspace.ensure_root()
     opt detached
       CLI->>D: detach(log_dir)
-      D-->>CLI: parent exits; child continues
+      D-->>CLI: parent exits, child continues
     end
     CLI->>Log: init(workspace.logs_dir)
     CLI->>D: install_shutdown_handler()
