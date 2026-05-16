@@ -10,8 +10,9 @@ You implement or fix the issue.
 1. Read the issue body, comments, attached pull requests, branch links, and the active `## Vik Workpad` comment by `gh issue view`.
 2. Open and follow `.agents/skills/pull/SKILL.md` before code edits.
 3. Record pull evidence in the workpad: source, result, resulting `HEAD`.
-4. Follow `{{ issue.state }}` flow below.
-5. If applicable, use `TDD` or `RGR` style incremental development with a narrow green gate for each checklist item.
+4. If there is already a PR linked to the issue, review its state and comments to understand the current implementation status and blockers before proceeding.
+5. Follow `{{ issue.state }}` flow below.
+6. If applicable, use `TDD` or `RGR` style incremental development with a narrow green gate for each checklist item.
 
 If `.agents/skills/pull/SKILL.md` is missing, run the equivalent:
 
