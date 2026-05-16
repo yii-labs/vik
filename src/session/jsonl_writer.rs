@@ -58,11 +58,17 @@ mod tests {
         writer
           .write(&AgentEvent::SessionStarted {
             session_id: "session-1".into(),
+            raw: None,
           })
           .expect("session-started event writes")
           > 0
       );
-      assert!(writer.write(&AgentEvent::Completed).expect("completed event writes") > 0);
+      assert!(
+        writer
+          .write(&AgentEvent::Completed { raw: None })
+          .expect("completed event writes")
+          > 0
+      );
     }
 
     let lines = std::fs::read_to_string(&path)

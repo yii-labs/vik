@@ -14,11 +14,7 @@ use crate::config::AgentProfileSchema;
 use super::response::AgentEvent;
 
 pub(super) use claude_code::ClaudeCodeAdapter;
-#[allow(unused_imports)]
-pub use claude_code::{ClaudeCodeContentBlock, ClaudeCodeEvent, ClaudeCodeEventKind};
 pub(super) use codex::CodexAdapter;
-#[allow(unused_imports)]
-pub use codex::{CodexEvent, CodexEventKind, CodexUsage};
 
 #[derive(Debug, Clone)]
 pub struct AgentCommand {
@@ -41,23 +37,18 @@ pub enum AgentStdin {
 }
 
 /// Implementations are stateless per spawn: `build_command` is called
-/// once per run and `map_event` once per parsed provider event.
-/// `provider_event` decodes and preserves one provider JSONL line for
-/// session history. Returning an empty `Vec` from `map_event` means the
-/// line has no semantic snapshot effect. Returning multiple events fans
-/// one line out (e.g. Claude's `result` line yields both `TokenUsage`
-/// and `Completed`).
+/// once per run and `map_line` once per provider stdout line. Adapters
+/// keep provider-specific parsing local, then return provider-neutral
+/// session events. Unknown future shapes should map to
+/// `AgentEvent::Unknown` with the original JSON instead of failing the
+/// stream.
 pub trait AgentAdapter: Send + Sync {
   fn build_command(&self, profile: &AgentProfileSchema, prompt: String) -> AgentCommand;
 
-  /// Keep one typed provider record for every valid provider JSONL
-  /// line. Unknown future shapes should use the provider's `Unknown`
-  /// event kind instead of failing the stream.
-  fn provider_event(&self, line: &str) -> Result<AgentEvent, serde_json::Error>;
-
-  /// Unknown shapes return `vec![]`; new provider event types still
-  /// persist through `provider_event` and must not crash the stream.
-  fn map_event(&self, event: &AgentEvent) -> Vec<AgentEvent>;
+  /// Decode one provider JSONL line into provider-neutral session
+  /// events. Returning multiple events fans one line out (e.g. Claude's
+  /// `result` line yields both `TokenUsage` and `Completed`).
+  fn map_line(&self, line: &str) -> Result<Vec<AgentEvent>, serde_json::Error>;
 }
 
 /// Flatten the YAML `args` map into a flat CLI token list. Booleans

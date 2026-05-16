@@ -135,7 +135,7 @@ today.
 - renders the prompt file
 - starts the selected provider process
 - maps provider stdout JSONL to `AgentEvent`
-- writes typed provider records and decoded semantic events to JSONL
+- writes provider-neutral events with raw provider JSON to JSONL
 - tracks `SessionState`, last message, token usage, and rate-limit observations
 - exposes cancellation through the child process wrapper
 

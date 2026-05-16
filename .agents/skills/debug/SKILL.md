@@ -128,15 +128,16 @@ If paths differ, replace the example `logs` directory with `log_dir` from `vik s
 
 ## Session JSONL
 
-Session JSONL files store `AgentEvent` records, including typed provider
-records with raw parsed provider JSON values and normalized semantic events.
+Session JSONL files store provider-neutral `AgentEvent` records. Events mapped
+from provider stdout include raw parsed provider JSON. Tool calls use
+`tool_call`; future or unmodeled provider lines use `unknown`.
 
 Event shapes:
 
 ```json
 {"kind":"session_started","session_id":"..."}
-{"kind":"codex_provider_event","event":{"kind":"item_completed","item_type":"tool_call","item":{"type":"tool_call"},"raw":{"type":"item.completed","item":{"type":"tool_call"}}}}
-{"kind":"claude_code_provider_event","event":{"kind":"assistant","content":[{"type":"tool_use","text":null,"raw":{"type":"tool_use"}}],"raw":{"type":"assistant","message":{"content":[{"type":"tool_use"}]}}}}
+{"kind":"tool_call","id":"tool_0","name":"shell","raw":{"type":"item.completed","item":{"id":"tool_0","type":"tool_call","name":"shell"}}}
+{"kind":"unknown","event_type":"future.event","raw":{"type":"future.event","payload":{}}}
 {"kind":"message","text":"..."}
 {"kind":"token_usage","input":120,"output":45,"cache_read":12}
 {"kind":"rate_limit","scope":"codex:tokens_per_min","remaining":100,"reset_at":"...","observed_at":"..."}

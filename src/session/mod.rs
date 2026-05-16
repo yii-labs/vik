@@ -274,7 +274,7 @@ impl SessionInner {
   }
 
   fn apply_event(&mut self, event: AgentEvent, state_notifier: &watch::Sender<SessionState>) {
-    let notify_state_watch = !event.is_provider_record();
+    let notify_state_watch = event.affects_snapshot();
 
     if let Some(writer) = &mut self.writer
       && let Err(err) = writer.write(&event)
@@ -287,16 +287,17 @@ impl SessionInner {
     }
 
     match event {
-      AgentEvent::SessionStarted { session_id } => {
+      AgentEvent::SessionStarted { session_id, .. } => {
         self.snapshot.agent_session_id = Some(session_id);
       },
-      AgentEvent::Message { text } => {
+      AgentEvent::Message { text, .. } => {
         self.snapshot.last_message = Some(text);
       },
       AgentEvent::TokenUsage {
         input,
         output,
         cache_read,
+        ..
       } => {
         // saturating_add tolerates duplicated TokenUsage events
         // without panicking; providers occasionally report twice on
@@ -310,6 +311,7 @@ impl SessionInner {
         remaining,
         reset_at,
         observed_at,
+        ..
       } => {
         // Latest-wins by observation time: a provider retry can land a
         // stale observation after a newer one, and we want to keep the
@@ -329,13 +331,13 @@ impl SessionInner {
           );
         }
       },
-      AgentEvent::Completed => {
+      AgentEvent::Completed { .. } => {
         self.set_state(SessionState::Completed, state_notifier);
       },
-      AgentEvent::Error { detail: _ } => {
+      AgentEvent::Error { detail: _, .. } => {
         self.set_state(SessionState::Failed, state_notifier);
       },
-      AgentEvent::CodexProviderEvent { .. } | AgentEvent::ClaudeCodeProviderEvent { .. } => {},
+      AgentEvent::ToolCall { .. } | AgentEvent::Unknown { .. } => {},
     }
 
     if notify_state_watch {
@@ -380,6 +382,7 @@ async fn stream_agent_events(
         inner.lock().expect("session mutex never poisoned").apply_event(
           AgentEvent::Error {
             detail: err.to_string(),
+            raw: None,
           },
           &state_notifier,
         );
@@ -395,25 +398,17 @@ async fn stream_agent_events(
 }
 
 fn map_agent_stdout_line(agent: &dyn AgentAdapter, line: &str) -> Vec<AgentEvent> {
-  match agent.provider_event(line) {
-    Ok(provider_event) => {
-      let semantic_events = agent.map_event(&provider_event);
-      let mut events = Vec::with_capacity(semantic_events.len() + 1);
-      events.push(provider_event);
-      events.extend(semantic_events);
-      events
-    },
+  match agent.map_line(line) {
+    Ok(events) => events,
     Err(err) => vec![AgentEvent::Error {
       detail: err.to_string(),
+      raw: None,
     }],
   }
 }
 #[cfg(test)]
 mod tests {
-  use crate::{
-    agent::{CodexEvent, CodexEventKind},
-    config::AgentRuntime,
-  };
+  use crate::config::AgentRuntime;
 
   use super::*;
 
@@ -443,6 +438,7 @@ mod tests {
         input: u64::MAX - 1,
         output: 10,
         cache_read: 20,
+        raw: None,
       },
       &state_notifier,
     );
@@ -451,6 +447,7 @@ mod tests {
         input: 10,
         output: u64::MAX,
         cache_read: 30,
+        raw: None,
       },
       &state_notifier,
     );
@@ -473,6 +470,7 @@ mod tests {
         remaining: 50,
         reset_at,
         observed_at: fresh,
+        raw: None,
       },
       &state_notifier,
     );
@@ -482,6 +480,7 @@ mod tests {
         remaining: 10,
         reset_at,
         observed_at: stale,
+        raw: None,
       },
       &state_notifier,
     );
@@ -496,71 +495,87 @@ mod tests {
   }
 
   #[test]
-  fn codex_provider_event_precedes_semantic_events() {
+  fn codex_message_event_retains_raw_provider_line() {
     let agent = get_adapter(AgentRuntime::Codex);
     let line = r#"{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"hello"}}"#;
-    let event: CodexEvent = serde_json::from_str(line).expect("fixture is valid Codex event");
+    let raw = serde_json::from_str(line).expect("fixture is valid JSON");
 
     assert_eq!(
       map_agent_stdout_line(agent.as_ref(), line),
-      vec![
-        AgentEvent::CodexProviderEvent { event },
-        AgentEvent::Message { text: "hello".into() },
-      ]
+      vec![AgentEvent::Message {
+        text: "hello".into(),
+        raw: Some(raw),
+      }]
     );
   }
 
   #[test]
-  fn codex_tool_call_provider_event_is_retained_without_semantic_events() {
+  fn codex_tool_call_maps_to_neutral_tool_call() {
     let agent = get_adapter(AgentRuntime::Codex);
     let line = r#"{"type":"item.completed","item":{"id":"tool_0","type":"tool_call","name":"shell","arguments":"{}"}}"#;
-    let event: CodexEvent = serde_json::from_str(line).expect("fixture is valid Codex event");
+    let raw = serde_json::from_str(line).expect("fixture is valid JSON");
 
     assert_eq!(
       map_agent_stdout_line(agent.as_ref(), line),
-      vec![AgentEvent::CodexProviderEvent { event }]
+      vec![AgentEvent::ToolCall {
+        id: Some("tool_0".into()),
+        name: Some("shell".into()),
+        input: Some(serde_json::json!("{}")),
+        raw: Some(raw),
+      }]
     );
   }
 
   #[test]
-  fn codex_unknown_provider_event_is_retained_without_semantic_events() {
+  fn codex_unknown_event_retains_raw_provider_line() {
     let agent = get_adapter(AgentRuntime::Codex);
     let line = r#"{"type":"future.event","payload":{"ok":true}}"#;
-    let event: CodexEvent = serde_json::from_str(line).expect("fixture is valid Codex event");
+    let raw = serde_json::from_str(line).expect("fixture is valid JSON");
 
     assert_eq!(
       map_agent_stdout_line(agent.as_ref(), line),
-      vec![AgentEvent::CodexProviderEvent { event }]
+      vec![AgentEvent::Unknown {
+        event_type: Some("future.event".into()),
+        raw,
+      }]
     );
   }
 
   #[test]
-  fn claude_tool_only_provider_event_is_retained_without_semantic_message() {
+  fn claude_tool_only_event_maps_to_neutral_tool_call() {
     let agent = get_adapter(AgentRuntime::ClaudeCode);
     let line =
       r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t-1","name":"Bash","input":{}}]}}"#;
-    let event = serde_json::from_str(line).expect("fixture is valid Claude Code event");
+    let raw = serde_json::from_str(line).expect("fixture is valid JSON");
 
     assert_eq!(
       map_agent_stdout_line(agent.as_ref(), line),
-      vec![AgentEvent::ClaudeCodeProviderEvent { event }]
+      vec![AgentEvent::ToolCall {
+        id: Some("t-1".into()),
+        name: Some("Bash".into()),
+        input: Some(serde_json::json!({})),
+        raw: Some(raw),
+      }]
     );
   }
 
   #[test]
-  fn claude_user_provider_event_is_retained_without_semantic_events() {
+  fn claude_user_event_retains_raw_provider_line() {
     let agent = get_adapter(AgentRuntime::ClaudeCode);
     let line = r#"{"type":"user","message":{"content":[]}}"#;
-    let event = serde_json::from_str(line).expect("fixture is valid Claude Code event");
+    let raw = serde_json::from_str(line).expect("fixture is valid JSON");
 
     assert_eq!(
       map_agent_stdout_line(agent.as_ref(), line),
-      vec![AgentEvent::ClaudeCodeProviderEvent { event }]
+      vec![AgentEvent::Unknown {
+        event_type: Some("user".into()),
+        raw,
+      }]
     );
   }
 
   #[test]
-  fn invalid_jsonl_maps_to_error_without_provider_event() {
+  fn invalid_jsonl_maps_to_error_without_raw_event() {
     let agent = get_adapter(AgentRuntime::Codex);
     let events = map_agent_stdout_line(agent.as_ref(), "{not-json");
 
@@ -569,49 +584,40 @@ mod tests {
   }
 
   #[test]
-  fn codex_fixture_retains_one_provider_record_per_line() {
+  fn codex_fixture_retains_raw_for_each_provider_line() {
     let path = concat!(
       env!("CARGO_MANIFEST_DIR"),
       "/tests/fixtures/agent_events/codex/happy_path.jsonl"
     );
-    assert_fixture_retains_one_provider_record_per_line(AgentRuntime::Codex, path);
+    assert_fixture_retains_raw_for_each_provider_line(AgentRuntime::Codex, path);
   }
 
   #[test]
-  fn claude_code_fixture_retains_one_provider_record_per_line() {
+  fn claude_code_fixture_retains_raw_for_each_provider_line() {
     let path = concat!(
       env!("CARGO_MANIFEST_DIR"),
       "/tests/fixtures/agent_events/claude_code/happy_path.jsonl"
     );
-    assert_fixture_retains_one_provider_record_per_line(AgentRuntime::ClaudeCode, path);
+    assert_fixture_retains_raw_for_each_provider_line(AgentRuntime::ClaudeCode, path);
   }
 
-  fn assert_fixture_retains_one_provider_record_per_line(runtime: AgentRuntime, path: &str) {
+  fn assert_fixture_retains_raw_for_each_provider_line(runtime: AgentRuntime, path: &str) {
     let agent = get_adapter(runtime);
     let body = std::fs::read_to_string(path).expect("fixture present");
 
     for (index, line) in body.lines().enumerate() {
       let events = map_agent_stdout_line(agent.as_ref(), line);
-      assert_eq!(
-        events.iter().filter(|event| event.is_provider_record()).count(),
-        1,
-        "line {index} must produce one provider record"
+      let raw: serde_json::Value = serde_json::from_str(line).expect("fixture line is JSON");
+      assert!(!events.is_empty(), "line {index} must produce at least one event");
+      assert!(
+        events.iter().all(|event| event.raw() == Some(&raw)),
+        "line {index} must retain raw provider JSON on every emitted event"
       );
-      match runtime {
-        AgentRuntime::Codex => assert!(
-          matches!(events.first(), Some(AgentEvent::CodexProviderEvent { .. })),
-          "line {index} must start with Codex provider record"
-        ),
-        AgentRuntime::ClaudeCode => assert!(
-          matches!(events.first(), Some(AgentEvent::ClaudeCodeProviderEvent { .. })),
-          "line {index} must start with Claude Code provider record"
-        ),
-      }
     }
   }
 
   #[test]
-  fn provider_event_does_not_change_snapshot_semantics() {
+  fn raw_only_events_do_not_change_snapshot_semantics() {
     let (state_notifier, state_rx) = watch::channel(SessionState::Running);
     let mut inner = SessionInner {
       snapshot: SessionSnapshot {
@@ -623,13 +629,18 @@ mod tests {
     };
 
     inner.apply_event(
-      AgentEvent::CodexProviderEvent {
-        event: CodexEvent {
-          kind: CodexEventKind::Unknown {
-            event_type: Some("future.event".into()),
-          },
-          raw: serde_json::json!({"type":"future.event"}),
-        },
+      AgentEvent::Unknown {
+        event_type: Some("future.event".into()),
+        raw: serde_json::json!({"type":"future.event"}),
+      },
+      &state_notifier,
+    );
+    inner.apply_event(
+      AgentEvent::ToolCall {
+        id: Some("tool_0".into()),
+        name: Some("shell".into()),
+        input: Some(serde_json::json!("{}")),
+        raw: Some(serde_json::json!({"type":"item.completed"})),
       },
       &state_notifier,
     );
@@ -644,34 +655,30 @@ mod tests {
   }
 
   #[test]
-  fn jsonl_writer_persists_provider_and_semantic_events_in_order() {
+  fn jsonl_writer_persists_raw_and_semantic_events_in_order() {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let log_file = tempdir.path().join("session.jsonl");
-    let provider_event = AgentEvent::CodexProviderEvent {
-      event: CodexEvent {
-        kind: CodexEventKind::ItemCompleted {
-          item_type: Some("tool_call".into()),
-          item: Some(serde_json::json!({
-            "id": "tool_0",
-            "type": "tool_call",
-            "name": "shell"
-          })),
-        },
-        raw: serde_json::json!({
-          "type": "item.completed",
-          "item": {
-            "id": "tool_0",
-            "type": "tool_call",
-            "name": "shell"
-          }
-        }),
-      },
+    let raw_event = AgentEvent::ToolCall {
+      id: Some("tool_0".into()),
+      name: Some("shell".into()),
+      input: None,
+      raw: Some(serde_json::json!({
+        "type": "item.completed",
+        "item": {
+          "id": "tool_0",
+          "type": "tool_call",
+          "name": "shell"
+        }
+      })),
     };
-    let message_event = AgentEvent::Message { text: "hello".into() };
+    let message_event = AgentEvent::Message {
+      text: "hello".into(),
+      raw: None,
+    };
 
     {
       let mut writer = JsonlWriter::open(&log_file).expect("open JSONL writer");
-      writer.write(&provider_event).expect("write provider event");
+      writer.write(&raw_event).expect("write raw event");
       writer.write(&message_event).expect("write message event");
     }
 
@@ -681,6 +688,6 @@ mod tests {
       .map(|line| serde_json::from_str(line).expect("event JSON"))
       .collect();
 
-    assert_eq!(events, vec![provider_event, message_event]);
+    assert_eq!(events, vec![raw_event, message_event]);
   }
 }

@@ -1,41 +1,42 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-
-use super::adapters::{ClaudeCodeEvent, CodexEvent};
+use serde_json::Value;
 
 /// Session event vocabulary.
 ///
-/// Session JSONL stores both typed provider JSONL records and decoded
-/// provider-agnostic semantic events. A run yields at most one
-/// [`AgentEvent::SessionStarted`], any number of typed provider
-/// records plus `Message`/`TokenUsage`/`RateLimit` semantic events
-/// interleaved, and terminates with one [`AgentEvent::Completed`] (or
-/// trailing `Error`). Parse errors on a single JSONL line surface as
-/// [`AgentEvent::Error`] because forward-compatible evidence beats a
-/// hard fail on one future provider event shape.
+/// Session JSONL stores provider-neutral events. Adapter-owned provider
+/// structs may attach the full provider JSON to these events through
+/// `raw`, so session files keep durable evidence without exposing
+/// Codex- or Claude-specific variants here. Parse errors on a single
+/// JSONL line surface as [`AgentEvent::Error`] because
+/// forward-compatible evidence beats a hard fail on one future provider
+/// event shape.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AgentEvent {
-  /// Exact parsed Codex JSONL event. Unknown future Codex event types
-  /// are still retained by the Codex adapter.
-  CodexProviderEvent {
-    event: CodexEvent,
-  },
-
-  /// Exact parsed Claude Code JSONL event. Unknown future Claude event
-  /// types are still retained by the Claude Code adapter.
-  ClaudeCodeProviderEvent {
-    event: ClaudeCodeEvent,
-  },
-
   /// Emitted as early as the provider allows so the session layer can
   /// stamp the JSONL filename or tracing span without buffering events.
   SessionStarted {
     session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    raw: Option<Value>,
   },
 
   Message {
     text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    raw: Option<Value>,
+  },
+
+  ToolCall {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    input: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    raw: Option<Value>,
   },
 
   /// Adapters may emit this multiple times per run; the session
@@ -44,6 +45,8 @@ pub enum AgentEvent {
     input: u64,
     output: u64,
     cache_read: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    raw: Option<Value>,
   },
 
   /// `scope` is provider-qualified (e.g. `codex:tokens_per_min`) so
@@ -54,32 +57,55 @@ pub enum AgentEvent {
     remaining: u64,
     reset_at: DateTime<Utc>,
     observed_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    raw: Option<Value>,
   },
 
-  Completed,
+  Completed {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    raw: Option<Value>,
+  },
+
+  /// Valid provider JSONL that has no recognized snapshot meaning yet.
+  Unknown {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    event_type: Option<String>,
+    raw: Value,
+  },
 
   /// Either a JSONL parse failure on one line or a provider-side error.
   /// The stream keeps going; the session decides whether to mark the
   /// run as Failed.
   Error {
     detail: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    raw: Option<Value>,
   },
 }
 
 impl AgentEvent {
-  pub fn is_provider_record(&self) -> bool {
-    matches!(
-      self,
-      AgentEvent::CodexProviderEvent { .. } | AgentEvent::ClaudeCodeProviderEvent { .. }
-    )
+  pub fn affects_snapshot(&self) -> bool {
+    !matches!(self, AgentEvent::ToolCall { .. } | AgentEvent::Unknown { .. })
+  }
+
+  #[cfg(test)]
+  pub fn raw(&self) -> Option<&Value> {
+    match self {
+      AgentEvent::SessionStarted { raw, .. }
+      | AgentEvent::Message { raw, .. }
+      | AgentEvent::ToolCall { raw, .. }
+      | AgentEvent::TokenUsage { raw, .. }
+      | AgentEvent::RateLimit { raw, .. }
+      | AgentEvent::Completed { raw }
+      | AgentEvent::Error { raw, .. } => raw.as_ref(),
+      AgentEvent::Unknown { raw, .. } => Some(raw),
+    }
   }
 }
 
 #[cfg(test)]
 mod tests {
   use serde_json::json;
-
-  use crate::agent::{ClaudeCodeContentBlock, ClaudeCodeEventKind, CodexEventKind};
 
   use super::*;
 
@@ -93,6 +119,7 @@ mod tests {
       (
         AgentEvent::SessionStarted {
           session_id: "session-1".into(),
+          raw: None,
         },
         json!({
           "kind": "session_started",
@@ -102,6 +129,7 @@ mod tests {
       (
         AgentEvent::Message {
           text: "stage output".into(),
+          raw: None,
         },
         json!({
           "kind": "message",
@@ -113,6 +141,7 @@ mod tests {
           input: 11,
           output: 7,
           cache_read: 3,
+          raw: None,
         },
         json!({
           "kind": "token_usage",
@@ -127,6 +156,7 @@ mod tests {
           remaining: 42,
           reset_at: utc("2026-05-16T10:15:30Z"),
           observed_at: utc("2026-05-16T10:00:00Z"),
+          raw: None,
         },
         json!({
           "kind": "rate_limit",
@@ -137,7 +167,7 @@ mod tests {
         }),
       ),
       (
-        AgentEvent::Completed,
+        AgentEvent::Completed { raw: None },
         json!({
           "kind": "completed"
         }),
@@ -145,6 +175,7 @@ mod tests {
       (
         AgentEvent::Error {
           detail: "provider line failed to decode".into(),
+          raw: None,
         },
         json!({
           "kind": "error",
@@ -172,6 +203,7 @@ mod tests {
         }),
         AgentEvent::SessionStarted {
           session_id: "session-1".into(),
+          raw: None,
         },
       ),
       (
@@ -181,6 +213,7 @@ mod tests {
         }),
         AgentEvent::Message {
           text: "stage output".into(),
+          raw: None,
         },
       ),
       (
@@ -194,6 +227,7 @@ mod tests {
           input: 11,
           output: 7,
           cache_read: 3,
+          raw: None,
         },
       ),
       (
@@ -209,13 +243,14 @@ mod tests {
           remaining: 42,
           reset_at: utc("2026-05-16T10:15:30Z"),
           observed_at: utc("2026-05-16T10:00:00Z"),
+          raw: None,
         },
       ),
       (
         json!({
           "kind": "completed"
         }),
-        AgentEvent::Completed,
+        AgentEvent::Completed { raw: None },
       ),
       (
         json!({
@@ -224,6 +259,7 @@ mod tests {
         }),
         AgentEvent::Error {
           detail: "provider line failed to decode".into(),
+          raw: None,
         },
       ),
     ];
@@ -237,89 +273,110 @@ mod tests {
   }
 
   #[test]
-  fn typed_provider_events_roundtrip() {
+  fn raw_provider_data_roundtrips_on_neutral_events() {
     let cases = [
       (
-        AgentEvent::CodexProviderEvent {
-          event: CodexEvent {
-            kind: CodexEventKind::ItemCompleted {
-              item_type: Some("tool_call".into()),
-              item: Some(json!({
-                "type": "tool_call"
-              })),
-            },
-            raw: json!({
-              "type": "item.completed",
-              "item": {
-                "type": "tool_call"
-              }
-            }),
-          },
+        AgentEvent::ToolCall {
+          id: Some("tool_0".into()),
+          name: Some("shell".into()),
+          input: Some(json!("{}")),
+          raw: Some(json!({
+            "type": "item.completed",
+            "item": {
+              "id": "tool_0",
+              "type": "tool_call",
+              "name": "shell",
+              "arguments": "{}"
+            }
+          })),
         },
         json!({
-          "kind": "codex_provider_event",
-          "event": {
-            "kind": "item_completed",
-            "item_type": "tool_call",
+          "kind": "tool_call",
+          "id": "tool_0",
+          "name": "shell",
+          "input": "{}",
+          "raw": {
+            "type": "item.completed",
             "item": {
-              "type": "tool_call"
-            },
-            "raw": {
-              "type": "item.completed",
-              "item": {
-                "type": "tool_call"
-              }
+              "id": "tool_0",
+              "type": "tool_call",
+              "name": "shell",
+              "arguments": "{}"
             }
           }
         }),
       ),
       (
-        AgentEvent::ClaudeCodeProviderEvent {
-          event: ClaudeCodeEvent {
-            kind: ClaudeCodeEventKind::Assistant {
-              content: vec![ClaudeCodeContentBlock {
-                block_type: "tool_use".into(),
-                text: None,
-                raw: json!({
-                  "type": "tool_use"
-                }),
-              }],
-            },
-            raw: json!({
-              "type": "assistant",
-              "message": {
-                "content": [
-                  {
-                    "type": "tool_use"
-                  }
-                ]
-              }
-            }),
-          },
+        AgentEvent::Unknown {
+          event_type: Some("future.event".into()),
+          raw: json!({
+            "type": "future.event",
+            "payload": {
+              "ok": true
+            }
+          }),
         },
         json!({
-          "kind": "claude_code_provider_event",
-          "event": {
-            "kind": "assistant",
-            "content": [
-              {
-                "type": "tool_use",
-                "text": null,
-                "raw": {
-                  "type": "tool_use"
-                }
-              }
-            ],
-            "raw": {
-              "type": "assistant",
-              "message": {
-                "content": [
-                  {
-                    "type": "tool_use"
-                  }
-                ]
-              }
+          "kind": "unknown",
+          "event_type": "future.event",
+          "raw": {
+            "type": "future.event",
+            "payload": {
+              "ok": true
             }
+          }
+        }),
+      ),
+      (
+        AgentEvent::Message {
+          text: "hello".into(),
+          raw: Some(json!({
+            "type": "item.completed",
+            "item": {
+              "type": "agent_message",
+              "text": "hello"
+            }
+          })),
+        },
+        json!({
+          "kind": "message",
+          "text": "hello",
+          "raw": {
+            "type": "item.completed",
+            "item": {
+              "type": "agent_message",
+              "text": "hello"
+            }
+          }
+        }),
+      ),
+      (
+        AgentEvent::Completed {
+          raw: Some(json!({
+            "type": "turn.completed"
+          })),
+        },
+        json!({
+          "kind": "completed",
+          "raw": {
+            "type": "turn.completed"
+          }
+        }),
+      ),
+      (
+        AgentEvent::Error {
+          detail: "boom".into(),
+          raw: Some(json!({
+            "type": "error",
+            "message": "boom"
+          })),
+        },
+        json!({
+          "kind": "error",
+          "detail": "boom",
+          "raw": {
+            "type": "error",
+            "message": "boom"
           }
         }),
       ),

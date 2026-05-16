@@ -12,7 +12,8 @@
 //! `{"msg": {"type": ...}}` envelope and the newer flat
 //! `{"type": "thread.started" | "item.completed" | "turn.completed"}`.
 //! Unknown shapes have no semantic snapshot effect, but the session
-//! still writes them as typed unknown Codex provider records.
+//! still writes them as provider-neutral `unknown` records with raw
+//! JSON.
 
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -62,12 +63,6 @@ impl CodexEvent {
   fn from_provider_value(raw: Value) -> Self {
     let kind = codex_event_kind(&raw);
     Self { kind, raw }
-  }
-}
-
-impl From<CodexEvent> for AgentEvent {
-  fn from(event: CodexEvent) -> Self {
-    AgentEvent::CodexProviderEvent { event }
   }
 }
 
@@ -146,16 +141,9 @@ impl AgentAdapter for CodexAdapter {
     }
   }
 
-  fn provider_event(&self, line: &str) -> Result<AgentEvent, serde_json::Error> {
+  fn map_line(&self, line: &str) -> Result<Vec<AgentEvent>, serde_json::Error> {
     let event: CodexEvent = serde_json::from_str(line)?;
-    Ok(event.into())
-  }
-
-  fn map_event(&self, event: &AgentEvent) -> Vec<AgentEvent> {
-    match event {
-      AgentEvent::CodexProviderEvent { event } => map_events(event),
-      _ => Vec::new(),
-    }
+    Ok(map_events(&event))
   }
 }
 
@@ -267,13 +255,18 @@ fn map_events(event: &CodexEvent) -> Vec<AgentEvent> {
       .map(|session_id| {
         vec![AgentEvent::SessionStarted {
           session_id: session_id.clone(),
+          raw: Some(event.raw.clone()),
         }]
       })
-      .unwrap_or_default(),
+      .unwrap_or_else(|| vec![unknown_event("session_configured", event)]),
     CodexEventKind::AgentMessage { text } => vec![AgentEvent::Message {
       text: text.clone().unwrap_or_default(),
+      raw: Some(event.raw.clone()),
     }],
-    CodexEventKind::TokenCount { usage } => usage.as_ref().map(token_usage_event).into_iter().collect(),
+    CodexEventKind::TokenCount { usage } => usage
+      .as_ref()
+      .map(|usage| vec![token_usage_event(usage, Some(event.raw.clone()))])
+      .unwrap_or_else(|| vec![unknown_event("token_count", event)]),
     CodexEventKind::RateLimitWarning {
       scope,
       remaining,
@@ -284,17 +277,22 @@ fn map_events(event: &CodexEvent) -> Vec<AgentEvent> {
       remaining,
       reset_at,
     } => {
-      vec![rate_limit_event(scope, *remaining, reset_at)]
+      vec![rate_limit_event(scope, *remaining, reset_at, Some(event.raw.clone()))]
     },
-    CodexEventKind::TurnComplete | CodexEventKind::ShutdownComplete => vec![AgentEvent::Completed],
+    CodexEventKind::TurnComplete | CodexEventKind::ShutdownComplete => {
+      vec![AgentEvent::Completed {
+        raw: Some(event.raw.clone()),
+      }]
+    },
     CodexEventKind::ThreadStarted { thread_id } => thread_id
       .as_ref()
       .map(|session_id| {
         vec![AgentEvent::SessionStarted {
           session_id: session_id.clone(),
+          raw: Some(event.raw.clone()),
         }]
       })
-      .unwrap_or_default(),
+      .unwrap_or_else(|| vec![unknown_event("thread.started", event)]),
     CodexEventKind::ItemCompleted { item_type, item } => match item_type.as_deref() {
       Some("agent_message") => vec![AgentEvent::Message {
         text: item
@@ -303,19 +301,28 @@ fn map_events(event: &CodexEvent) -> Vec<AgentEvent> {
           .and_then(Value::as_str)
           .unwrap_or("")
           .to_string(),
+        raw: Some(event.raw.clone()),
       }],
-      _ => Vec::new(),
+      Some("tool_call") => vec![tool_call_event(item.as_ref(), Some(event.raw.clone()))],
+      Some(other) => vec![AgentEvent::Unknown {
+        event_type: Some(format!("item.completed:{other}")),
+        raw: event.raw.clone(),
+      }],
+      None => vec![unknown_event("item.completed", event)],
     },
     CodexEventKind::TurnCompleted { usage } => {
       let mut events = Vec::new();
       if let Some(usage) = usage {
-        events.push(token_usage_event(usage));
+        events.push(token_usage_event(usage, Some(event.raw.clone())));
       }
-      events.push(AgentEvent::Completed);
+      events.push(AgentEvent::Completed {
+        raw: Some(event.raw.clone()),
+      });
       events
     },
     CodexEventKind::Error { message } => vec![AgentEvent::Error {
       detail: message.clone().unwrap_or_default(),
+      raw: Some(event.raw.clone()),
     }],
     CodexEventKind::Unknown { event_type } => {
       tracing::debug!(
@@ -323,20 +330,29 @@ fn map_events(event: &CodexEvent) -> Vec<AgentEvent> {
         codex_event_type = event_type.as_deref().unwrap_or("unknown"),
         "codex event ignored: unknown type",
       );
-      Vec::new()
+      vec![AgentEvent::Unknown {
+        event_type: event_type.clone(),
+        raw: event.raw.clone(),
+      }]
     },
   }
 }
 
-fn token_usage_event(usage: &CodexUsage) -> AgentEvent {
+fn token_usage_event(usage: &CodexUsage, raw: Option<Value>) -> AgentEvent {
   AgentEvent::TokenUsage {
     input: usage.input_tokens,
     output: usage.output_tokens,
     cache_read: usage.cached_input_tokens,
+    raw,
   }
 }
 
-fn rate_limit_event(scope: &Option<String>, remaining: Option<u64>, reset_at: &Option<String>) -> AgentEvent {
+fn rate_limit_event(
+  scope: &Option<String>,
+  remaining: Option<u64>,
+  reset_at: &Option<String>,
+  raw: Option<Value>,
+) -> AgentEvent {
   let reset_at = reset_at
     .as_deref()
     .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
@@ -347,6 +363,30 @@ fn rate_limit_event(scope: &Option<String>, remaining: Option<u64>, reset_at: &O
     remaining: remaining.unwrap_or(0),
     reset_at,
     observed_at: chrono::Utc::now(),
+    raw,
+  }
+}
+
+fn tool_call_event(item: Option<&Value>, raw: Option<Value>) -> AgentEvent {
+  let id = item
+    .and_then(|item| item.get("id").or_else(|| item.get("call_id")))
+    .and_then(Value::as_str)
+    .map(ToString::to_string);
+  let name = item
+    .and_then(|item| item.get("name").or_else(|| item.get("tool_name")))
+    .and_then(Value::as_str)
+    .map(ToString::to_string);
+  let input = item
+    .and_then(|item| item.get("input").or_else(|| item.get("arguments")))
+    .cloned();
+
+  AgentEvent::ToolCall { id, name, input, raw }
+}
+
+fn unknown_event(event_type: &str, event: &CodexEvent) -> AgentEvent {
+  AgentEvent::Unknown {
+    event_type: Some(event_type.to_string()),
+    raw: event.raw.clone(),
   }
 }
 
@@ -363,6 +403,10 @@ mod tests {
 
   fn parse_one(line: &str) -> Option<AgentEvent> {
     parse_events(line).into_iter().next()
+  }
+
+  fn raw(line: &str) -> serde_json::Value {
+    serde_json::from_str(line).expect("fixture is valid JSON")
   }
 
   #[test]
@@ -401,6 +445,7 @@ mod tests {
       parse_one(line),
       Some(AgentEvent::SessionStarted {
         session_id: "S-1".into(),
+        raw: Some(raw(line)),
       })
     );
   }
@@ -408,7 +453,13 @@ mod tests {
   #[test]
   fn agent_message_maps_to_message() {
     let line = r#"{"id":"evt-1","msg":{"type":"agent_message","message":"hi"}}"#;
-    assert_eq!(parse_one(line), Some(AgentEvent::Message { text: "hi".into() }));
+    assert_eq!(
+      parse_one(line),
+      Some(AgentEvent::Message {
+        text: "hi".into(),
+        raw: Some(raw(line)),
+      })
+    );
   }
 
   #[test]
@@ -420,6 +471,7 @@ mod tests {
         input: 10,
         output: 20,
         cache_read: 5,
+        raw: Some(raw(line)),
       })
     );
   }
@@ -427,13 +479,19 @@ mod tests {
   #[test]
   fn turn_complete_maps_to_completed() {
     let line = r#"{"id":"evt-3","msg":{"type":"turn_complete"}}"#;
-    assert_eq!(parse_one(line), Some(AgentEvent::Completed));
+    assert_eq!(parse_one(line), Some(AgentEvent::Completed { raw: Some(raw(line)) }));
   }
 
   #[test]
-  fn unknown_event_has_no_semantic_mapping() {
+  fn unknown_event_retains_raw_provider_line() {
     let line = r#"{"id":"evt-4","msg":{"type":"future_event_kind"}}"#;
-    assert_eq!(parse_events(line), Vec::<AgentEvent>::new());
+    assert_eq!(
+      parse_events(line),
+      vec![AgentEvent::Unknown {
+        event_type: Some("future_event_kind".into()),
+        raw: raw(line),
+      }]
+    );
   }
 
   #[test]
@@ -452,8 +510,9 @@ mod tests {
   fn error_event_maps_to_provider_error() {
     let line = r#"{"id":"evt-6","msg":{"type":"error","message":"boom"}}"#;
     match parse_one(line) {
-      Some(AgentEvent::Error { detail }) => {
+      Some(AgentEvent::Error { detail, raw: event_raw }) => {
         assert_eq!(detail, "boom");
+        assert_eq!(event_raw, Some(raw(line)));
       },
       other => panic!("expected Error, got {other:?}"),
     }
@@ -466,6 +525,7 @@ mod tests {
       parse_events(line),
       vec![AgentEvent::SessionStarted {
         session_id: "T-1".into(),
+        raw: Some(raw(line)),
       }]
     );
   }
@@ -473,7 +533,27 @@ mod tests {
   #[test]
   fn current_item_completed_agent_message_maps_to_message() {
     let line = r#"{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"hello"}}"#;
-    assert_eq!(parse_events(line), vec![AgentEvent::Message { text: "hello".into() }]);
+    assert_eq!(
+      parse_events(line),
+      vec![AgentEvent::Message {
+        text: "hello".into(),
+        raw: Some(raw(line)),
+      }]
+    );
+  }
+
+  #[test]
+  fn current_item_completed_tool_call_maps_to_tool_call() {
+    let line = r#"{"type":"item.completed","item":{"id":"tool_0","type":"tool_call","name":"shell","arguments":"{}"}}"#;
+    assert_eq!(
+      parse_events(line),
+      vec![AgentEvent::ToolCall {
+        id: Some("tool_0".into()),
+        name: Some("shell".into()),
+        input: Some(serde_json::json!("{}")),
+        raw: Some(raw(line)),
+      }]
+    );
   }
 
   #[test]
@@ -486,8 +566,9 @@ mod tests {
           input: 10,
           output: 2,
           cache_read: 4,
+          raw: Some(raw(line)),
         },
-        AgentEvent::Completed,
+        AgentEvent::Completed { raw: Some(raw(line)) },
       ]
     );
   }
@@ -518,7 +599,7 @@ mod tests {
       "fixture must contribute a TokenUsage"
     );
     assert!(
-      events.iter().filter(|e| matches!(e, AgentEvent::Completed)).count() == 1,
+      events.iter().filter(|e| matches!(e, AgentEvent::Completed { .. })).count() == 1,
       "turn.completed yields one Completed"
     );
   }

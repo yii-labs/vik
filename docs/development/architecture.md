@@ -183,7 +183,7 @@ Session spawn:
 6. Build provider command.
 7. Spawn the child process.
 8. Stream stdout lines into adapter event mapping.
-9. Write typed provider records and decoded semantic `AgentEvent` JSONL.
+9. Write provider-neutral `AgentEvent` JSONL with raw provider JSON attached.
 10. Update `SessionSnapshot`.
 
 Session logs live at:
@@ -197,16 +197,16 @@ watchdog config in workflow schema.
 
 ## Agents
 
-`AgentAdapter` has three methods:
+`AgentAdapter` has two methods:
 
 - `build_command(&self, profile, prompt) -> AgentCommand`
-- `provider_event(&self, line) -> Result<AgentEvent, serde_json::Error>`
-- `map_event(&self, event) -> Vec<AgentEvent>`
+- `map_line(&self, line) -> Result<Vec<AgentEvent>, serde_json::Error>`
 
 Provider-specific event definitions live in the adapter modules. Codex
 JSONL parses into `CodexEvent`, Claude Code JSONL parses into
-`ClaudeCodeEvent`, and each implements conversion into the shared
-`AgentEvent` session vocabulary.
+`ClaudeCodeEvent`, and each adapter maps those records into the shared
+provider-neutral `AgentEvent` session vocabulary. Known tool calls become
+`ToolCall`; future or unmodeled provider lines become `Unknown` with raw JSON.
 
 `get_adapter(runtime)` returns a stateless adapter:
 
@@ -296,7 +296,7 @@ Runtime artifacts:
 | `<root>/service/state.json`                                | daemon   | pid and lifecycle state   |
 | `<root>/logs/vik.log.YYYY-MM-DD`                           | logging  | INFO+ log events          |
 | `<root>/logs/vik-error.log.YYYY-MM-DD`                     | logging  | ERROR-only log events     |
-| `<root>/sessions/<issue_id>/<stage_name>-<uuid-v7>.jsonl`  | session  | typed provider and semantic AgentEvent stream |
+| `<root>/sessions/<issue_id>/<stage_name>-<uuid-v7>.jsonl`  | session  | provider-neutral AgentEvent stream with raw JSON |
 | `<root>/issues/<issue_id>/`                                | operator | issue workspace           |
 
 ## Daemon
