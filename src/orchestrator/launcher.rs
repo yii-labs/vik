@@ -110,7 +110,7 @@ impl StageLauncher {
       tokens_input = terminal.tokens.input,
       tokens_output = terminal.tokens.output,
       tokens_cache_read = terminal.tokens.cache_read,
-      "stage terminal",
+      "stage finished",
     );
 
     self.producer.stage_terminal(key, terminal).await;

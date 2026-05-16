@@ -211,14 +211,13 @@ impl Session {
 
   async fn prepare(&self) -> Result<AgentCommand, SessionError> {
     self.set_state(SessionState::Preparing);
+    tracing::info!("session preparing");
 
     if let Some(parent) = self.log_file().parent() {
       fs::create_dir_all(parent).await?;
     }
 
-    // render the prompt template
     let prompt = self.render_prompt().await?;
-    tracing::info!("session preparing");
 
     Ok(self.agent.build_command(&self.profile, prompt))
   }
