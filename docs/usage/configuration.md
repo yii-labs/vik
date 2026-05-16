@@ -43,6 +43,13 @@ issue:
         state: plan
       agent: codex-medium
       prompt_file: ./.agents/prompts/plan.md
+
+    small-fix:
+      when:
+        state: small-fix
+      agent: codex-medium
+      prompt: |
+        Fix issue {{ issue.id }}: {{ issue.title }}
 ```
 
 Validate:
@@ -54,7 +61,7 @@ vik doctor --json ./workflow.yml
 ```
 
 Current `doctor` checks YAML load and schema diagnostics. It does not check
-prompt file existence, CLI binaries, auth, or external tracker access.
+`prompt_file` existence, CLI binaries, auth, or external tracker access.
 
 ## Loop
 
@@ -174,7 +181,13 @@ Each stage requires:
 
 - `when.state`: exact issue state that triggers the stage.
 - `agent`: agent profile name.
-- `prompt_file`: prompt file for the stage.
+- exactly one prompt source:
+  - `prompt_file`: prompt file for the stage, resolved relative to the
+    workflow file directory.
+  - `prompt`: inline prompt text.
+
+`prompt_file` and `prompt` are mutually exclusive. Empty prompt paths and
+empty or whitespace-only inline prompts fail validation.
 
 Dispatch uses exact, case-sensitive state match:
 

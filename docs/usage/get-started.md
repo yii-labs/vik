@@ -161,8 +161,9 @@ then tune.
 
 ## 5. Tell Vik what to do per state
 
-For each tracker state, Vik runs a stage: a prompt file given to your
-agent. Create a prompts folder and a starter prompt:
+For each tracker state, Vik runs a stage: a prompt source given to your
+agent. Most workflows use prompt files. Create a prompts folder and a starter
+prompt:
 
 ```sh
 mkdir -p ./prompts
@@ -179,7 +180,8 @@ move it to the `work` state.
 ```
 
 Then add `issue.stages` to `workflow.yml`. The `when.state` value
-must match exactly what your pull command returns.
+must match exactly what your pull command returns. Each stage must set exactly
+one prompt source: `prompt_file` or inline `prompt`.
 
 ```yaml
 issue:
@@ -191,8 +193,21 @@ issue:
       prompt_file: ./prompts/plan.md
 ```
 
+Small prompts can live inline instead:
+
+```yaml
+issue:
+  stages:
+    plan:
+      when:
+        state: todo
+      agent: coder
+      prompt: |
+        Plan issue {{ issue.id }}: {{ issue.title }}
+```
+
 You can add more stages over time — one per state you want Vik to
-react to. Write a prompt file for each.
+react to. Give each stage one prompt source.
 
 > Vik never updates the tracker on its own. Your prompts must tell
 > the agent how to leave comments, change labels, open PRs, etc.

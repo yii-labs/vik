@@ -38,7 +38,7 @@ use tokio::sync::watch;
 use tracing::Instrument;
 
 use crate::agent::{AgentAdapter, AgentCommand, AgentStdin, get_adapter};
-use crate::config::AgentProfileSchema;
+use crate::config::{AgentProfileSchema, IssueStagePromptSource};
 use crate::context::{Issue, IssueStage};
 use crate::shell::{Child, CommandExecError, CommandExt};
 use crate::template::{PromptRenderer, TemplateError};
@@ -56,6 +56,8 @@ pub enum SessionError {
   TemplateRender(#[from] TemplateError),
   #[error("prompt path `{0}` could not be resolved")]
   PromptPath(PathBuf),
+  #[error("stage `{0}` must define exactly one prompt source: `prompt_file` or `prompt`")]
+  PromptSource(String),
   #[error(transparent)]
   WriteLog(#[from] std::io::Error),
 }
@@ -224,21 +226,32 @@ impl Session {
 
   async fn render_prompt(&self) -> Result<String, SessionError> {
     let renderer = PromptRenderer::new();
-    let prompt_file = self
-      .stage
-      .workflow()
-      .resolve_path(&self.stage().stage().prompt_file)
-      .ok_or_else(|| SessionError::PromptPath(self.stage().stage().prompt_file.clone()))?;
+    let template = match self
+      .stage()
+      .stage()
+      .prompt_source()
+      .ok_or_else(|| SessionError::PromptSource(self.stage().stage_name().to_string()))?
+    {
+      IssueStagePromptSource::File(prompt_file) => {
+        let prompt_file = self
+          .stage
+          .workflow()
+          .resolve_path(prompt_file)
+          .ok_or_else(|| SessionError::PromptPath(prompt_file.to_path_buf()))?;
 
-    let mut file = File::open(&prompt_file)
-      .await
-      .map_err(|err| SessionError::TemplateRender(TemplateError::Io(err)))?;
+        let mut file = File::open(&prompt_file)
+          .await
+          .map_err(|err| SessionError::TemplateRender(TemplateError::Io(err)))?;
 
-    let mut template = String::new();
-    file
-      .read_to_string(&mut template)
-      .await
-      .map_err(|err| SessionError::TemplateRender(TemplateError::Io(err)))?;
+        let mut template = String::new();
+        file
+          .read_to_string(&mut template)
+          .await
+          .map_err(|err| SessionError::TemplateRender(TemplateError::Io(err)))?;
+        template
+      },
+      IssueStagePromptSource::Inline(prompt) => prompt.to_string(),
+    };
 
     Ok(renderer.render(&template, &self.stage).await?)
   }
@@ -395,6 +408,9 @@ async fn stream_agent_events(
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::config::AgentRuntime;
+  use crate::context::IssueRun;
+  use crate::workflow::Workflow;
 
   fn session_inner() -> (SessionInner, watch::Sender<SessionState>) {
     let snapshot = SessionSnapshot {
@@ -411,6 +427,52 @@ mod tests {
       },
       state_notifier,
     )
+  }
+
+  fn session_for_stage(stage: IssueStage) -> Session {
+    let (inner, state_notifier) = session_inner();
+
+    Session {
+      stage,
+      profile: AgentProfileSchema::new(AgentRuntime::Codex, "gpt-5.5".to_string()),
+      agent: get_adapter(AgentRuntime::Codex),
+      inner: Arc::new(Mutex::new(inner)),
+      state_notifier,
+    }
+  }
+
+  fn issue(id: &str, state: &str) -> Issue {
+    Issue {
+      id: id.to_string(),
+      title: "Inline prompt issue".to_string(),
+      description: String::new(),
+      state: state.to_string(),
+      extra_payload: serde_yaml::Mapping::new(),
+    }
+  }
+
+  #[tokio::test]
+  async fn inline_prompt_renders_issue_variables_and_prompt_commands() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workflow = Arc::new(
+      Workflow::builder()
+        .workflow_path(temp.path().join("workflow.yml"))
+        .workspace_root(temp.path().join(".vik"))
+        .add_inline_stage(
+          "plan",
+          "todo",
+          "plan issue {{ issue.id }} with !`exec(printf command-output)`",
+        )
+        .build(),
+    );
+    let issue_run = Arc::new(IssueRun::new(Arc::clone(&workflow), issue("79", "todo")));
+    let stage_schema = workflow.stages().get("plan").expect("stage exists").clone();
+    let stage = IssueStage::new(issue_run, "plan".to_string(), stage_schema);
+    let session = session_for_stage(stage);
+
+    let rendered = session.render_prompt().await.expect("inline prompt renders");
+
+    assert_eq!(rendered, "plan issue 79 with command-output");
   }
 
   #[test]

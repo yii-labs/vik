@@ -166,6 +166,8 @@ pub enum DiagnosticCode {
   EmptyStr,
   EmptyMap,
   UnknownAgent(String),
+  MissingOneOf(Vec<String>),
+  MutuallyExclusiveFields(Vec<String>),
 }
 
 impl Display for Diagnostic {
@@ -181,6 +183,18 @@ impl Display for Diagnostic {
         f,
         "agent profile '{}' set for '{}' is not defined in agents configuration section",
         agent, self.pointer
+      ),
+      DiagnosticCode::MissingOneOf(fields) => write!(
+        f,
+        "'{}' must define one of {}",
+        self.pointer,
+        fields.iter().map(|field| format!("'{field}'")).collect::<Vec<_>>().join(", ")
+      ),
+      DiagnosticCode::MutuallyExclusiveFields(fields) => write!(
+        f,
+        "'{}' fields are mutually exclusive: {}",
+        self.pointer,
+        fields.iter().map(|field| format!("'{field}'")).collect::<Vec<_>>().join(", ")
       ),
     }
   }

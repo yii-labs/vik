@@ -3,7 +3,7 @@
 Vik does not talk to Linear on its own. Listing issues, reading
 detail, leaving comments, moving state — every tracker action is
 something *you* tell Vik to do through `issues.pull.command` or
-through commands written into your stage prompt files.
+through commands written into your stage prompt sources.
 
 This guide assumes you have read [Get Started](../get-started.md) and
 have a working `workflow.yml`. There are two integration surfaces and

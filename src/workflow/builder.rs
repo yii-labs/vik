@@ -69,6 +69,20 @@ impl WorkflowBuilder {
     self
   }
 
+  pub fn add_inline_stage(
+    mut self,
+    name: impl Into<String>,
+    state: impl Into<String>,
+    prompt: impl Into<String>,
+  ) -> Self {
+    self
+      .schema
+      .issue
+      .stages
+      .insert(name.into(), IssueStageSchema::new(state).with_prompt(prompt));
+    self
+  }
+
   pub fn build(self) -> Workflow {
     Workflow::from_schema_unchecked(self.workflow_path, self.schema)
       .expect("Test workflow builder must build successfully")

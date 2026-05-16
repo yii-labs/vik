@@ -4,7 +4,7 @@
 
 **Workflow Definition**:
 A project workflow policy stored as `workflow.yml`. It declares loop settings,
-workspace root, agent profiles, issue intake, issue stages, prompt files, and
+workspace root, agent profiles, issue intake, issue stages, prompt sources, and
 hooks. Parsed type: `WorkflowSchema`.
 _Avoid_: `WORKFLOW.md`, workflow prompt, hidden tracker config
 
@@ -34,7 +34,7 @@ _Avoid_: app-server turn model, multi-turn resume
 
 **Issue Stage**:
 A named workflow step under `issue.stages`. It matches a user-owned issue state
-by exact string equality and selects one agent profile plus one prompt file.
+by exact string equality and selects one agent profile plus one prompt source.
 _Avoid_: normalized status, built-in state machine
 
 **Workflow State**:
@@ -43,14 +43,15 @@ An opaque string returned by intake as `issue.state` and matched against
 _Avoid_: status normalization, Linear-only state
 
 **Prompt Source**:
-A prompt file referenced by `workflow.yml`. Vik renders MiniJinja first, then
-expands source-local prompt commands with ``!`exec(command)` `` or
+Either a `prompt_file` path or inline `prompt` text referenced by
+`workflow.yml`. Vik renders MiniJinja first, then expands source-local prompt
+commands with ``!`exec(command)` `` or
 ```exec(command)` ``.
-_Avoid_: inline workflow prompt, generated command injection
+_Avoid_: generated command injection, hidden prompt source
 
 **Issue Management Command**:
-A user-authored command or instruction in prompt files. Vik does not inject a
-tracker tool. Prompts must say how to read or update state, comments,
+A user-authored command or instruction in prompt sources. Vik does not inject
+a tracker tool. Prompts must say how to read or update state, comments,
 attachments, branches, pull requests, and links.
 _Avoid_: `vik_issue`, dynamic tracker tool, hidden issue API
 
