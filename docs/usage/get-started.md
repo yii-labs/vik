@@ -12,6 +12,27 @@ every command from the same folder you are working in.
 > Never paste API keys into chat, commit them to git, or print them
 > with `echo` / `cat`. Keep secrets in environment variables.
 
+## Install Vik
+
+Install the latest release binary:
+
+```sh
+curl -fsSL https://github.com/yii-labs/vik/releases/latest/download/install.sh | sh -
+```
+
+The installer supports Linux x64, Linux arm64, and macOS arm64. It installs to
+`~/.local/bin` by default. Override that with `VIK_INSTALL_DIR`:
+
+```sh
+curl -fsSL https://github.com/yii-labs/vik/releases/latest/download/install.sh | VIK_INSTALL_DIR=/usr/local/bin sh -
+```
+
+You can also install from crates.io:
+
+```sh
+cargo install vik --locked
+```
+
 ## What you need first
 
 - A terminal you are comfortable using.
@@ -57,17 +78,12 @@ Add to `workflow.yml`:
 workspace: {}
 ```
 
-Create the parent directory Vik needs before first run:
-
-```sh
-mkdir -p "${VIK_HOME:-$HOME}/workflows"
-```
-
 You can also set `workspace.root` to an absolute path like
 `/Users/you/vik-workspaces`.
 Relative paths resolve from the directory that contains `workflow.yml`.
 Vik adds `workflows/<workflow-path-key>/` under that root so different
-workflow files do not collide.
+workflow files do not collide. `vik run` creates that directory if it is
+missing.
 
 ## 3. Pick a coding agent
 
@@ -127,7 +143,7 @@ need later (read details, leave comments, change state, etc.).
 Whichever you pick, every issue your pull command emits must include
 at least:
 
-- `id` — a unique identifier (string).
+- `id` — a unique issue id string.
 - `title` — the issue title.
 - `state` — the state Vik will match on. Case-sensitive.
 
@@ -196,8 +212,8 @@ issue:
     # ... same stages as before
 ```
 
-The hook must be safe to run more than once: Vik replays it every
-matched cycle if the issue is still around.
+Vik skips `after_create` when the issue folder already exists. If setup fails
+halfway through, clean or repair that folder before relying on the hook again.
 
 ## 7. Validate before running
 

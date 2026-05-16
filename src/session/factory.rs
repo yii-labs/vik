@@ -1,8 +1,7 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::{Session, SessionError};
-use crate::{config::IssueStage, context::Issue, workflow::Workflow};
+use crate::{context::IssueStage, workflow::Workflow};
 
 /// Spawn boundary between the orchestrator and `Session`. Resolving the
 /// agent profile here keeps `Session::spawn`'s error surface focused on
@@ -18,18 +17,8 @@ impl SessionFactory {
     SessionFactory { workflow }
   }
 
-  pub async fn spawn(&self, issue: Issue, stage: IssueStage) -> Result<Session, SessionError> {
-    let issue_workdir = self.workflow.workspace().issue_workdir(&issue.id);
-    self.spawn_named(issue, String::new(), stage, issue_workdir).await
-  }
-
-  pub async fn spawn_named(
-    &self,
-    issue: Issue,
-    stage_name: impl Into<String>,
-    stage: IssueStage,
-    issue_workdir: PathBuf,
-  ) -> Result<Session, SessionError> {
+  pub async fn spawn_stage(&self, issue_stage: IssueStage) -> Result<Session, SessionError> {
+    let stage = issue_stage.stage();
     let profile = match self.workflow.agents().get(&stage.agent) {
       Some(profile) => profile,
       None => {
@@ -39,14 +28,6 @@ impl SessionFactory {
       },
     };
 
-    Session::spawn(
-      Arc::clone(&self.workflow),
-      issue,
-      stage_name.into(),
-      stage,
-      issue_workdir,
-      profile.clone(),
-    )
-    .await
+    Session::spawn(issue_stage, profile.clone()).await
   }
 }

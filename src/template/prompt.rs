@@ -3,11 +3,12 @@
 use std::time::Duration;
 
 use regex::Regex;
+use serde::Serialize;
 use tokio::process::Command;
 
 use crate::{
   shell::{CommandExecError, CommandExt},
-  template::{Context, TemplateError, jinja::JinjaRenderer},
+  template::{TemplateError, jinja::JinjaRenderer},
 };
 
 pub struct PromptRenderer {
@@ -27,9 +28,27 @@ impl PromptRenderer {
     }
   }
 
-  pub async fn render(&self, template: &str, context: &Context) -> Result<String, TemplateError> {
-    let jinja_rendered = self.inner.render(template, &context.build())?;
+  pub async fn render<Context: Serialize>(&self, template: &str, context: Context) -> Result<String, TemplateError> {
+    let jinja_rendered = self.inner.render(template, context)?;
     self.render_prompt(jinja_rendered).await
+  }
+
+  pub fn with_value<K: Into<String>, V: Serialize>(&mut self, key: K, value: V) -> &mut Self {
+    self.inner.with_value(key, value);
+    self
+  }
+
+  pub fn with_values<K: Into<String>, V: Serialize, It: Iterator<Item = (K, V)>>(&mut self, iter: It) -> &mut Self {
+    self.inner.with_values(iter);
+    self
+  }
+
+  pub fn with_envs<K: Into<String>, V: Into<String>, It: Iterator<Item = (K, V)>>(&mut self, iter: It) {
+    self.inner.with_envs(iter);
+  }
+
+  pub fn with_env<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) {
+    self.inner.with_env(key, value);
   }
 
   async fn render_prompt(&self, template: String) -> Result<String, TemplateError> {
@@ -122,18 +141,15 @@ fn shell_command(command: &str) -> Command {
 
 #[cfg(test)]
 mod tests {
-  use crate::template::Context as TemplateContext;
+  use serde_json::json;
 
   use super::*;
 
   #[tokio::test]
   async fn renders_jinja_before_executing_prompt_command() {
     let renderer = PromptRenderer::new();
-    let mut context = TemplateContext::new();
-    context.with("name", "world");
-
     let rendered = renderer
-      .render("hello !`exec(printf {{ name }})`", &context)
+      .render("hello !`exec(printf {{ name }})`", json!({ "name": "world" }))
       .await
       .expect("render");
 
@@ -143,10 +159,9 @@ mod tests {
   #[tokio::test]
   async fn executes_all_prompt_commands_and_keeps_output_order() {
     let renderer = PromptRenderer::new();
-    let context = TemplateContext::new();
 
     let rendered = renderer
-      .render("!`exec(printf first)` then !`exec(printf second)`", &context)
+      .render("!`exec(printf first)` then !`exec(printf second)`", json!({}))
       .await
       .expect("render");
 
@@ -156,14 +171,14 @@ mod tests {
   #[tokio::test]
   async fn nonzero_prompt_command_returns_template_error() {
     let renderer = PromptRenderer::new();
-    let context = TemplateContext::new();
+
     #[cfg(windows)]
     let fail_command = "echo bad 1>&2 & exit /b 7";
     #[cfg(not(windows))]
     let fail_command = "echo bad >&2; exit 7";
 
     let err = renderer
-      .render(&format!("before !`exec({fail_command})` after"), &context)
+      .render(&format!("before !`exec({fail_command})` after"), json!({}))
       .await
       .expect_err("command must fail");
 

@@ -1,8 +1,8 @@
 # Stateless Reconciliation Model
 
-Vik does not own issue state. Each intake cycle asks the issue prompt for
-current issues, matches `issue.state` to `issue.stages.<stage>.when.state`, and
-dispatches every matched stage that is not already running or reserved.
+Vik does not own issue state. Each intake cycle runs `issues.pull.command`,
+matches `issue.state` to `issue.stages.<stage>.when.state`, and dispatches
+every matched stage that is not already running or reserved.
 
 State transitions between stages happen through prompt-authored commands that
 update the external tracker. Vik observes the new state on a later intake
@@ -15,5 +15,5 @@ truth makes Vik recoverable from crashes with no durable running-state store.
 Current runtime guards:
 
 - Deduplicate `(issue.id, stage.name)` while running or reserved.
-- Limit active issue identifiers with `loop.max_issue_concurrency`.
+- Limit active issue ids with `loop.max_issue_concurrency`.
 - Preserve stage author order when multiple stages match one state.

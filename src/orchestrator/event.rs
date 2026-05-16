@@ -6,15 +6,11 @@
 //! transition visible at one site — the only place [`super::running::RunningMap`]
 //! is mutated.
 
-use std::path::PathBuf;
-
 use tokio::sync::mpsc;
 
-use crate::context::Issue;
+use crate::context::{Issue, IssueStage, IssueStageKey};
 use crate::logging::Phase;
 use crate::session::{Session, SessionSnapshot};
-
-use super::types::{IssueStage, IssueStageKey};
 
 /// Bounded so a slow main loop applies backpressure to producers. 256 is
 /// large enough to swallow a normal intake burst without forcing intake
@@ -41,12 +37,9 @@ impl EventProducer {
     self.send(OrchestratorEvent::Intake(IntakeEvent::Stopped)).await;
   }
 
-  pub(super) async fn issue_ready(&self, issue_stages: Vec<IssueStage>, issue_workdir: PathBuf) {
+  pub(super) async fn issue_ready(&self, issue_stages: Vec<IssueStage>) {
     self
-      .send(OrchestratorEvent::Stage(StageEvent::IssueReady {
-        issue_stages,
-        issue_workdir,
-      }))
+      .send(OrchestratorEvent::Stage(StageEvent::IssueReady { issue_stages }))
       .await;
   }
 
@@ -104,6 +97,8 @@ pub(super) fn event_channel() -> (EventProducer, EventConsumer) {
   (EventProducer { sender }, EventConsumer { receiver })
 }
 
+// TODO: FIXME
+#[allow(clippy::large_enum_variant)]
 pub(super) enum OrchestratorEvent {
   Intake(IntakeEvent),
   Stage(StageEvent),
@@ -118,10 +113,11 @@ pub(super) enum IntakeEvent {
   Stopped,
 }
 
+// TODO: FIXME
+#[allow(clippy::large_enum_variant)]
 pub(super) enum StageEvent {
   IssueReady {
     issue_stages: Vec<IssueStage>,
-    issue_workdir: PathBuf,
   },
   Started {
     issue_stage: Box<IssueStage>,
@@ -139,4 +135,27 @@ pub(super) enum StageEvent {
     key: IssueStageKey,
     error: String,
   },
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[tokio::test]
+  async fn producer_delivers_intake_events_in_order() {
+    let (producer, mut consumer) = event_channel();
+
+    producer.intake_failed("pull failed").await;
+    producer.intake_stopped().await;
+
+    match consumer.recv().await.expect("first event") {
+      OrchestratorEvent::Intake(IntakeEvent::Failed(error)) => assert_eq!(error, "pull failed"),
+      _ => panic!("expected intake failure"),
+    }
+
+    match consumer.recv().await.expect("second event") {
+      OrchestratorEvent::Intake(IntakeEvent::Stopped) => {},
+      _ => panic!("expected intake stopped"),
+    }
+  }
 }

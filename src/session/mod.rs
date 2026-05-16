@@ -19,12 +19,13 @@ mod factory;
 mod jsonl_writer;
 mod snapshot;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub use crate::agent::AgentEvent;
+use crate::logging::session_span;
 pub use factory::*;
 pub use snapshot::*;
 
@@ -35,14 +36,13 @@ use tokio::fs::{self, File};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdout, Command};
 use tokio::sync::watch;
-use uuid::Uuid;
+use tracing::Instrument;
 
 use crate::agent::{AgentAdapter, AgentCommand, AgentStdin, get_adapter};
-use crate::config::{AgentProfileSchema, IssueStage};
-use crate::context::Issue;
+use crate::config::AgentProfileSchema;
+use crate::context::{Issue, IssueStage};
 use crate::shell::{Child, CommandExecError, CommandExt};
-use crate::template::{Context as TemplateContext, PromptRenderer, StageContext, TemplateError};
-use crate::workflow::Workflow;
+use crate::template::{PromptRenderer, TemplateError};
 
 use self::jsonl_writer::JsonlWriter;
 
@@ -61,20 +61,11 @@ pub enum SessionError {
   WriteLog(#[from] std::io::Error),
 }
 
-struct SessionOptions {
-  workflow: Arc<Workflow>,
-  log_file: PathBuf,
-  issue_workdir: PathBuf,
-  issue: Issue,
-  stage_name: String,
-  stage: IssueStage,
-  profile: AgentProfileSchema,
-}
-
 #[derive(Clone)]
 pub struct Session {
+  stage: IssueStage,
+  profile: AgentProfileSchema,
   agent: Arc<dyn AgentAdapter>,
-  opts: Arc<SessionOptions>,
   inner: Arc<Mutex<SessionInner>>,
   state_notifier: watch::Sender<SessionState>,
 }
@@ -86,46 +77,24 @@ struct SessionInner {
 }
 
 impl Session {
-  pub(super) async fn spawn(
-    workflow: Arc<Workflow>,
-    issue: Issue,
-    stage_name: String,
-    stage: IssueStage,
-    issue_workdir: PathBuf,
-    profile: AgentProfileSchema,
-  ) -> Result<Self, SessionError> {
-    let now = Utc::now();
-    // State prefix is for human eyeballing; UUIDv7 keeps names unique
-    // and sorts runs within one state. Provider session ids land inside
-    // the JSONL, not in the filename, because they are not always known
-    // when the file must be created.
-    let log_file = workflow
-      .workspace()
-      .issue_sessions_dir(&issue.id)
-      .join(session_log_file_name(&issue.state, Uuid::now_v7()));
+  pub(super) async fn spawn(stage: IssueStage, profile: AgentProfileSchema) -> Result<Self, SessionError> {
+    let _span = session_span(profile.runtime.as_ref());
 
-    let opts = SessionOptions {
-      workflow,
-      log_file,
-      issue_workdir,
-      issue,
-      stage_name,
-      stage,
-      profile,
-    };
+    let now = Utc::now();
 
     let snapshot = SessionSnapshot {
       started_at: now,
       ..Default::default()
     };
 
-    let agent = get_adapter(opts.profile.runtime);
+    let agent = get_adapter(profile.runtime);
 
     let (state_notifier, _) = watch::channel(snapshot.state);
 
     let session = Self {
+      stage,
+      profile,
       agent,
-      opts: Arc::new(opts),
       inner: Arc::new(Mutex::new(SessionInner {
         snapshot,
         writer: None,
@@ -134,26 +103,22 @@ impl Session {
       state_notifier,
     };
 
-    let child = session.spawn_inner().await?;
+    let child = session.spawn_inner().in_current_span().await?;
     session.inner.lock().expect("session mutex never poisoned").child = Some(child);
 
     Ok(session)
   }
 
   pub fn id(&self) -> &str {
-    &self.opts.issue.id
+    &self.stage.issue().id
   }
 
   pub fn issue(&self) -> &Issue {
-    &self.opts.issue
+    self.stage.issue()
   }
 
   pub fn stage(&self) -> &IssueStage {
-    &self.opts.stage
-  }
-
-  pub fn profile(&self) -> &AgentProfileSchema {
-    &self.opts.profile
+    &self.stage
   }
 
   pub fn snapshot(&self) -> SessionSnapshot {
@@ -164,8 +129,8 @@ impl Session {
     self.inner.lock().expect("session mutex never poisoned").snapshot.state
   }
 
-  pub fn log_file(&self) -> &PathBuf {
-    &self.opts.log_file
+  pub fn log_file(&self) -> &Path {
+    self.stage.log_file()
   }
 
   pub fn terminated(&self) -> bool {
@@ -205,7 +170,7 @@ impl Session {
 
     let mut command = Command::new(&agent_command.program);
     command
-      .current_dir(&self.opts.issue_workdir)
+      .current_dir(self.stage.workdir())
       .args(agent_command.args)
       .stdout(Stdio::piped())
       .stderr(Stdio::null());
@@ -255,16 +220,16 @@ impl Session {
     // render the prompt template
     let prompt = self.render_prompt().await?;
 
-    Ok(self.agent.build_command(self.profile(), prompt))
+    Ok(self.agent.build_command(&self.profile, prompt))
   }
 
   async fn render_prompt(&self) -> Result<String, SessionError> {
     let renderer = PromptRenderer::new();
     let prompt_file = self
-      .opts
-      .workflow
-      .resolve_path(&self.stage().prompt_file)
-      .ok_or_else(|| SessionError::PromptPath(self.stage().prompt_file.clone()))?;
+      .stage
+      .workflow()
+      .resolve_path(&self.stage().stage().prompt_file)
+      .ok_or_else(|| SessionError::PromptPath(self.stage().stage().prompt_file.clone()))?;
 
     let mut file = File::open(&prompt_file)
       .await
@@ -276,8 +241,7 @@ impl Session {
       .await
       .map_err(|err| SessionError::TemplateRender(TemplateError::Io(err)))?;
 
-    let context = render_context(self);
-    Ok(renderer.render(&template, &context).await?)
+    Ok(renderer.render(&template, &self.stage).await?)
   }
 
   fn set_state(&self, state: SessionState) {
@@ -407,18 +371,18 @@ async fn stream_agent_events(
       Ok(Some(line)) => {
         let events = map_agent_stdout_line(agent.as_ref(), &line);
 
+        let mut inner = inner.lock().expect("session mutex never poisoned");
         for event in events {
-          apply_agent_event(&inner, &state_notifier, event);
+          inner.apply_event(event, &state_notifier);
         }
       },
       Ok(None) => break,
       Err(err) => {
-        apply_agent_event(
-          &inner,
-          &state_notifier,
+        inner.lock().expect("session mutex never poisoned").apply_event(
           AgentEvent::Error {
             detail: err.to_string(),
           },
+          &state_notifier,
         );
         break;
       },
@@ -447,72 +411,6 @@ fn map_provider_value(agent: &dyn AgentAdapter, value: Value) -> Vec<AgentEvent>
   events.extend(semantic_events);
   events
 }
-
-fn apply_agent_event(
-  inner: &Arc<Mutex<SessionInner>>,
-  state_notifier: &watch::Sender<SessionState>,
-  event: AgentEvent,
-) {
-  inner
-    .lock()
-    .expect("session mutex never poisoned")
-    .apply_event(event, state_notifier);
-}
-
-fn render_context(session: &Session) -> TemplateContext {
-  let session = &session.opts;
-  let mut context = TemplateContext::new();
-
-  // Payload first, stage bindings second: a tracker that happens to
-  // include keys named `cwd`, `stage`, etc. cannot shadow the bindings
-  // the prompt author depends on.
-  for (key, value) in &session.issue.extra_payload {
-    let Some(key) = key.as_str() else {
-      continue;
-    };
-    let value = serde_json::to_value(value).unwrap_or(serde_json::Value::Null);
-    context.with(key, value);
-  }
-
-  let workspace_root = session.workflow.workspace().root().to_path_buf();
-
-  // Hook renderer and prompt renderer share `StageContext` so the two
-  // template surfaces cannot disagree on what `cwd` / `issue` / `stage`
-  // mean for one dispatch.
-  let stage_ctx = StageContext {
-    issue: &session.issue,
-    stage_name: &session.stage_name,
-    agent_profile: &session.stage.agent,
-    stage_state: &session.stage.when.state,
-    issue_workdir: &session.issue_workdir,
-    workspace_root: &workspace_root,
-  };
-  stage_ctx.apply(&mut context);
-
-  // Prompt-only extras the hook context does not need. The richer
-  // `stage` value here merges the schema with the orchestrator's
-  // stage name so prompts can address either form.
-  context.with("workflow", session.workflow.schema());
-  context.with("loop", &session.workflow.schema().loop_);
-  context.with("stage", stage_context_value(&session.stage, &session.stage_name));
-  context.with("profile", &session.profile);
-
-  context
-}
-
-fn stage_context_value(stage: &IssueStage, stage_name: &str) -> serde_json::Value {
-  let mut value = serde_json::to_value(stage).unwrap_or(serde_json::Value::Null);
-  if let serde_json::Value::Object(stage_value) = &mut value {
-    stage_value.insert("name".to_string(), serde_json::Value::String(stage_name.to_string()));
-    stage_value.insert("state".to_string(), serde_json::Value::String(stage.when.state.clone()));
-  }
-  value
-}
-
-fn session_log_file_name(issue_state: &str, session_id: Uuid) -> String {
-  format!("{issue_state}-{session_id}.jsonl")
-}
-
 #[cfg(test)]
 mod tests {
   use crate::{
@@ -522,14 +420,82 @@ mod tests {
 
   use super::*;
 
-  #[test]
-  fn session_log_file_name_puts_issue_state_before_uuid() {
-    let session_id = Uuid::nil();
+  fn session_inner() -> (SessionInner, watch::Sender<SessionState>) {
+    let snapshot = SessionSnapshot {
+      started_at: Utc::now(),
+      ..Default::default()
+    };
+    let (state_notifier, _) = watch::channel(snapshot.state);
 
-    assert_eq!(
-      session_log_file_name("todo", session_id),
-      "todo-00000000-0000-0000-0000-000000000000.jsonl"
+    (
+      SessionInner {
+        snapshot,
+        writer: None,
+        child: None,
+      },
+      state_notifier,
+    )
+  }
+
+  #[test]
+  fn token_usage_events_accumulate_without_overflow() {
+    let (mut inner, state_notifier) = session_inner();
+
+    inner.apply_event(
+      AgentEvent::TokenUsage {
+        input: u64::MAX - 1,
+        output: 10,
+        cache_read: 20,
+      },
+      &state_notifier,
     );
+    inner.apply_event(
+      AgentEvent::TokenUsage {
+        input: 10,
+        output: u64::MAX,
+        cache_read: 30,
+      },
+      &state_notifier,
+    );
+
+    assert_eq!(inner.snapshot.tokens.input, u64::MAX);
+    assert_eq!(inner.snapshot.tokens.output, u64::MAX);
+    assert_eq!(inner.snapshot.tokens.cache_read, 50);
+  }
+
+  #[test]
+  fn rate_limit_observation_keeps_latest_event_per_scope() {
+    let (mut inner, state_notifier) = session_inner();
+    let reset_at = "2026-05-16T10:15:30Z".parse().expect("test timestamp parses");
+    let stale = "2026-05-16T10:00:00Z".parse().expect("test timestamp parses");
+    let fresh = "2026-05-16T10:05:00Z".parse().expect("test timestamp parses");
+
+    inner.apply_event(
+      AgentEvent::RateLimit {
+        scope: "codex:tokens_per_min".into(),
+        remaining: 50,
+        reset_at,
+        observed_at: fresh,
+      },
+      &state_notifier,
+    );
+    inner.apply_event(
+      AgentEvent::RateLimit {
+        scope: "codex:tokens_per_min".into(),
+        remaining: 10,
+        reset_at,
+        observed_at: stale,
+      },
+      &state_notifier,
+    );
+
+    let observation = inner
+      .snapshot
+      .rate_limits
+      .get("codex:tokens_per_min")
+      .expect("rate limit observation stored");
+    assert_eq!(observation.remaining, 50);
+    assert_eq!(observation.observed_at, fresh);
   }
 
   #[test]

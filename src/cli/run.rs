@@ -256,3 +256,49 @@ fn format_command(workflow: &Workflow, args: &RunArgs) -> String {
   parts.push(workflow.workflow_path().display().to_string());
   parts.join(" ")
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn format_command_records_detached_http_args_and_workflow_path() {
+    let workflow = Workflow::builder().workflow_path("/tmp/vik-cli-tests/workflow.yml").build();
+    let args = RunArgs {
+      port: Some(8123),
+      bind_address: "0.0.0.0".to_string(),
+      detached: true,
+    };
+
+    assert_eq!(
+      format_command(&workflow, &args),
+      "vik run -d --port 8123 --bind-address 0.0.0.0 /tmp/vik-cli-tests/workflow.yml"
+    );
+  }
+
+  #[test]
+  fn resolve_bind_address_builds_socket_when_port_is_set() {
+    let args = RunArgs {
+      port: Some(9000),
+      bind_address: "::1".to_string(),
+      detached: false,
+    };
+
+    let addr = resolve_bind_address(&args).expect("valid bind address");
+
+    assert_eq!(addr, Some("[::1]:9000".parse().expect("socket address")));
+  }
+
+  #[test]
+  fn resolve_bind_address_skips_bind_parsing_without_port() {
+    let args = RunArgs {
+      port: None,
+      bind_address: "not an ip address".to_string(),
+      detached: false,
+    };
+
+    let addr = resolve_bind_address(&args).expect("bind address is unused");
+
+    assert_eq!(addr, None);
+  }
+}

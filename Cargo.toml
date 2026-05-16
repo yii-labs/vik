@@ -1,9 +1,13 @@
 [package]
 name = "vik"
+version = "0.1.1"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/yii-labs/vik"
 authors = ["Yii <forehalo@gmail.com>"]
+description = "Vik is an issue-driven coding workflow automation tool."
+readme = "README.md"
+publish = true
 
 [dependencies]
 anyhow = "1.0.102"

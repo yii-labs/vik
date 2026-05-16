@@ -54,13 +54,26 @@ impl WorkflowSchema {
   }
 }
 
+impl Default for WorkflowSchema {
+  fn default() -> Self {
+    Self {
+      loop_: LoopSchema::default(),
+      workspace: WorkspaceSchema::default(),
+      agents: AgentProfilesSchema::default(),
+      issues: IssueIntakeSchema::default(),
+      issue: IssueHandlingSchema::default(),
+      unknown_fields: serde_yaml::Mapping::new(),
+    }
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use std::path::Path;
+  use std::path::PathBuf;
 
   use super::diagnose::DiagnosticCode;
   use super::*;
-  use crate::workflow::loader::WorkflowSchemaLoader;
 
   const VALID_WORKFLOW: &str = r#"
 loop:
@@ -95,10 +108,7 @@ issue:
 
   #[test]
   fn workflow_schema_parses_core_sections_and_preserves_stage_order() {
-    let schema = WorkflowSchemaLoader
-      .load_from_str(VALID_WORKFLOW, None)
-      .expect("workflow schema parses")
-      .schema;
+    let schema = parse_schema(VALID_WORKFLOW);
 
     assert_eq!(schema.loop_.max_issue_concurrency, 2);
     assert_eq!(schema.loop_.wait_ms, 100);
@@ -122,36 +132,21 @@ issue:
 
   #[test]
   fn diagnostics_include_nested_pointers_for_invalid_schema() {
-    let schema = WorkflowSchemaLoader
-      .load_from_str(
-        r#"
-loop:
-  max_issue_concurrency: 0
-  wait_ms: 0
-  max_iterations: 0
-workspace:
-  root: ""
-agents:
-  codex:
-    model: ""
-    runtime: codex
-    args: {}
-issues:
-  pull:
-    command: ""
-    idle_sec: 0
-issue:
-  stages:
-    plan:
-      when:
-        state: ""
-      agent: missing
-      prompt_file: ""
-"#,
-        None,
-      )
-      .expect("workflow schema parses")
-      .schema;
+    let mut schema = WorkflowSchema::default();
+    schema.loop_.max_issue_concurrency = 0;
+    schema.loop_.wait_ms = 0;
+    schema.loop_.max_iterations = Some(0);
+    schema.workspace.root = Some(PathBuf::new());
+    schema.agents.insert(
+      "codex".to_string(),
+      AgentProfileSchema::new(AgentRuntime::Codex, String::new()),
+    );
+    schema.issues.pull.command = String::new();
+    schema.issues.pull.idle_sec = 0;
+
+    let mut stage = IssueStageSchema::new("");
+    stage.agent = "missing".to_string();
+    schema.issue.stages.insert("plan".to_string(), stage);
 
     let diagnostics = schema.diagnose();
 
@@ -188,31 +183,7 @@ issue:
 
   #[test]
   fn agents_schema_reports_empty_map_at_agents_pointer() {
-    let schema = WorkflowSchemaLoader
-      .load_from_str(
-        r#"
-loop:
-  max_issue_concurrency: 1
-  wait_ms: 100
-workspace:
-  root: workspace
-agents: {}
-issues:
-  pull:
-    command: ./scripts/issues-json
-    idle_sec: 5
-issue:
-  stages:
-    plan:
-      when:
-        state: todo
-      agent: codex
-      prompt_file: ./prompts/plan.md
-"#,
-        None,
-      )
-      .expect("workflow schema parses")
-      .schema;
+    let schema = WorkflowSchema::default();
 
     let diagnostics = schema.diagnose();
 
@@ -230,9 +201,8 @@ issue:
 
   #[test]
   fn unknown_fields_surface_as_warnings() {
-    let schema = WorkflowSchemaLoader
-      .load_from_str(
-        r#"
+    let schema = parse_schema(
+      r#"
 loop:
   max_issue_concurrency: 1
   wait_ms: 100
@@ -268,10 +238,7 @@ issue:
         extra_stage_hook_field: true
       extra_stage_field: true
 "#,
-        None,
-      )
-      .expect("workflow schema parses")
-      .schema;
+    );
 
     let diagnostics = schema.diagnose();
 
@@ -334,5 +301,9 @@ args:
     .expect("documented flat runtime profile parses");
 
     assert!(matches!(profile.runtime, AgentRuntime::ClaudeCode));
+  }
+
+  fn parse_schema(contents: &str) -> WorkflowSchema {
+    serde_yaml::from_str(contents).expect("workflow schema parses")
   }
 }

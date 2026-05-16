@@ -23,7 +23,7 @@ issues:
       gh issue list --state "open" --limit 50
       --json number,title,labels
       --jq '[.[] | [.labels[].name] as $labels | ($labels | map(select(. == "todo" or . == "work" or . == "merging" or . == "rework"))) as $states | select(($states | length == 1) and ($labels | index("blocked") | not)) | {id: (.number | tostring), title, state: $states[0]}]'
-    idle_sec: 30
+    idle_sec: 60
 
 issue:
   hooks:

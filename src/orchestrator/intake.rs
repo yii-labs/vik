@@ -82,15 +82,15 @@ impl IntakeLoop {
 
     for issue in issues.iter().cloned() {
       // First-wins dedup inside one cycle; trackers occasionally repeat
-      // the same identifier across queries and we do not want to launch
+      // the same issue id across queries and we do not want to launch
       // duplicate dispatch attempts inside a single batch.
       if seen.insert(issue.id.clone()) {
         self.producer.intake_issue(issue).await;
       } else {
         tracing::warn!(
           phase = %Phase::Intake,
-          issue_identifier = %issue.id,
-          "duplicate issue identifier from intake; keeping first issue",
+          issue_id = %issue.id,
+          "duplicate issue id from intake; keeping first issue",
         );
       }
     }
@@ -187,7 +187,6 @@ mod tests {
 
   use super::super::event::{IntakeEvent, OrchestratorEvent, event_channel};
   use super::*;
-  use crate::workflow::loader::WorkflowSchemaLoader;
 
   #[test]
   fn parses_pull_stdout_as_issue_json() {
@@ -216,7 +215,10 @@ mod tests {
   #[tokio::test]
   async fn runs_pull_command_from_workflow_directory() {
     let cwd = std::env::current_dir().expect("cwd");
-    let workflow = workflow_with_path("pwd", cwd.join("workflow.yml"));
+    let workflow = Workflow::builder()
+      .pull_command("pwd")
+      .workflow_path(cwd.join("workflow.yml"))
+      .build();
 
     let stdout = run_pull_command(&workflow, &CancellationToken::new())
       .await
@@ -230,7 +232,11 @@ mod tests {
 
   #[tokio::test]
   async fn nonzero_pull_command_keeps_stderr_tail() {
-    let workflow = workflow_with_command("printf '%s' 'broken' >&2; exit 7");
+    let cwd = std::env::current_dir().expect("cwd");
+    let workflow = Workflow::builder()
+      .pull_command("printf '%s' 'broken' >&2; exit 7")
+      .workflow_path(cwd.join("workflow.yml"))
+      .build();
 
     let err = run_pull_command(&workflow, &CancellationToken::new())
       .await
@@ -247,7 +253,11 @@ mod tests {
 
   #[tokio::test]
   async fn run_once_emits_issues_from_command_json() {
-    let workflow = workflow_with_command(r#"printf '%s' '[{"id":"ABC-1","title":"Pulled","state":"todo"}]'"#);
+    let cwd = std::env::current_dir().expect("cwd");
+    let workflow = Workflow::builder()
+      .pull_command(r#"printf '%s' '[{"id":"ABC-1","title":"Pulled","state":"todo"}]'"#)
+      .workflow_path(cwd.join("workflow.yml"))
+      .build();
     let (producer, mut consumer) = event_channel();
     let intake = IntakeLoop::new(Arc::new(workflow), producer);
 
@@ -261,47 +271,5 @@ mod tests {
       },
       _ => panic!("expected intake issue"),
     }
-  }
-
-  fn workflow_with_command(command: &str) -> Workflow {
-    let cwd = std::env::current_dir().expect("cwd");
-    workflow_with_path(command, cwd.join("workflow.yml"))
-  }
-
-  fn workflow_with_path(command: &str, workflow_path: std::path::PathBuf) -> Workflow {
-    let loaded = WorkflowSchemaLoader
-      .load_from_str(&workflow_yaml(command, "workspace"), Some(workflow_path))
-      .expect("workflow schema parses");
-
-    Workflow::try_from(loaded).expect("load workflow")
-  }
-
-  fn workflow_yaml(command: &str, workspace_root: &str) -> String {
-    let command_block = command.lines().map(|line| format!("      {line}\n")).collect::<String>();
-
-    format!(
-      r#"
-loop:
-  max_issue_concurrency: 1
-  wait_ms: 1
-workspace:
-  root: '{workspace_root}'
-agents:
-  codex:
-    runtime: codex
-    model: gpt-5.5
-issues:
-  pull:
-    command: |
-{command_block}    idle_sec: 1
-issue:
-  stages:
-    plan:
-      when:
-        state: todo
-      agent: codex
-      prompt_file: ./plan.md
-"#
-    )
   }
 }
