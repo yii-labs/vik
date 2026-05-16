@@ -34,7 +34,7 @@ issue:
     - name: plan
       when:
         state: todo
-      agent: codex-medium
+      agent: codex
       prompt_file: ./.agents/prompts/plan.md
 
     - name: implement
