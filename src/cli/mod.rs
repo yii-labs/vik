@@ -79,6 +79,28 @@ pub fn run() -> ExitCode {
     // supervisor because part of its job is to report errors that
     // would prevent supervisor construction.
     Command::Doctor(args) => doctor::execute(loaded, args),
+    Command::Run(args) => {
+      let workflow = match Workflow::try_from(loaded).and_then(Workflow::load) {
+        Ok(workflow) => workflow,
+        Err(err) => {
+          eprintln!("{err}");
+          return ExitCode::from(1);
+        },
+      };
+
+      run::execute(workflow, args)
+    },
+    Command::Restart(args) => {
+      let workflow = match Workflow::try_from(loaded).and_then(Workflow::load) {
+        Ok(workflow) => workflow,
+        Err(err) => {
+          eprintln!("{err}");
+          return ExitCode::from(1);
+        },
+      };
+
+      lifecycle::restart(workflow, args)
+    },
     command => {
       let workflow = match Workflow::try_from(loaded) {
         Ok(workflow) => workflow,
@@ -89,12 +111,12 @@ pub fn run() -> ExitCode {
       };
 
       match command {
-        Command::Run(args) => run::execute(workflow, args),
         Command::Status(args) => lifecycle::status(workflow, args),
         Command::Stop(args) => lifecycle::stop(workflow, args),
-        Command::Restart(args) => lifecycle::restart(workflow, args),
         Command::Uninstall(args) => lifecycle::uninstall(workflow, args),
-        Command::Doctor(_) => unreachable!("doctor command already handled"),
+        Command::Run(_) | Command::Restart(_) | Command::Doctor(_) => {
+          unreachable!("run, restart, and doctor commands already handled")
+        },
       }
     },
   }

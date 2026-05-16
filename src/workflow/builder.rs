@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::config::IssueStageSchema;
 use crate::config::WorkflowSchema;
@@ -20,7 +20,9 @@ pub struct WorkflowBuilder {
 impl WorkflowBuilder {
   pub fn new() -> Self {
     Self {
-      workflow_path: "/virtual/path/to/workflow.yml".into(),
+      workflow_path: std::env::temp_dir()
+        .join(format!("vik-test-workflow-{}", uuid::Uuid::now_v7()))
+        .join("workflow.yml"),
       schema: WorkflowSchema::default(),
     }
   }
@@ -70,9 +72,33 @@ impl WorkflowBuilder {
   }
 
   pub fn build(self) -> Workflow {
+    self.ensure_prompt_fixtures();
     Workflow::from_schema_unchecked(self.workflow_path, self.schema)
+      .and_then(Workflow::load)
       .expect("Test workflow builder must build successfully")
   }
+
+  fn ensure_prompt_fixtures(&self) {
+    let Some(workflow_dir) = self.workflow_path.parent() else {
+      return;
+    };
+
+    for stage in self.schema.issue.stages.values() {
+      let prompt_path = resolve_prompt_fixture_path(workflow_dir, &stage.prompt_file);
+      if prompt_path.exists() {
+        continue;
+      }
+
+      if let Some(parent) = prompt_path.parent() {
+        std::fs::create_dir_all(parent).expect("create test prompt fixture parent");
+      }
+      std::fs::write(&prompt_path, "test prompt fixture").expect("write test prompt fixture");
+    }
+  }
+}
+
+fn resolve_prompt_fixture_path(workflow_dir: &Path, prompt_file: &Path) -> PathBuf {
+  crate::utils::paths::resolve_from(workflow_dir, prompt_file).expect("test prompt path resolves")
 }
 
 #[cfg(test)]

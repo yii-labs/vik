@@ -19,7 +19,7 @@ mod factory;
 mod jsonl_writer;
 mod snapshot;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -31,8 +31,8 @@ pub use snapshot::*;
 
 use chrono::Utc;
 use thiserror::Error;
-use tokio::fs::{self, File};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::fs;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdout, Command};
 use tokio::sync::watch;
 use tracing::Instrument;
@@ -42,6 +42,7 @@ use crate::config::AgentProfileSchema;
 use crate::context::{Issue, IssueStage};
 use crate::shell::{Child, CommandExecError, CommandExt};
 use crate::template::{PromptRenderer, TemplateError};
+use crate::workflow::WorkflowError;
 
 use self::jsonl_writer::JsonlWriter;
 
@@ -54,8 +55,8 @@ pub enum SessionError {
   AgentSpawn(#[from] CommandExecError),
   #[error(transparent)]
   TemplateRender(#[from] TemplateError),
-  #[error("prompt path `{0}` could not be resolved")]
-  PromptPath(PathBuf),
+  #[error(transparent)]
+  Workflow(#[from] WorkflowError),
   #[error(transparent)]
   WriteLog(#[from] std::io::Error),
 }
@@ -224,23 +225,9 @@ impl Session {
 
   async fn render_prompt(&self) -> Result<String, SessionError> {
     let renderer = PromptRenderer::new();
-    let prompt_file = self
-      .stage
-      .workflow()
-      .resolve_path(&self.stage().stage().prompt_file)
-      .ok_or_else(|| SessionError::PromptPath(self.stage().stage().prompt_file.clone()))?;
+    let template = self.stage.prompt_template()?;
 
-    let mut file = File::open(&prompt_file)
-      .await
-      .map_err(|err| SessionError::TemplateRender(TemplateError::Io(err)))?;
-
-    let mut template = String::new();
-    file
-      .read_to_string(&mut template)
-      .await
-      .map_err(|err| SessionError::TemplateRender(TemplateError::Io(err)))?;
-
-    Ok(renderer.render(&template, &self.stage).await?)
+    Ok(renderer.render(template, &self.stage).await?)
   }
 
   fn set_state(&self, state: SessionState) {
@@ -472,5 +459,78 @@ mod tests {
       .expect("rate limit observation stored");
     assert_eq!(observation.remaining, 50);
     assert_eq!(observation.observed_at, fresh);
+  }
+
+  #[tokio::test]
+  async fn render_prompt_uses_preloaded_prompt_after_source_file_is_removed() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let prompt_dir = temp.path().join("prompts");
+    std::fs::create_dir_all(&prompt_dir).expect("prompt dir");
+    let prompt_path = prompt_dir.join("plan.md");
+    std::fs::write(&prompt_path, "Issue {{ issue.id }}: {{ issue.title }}").expect("prompt file");
+
+    let workflow_yaml = r#"
+loop:
+  max_issue_concurrency: 1
+  wait_ms: 100
+workspace:
+  root: workspace
+agents:
+  codex:
+    runtime: codex
+    model: gpt-5.5
+issues:
+  pull:
+    command: ./scripts/issues-json
+issue:
+  stages:
+    plan:
+      when:
+        state: todo
+      agent: codex
+      prompt_file: ./prompts/plan.md
+"#;
+    let loaded = crate::workflow::loader::WorkflowSchemaLoader
+      .load_from_str(workflow_yaml, Some(temp.path().join("workflow.yml")))
+      .expect("workflow parses");
+    let workflow = Arc::new(
+      crate::workflow::Workflow::try_from(loaded)
+        .expect("workflow builds")
+        .load()
+        .expect("workflow preloads prompt"),
+    );
+    std::fs::remove_file(&prompt_path).expect("remove source prompt after preload");
+
+    let issue_run = Arc::new(crate::context::IssueRun::new(
+      Arc::clone(&workflow),
+      issue("ABC-1", "todo"),
+    ));
+    let stage = crate::context::IssueRun::matching_stages(issue_run)
+      .into_iter()
+      .next()
+      .expect("stage matches");
+    let profile = crate::config::AgentProfileSchema::new(crate::config::AgentRuntime::Codex, "gpt-5.5".into());
+    let (inner, state_notifier) = session_inner();
+    let session = Session {
+      stage,
+      profile: profile.clone(),
+      agent: crate::agent::get_adapter(profile.runtime),
+      inner: Arc::new(Mutex::new(inner)),
+      state_notifier,
+    };
+
+    let rendered = session.render_prompt().await.expect("prompt renders from preload");
+
+    assert_eq!(rendered, "Issue ABC-1: title");
+  }
+
+  fn issue(id: &str, state: &str) -> Issue {
+    Issue {
+      id: id.to_string(),
+      title: "title".to_string(),
+      description: String::new(),
+      state: state.to_string(),
+      extra_payload: serde_yaml::Mapping::new(),
+    }
   }
 }

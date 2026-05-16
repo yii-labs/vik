@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::config::IssueStageSchema as StageSchema;
 use crate::hooks::HookError;
-use crate::workflow::Workflow;
+use crate::workflow::{Workflow, WorkflowError};
 
 use super::Issue;
 
@@ -212,6 +212,10 @@ impl IssueStage {
 
   pub fn stage(&self) -> &StageSchema {
     &self.schema
+  }
+
+  pub fn prompt_template(&self) -> Result<&str, WorkflowError> {
+    self.workflow().get_stage_prompt(&self.name)
   }
 
   pub fn key(&self) -> IssueStageKey {

@@ -51,3 +51,53 @@ fn valid_fixture_json_has_expected_shape() {
   assert!(json["errors"].is_array());
   assert!(json["warnings"].is_array());
 }
+
+#[test]
+fn doctor_does_not_require_stage_prompt_files() {
+  let temp = tempfile::tempdir().expect("tempdir");
+  let workflow = temp.path().join("workflow.yml");
+  std::fs::write(
+    &workflow,
+    r#"
+loop:
+  max_issue_concurrency: 1
+  wait_ms: 100
+workspace:
+  root: .vik
+agents:
+  codex:
+    runtime: codex
+    model: gpt-5.5
+issues:
+  pull:
+    command: ./scripts/issues-json
+issue:
+  stages:
+    plan:
+      when:
+        state: todo
+      agent: codex
+      prompt_file: ./missing-prompt.md
+"#,
+  )
+  .expect("write workflow");
+
+  let output = Command::new(vik_bin())
+    .args(["doctor", workflow.to_str().expect("utf-8 path")])
+    .output()
+    .expect("spawn vik");
+
+  assert!(
+    output.status.success(),
+    "stdout: {}\nstderr: {}",
+    String::from_utf8_lossy(&output.stdout),
+    String::from_utf8_lossy(&output.stderr),
+  );
+  let stdout = String::from_utf8(output.stdout).expect("utf-8 stdout");
+  let stderr = String::from_utf8(output.stderr).expect("utf-8 stderr");
+  assert!(
+    stdout.contains("Vik doctor shows 0 error(s), 0 warning(s)"),
+    "got: {stdout}"
+  );
+  assert!(!stderr.contains("prompt"), "got: {stderr}");
+}

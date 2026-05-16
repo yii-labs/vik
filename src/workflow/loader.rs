@@ -8,7 +8,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::{Workflow, WorkflowError};
+use super::{StagePromptSources, Workflow, WorkflowError};
 use crate::config::WorkflowSchema;
 use crate::hooks::HookRunner;
 use crate::workspace::Workspace;
@@ -92,6 +92,12 @@ impl TryFrom<LoadedWorkflowSchema> for Workflow {
   type Error = WorkflowError;
 
   fn try_from(LoadedWorkflowSchema { path, schema }: LoadedWorkflowSchema) -> Result<Self, Self::Error> {
+    Workflow::try_from_loaded(path, schema)
+  }
+}
+
+impl Workflow {
+  fn try_from_loaded(path: PathBuf, schema: WorkflowSchema) -> Result<Self, WorkflowError> {
     // Diagnose runs here, not in the loader, so the doctor command can
     // surface warnings on a parsed-but-not-promoted schema.
     let diagnostics = schema.diagnose();
@@ -125,6 +131,7 @@ impl Workflow {
       workflow_dir: workflow_dir.clone(),
       workflow_path: path,
       schema,
+      prompts: StagePromptSources::default(),
       workspace: Workspace::new(workspace_root_dir),
       hooks: HookRunner::new(),
     })
@@ -162,6 +169,38 @@ issue:
         state: todo
       agent: codex
       prompt_file: ./prompts/plan.md
+"#;
+
+  const SHARED_PROMPT_WORKFLOW: &str = r#"
+loop:
+  max_issue_concurrency: 2
+  wait_ms: 100
+workspace:
+  root: workspace
+agents:
+  codex:
+    runtime: codex
+    model: gpt-5.5
+issues:
+  pull:
+    command: ./scripts/issues-json
+issue:
+  stages:
+    plan:
+      when:
+        state: todo
+      agent: codex
+      prompt_file: ./prompts/plan.md
+    implement:
+      when:
+        state: work
+      agent: codex
+      prompt_file: ./prompts/implement.md
+    review:
+      when:
+        state: review
+      agent: codex
+      prompt_file: ./prompts/implement.md
 "#;
 
   #[test]
@@ -240,6 +279,76 @@ issue:
     assert!(matches!(
       err,
       WorkflowError::IsDirectory(path) if path == expected_path
+    ));
+  }
+
+  #[test]
+  fn try_from_loaded_workflow_starts_with_empty_prompts_without_touching_prompt_files() {
+    let temp = tempfile::tempdir().expect("tempdir");
+
+    let loaded = WorkflowSchemaLoader
+      .load_from_str(SHARED_PROMPT_WORKFLOW, Some(temp.path().join("workflow.yml")))
+      .expect("workflow parses");
+
+    let workflow = Workflow::try_from(loaded).expect("runtime workflow builds");
+    let expected_prompt = temp.path().join("prompts/plan.md");
+
+    assert_eq!(workflow.prompt_stage_count(), 0);
+    assert_eq!(workflow.prompt_file_count(), 0);
+    assert!(!expected_prompt.exists());
+    assert!(matches!(
+      workflow.get_stage_prompt("plan"),
+      Err(WorkflowError::PromptNotLoaded(stage_name)) if stage_name == "plan"
+    ));
+  }
+
+  #[test]
+  fn workflow_load_preloads_prompts_and_deduplicates_shared_paths() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let prompt_dir = temp.path().join("prompts");
+    std::fs::create_dir_all(&prompt_dir).expect("prompt dir");
+    std::fs::write(prompt_dir.join("plan.md"), "plan prompt").expect("plan prompt");
+    std::fs::write(prompt_dir.join("implement.md"), "implement prompt").expect("implement prompt");
+
+    let loaded = WorkflowSchemaLoader
+      .load_from_str(SHARED_PROMPT_WORKFLOW, Some(temp.path().join("workflow.yml")))
+      .expect("workflow parses");
+
+    let workflow = Workflow::try_from(loaded)
+      .expect("runtime workflow builds")
+      .load()
+      .expect("dynamic prompt content loads");
+
+    assert_eq!(workflow.prompt_stage_count(), 3);
+    assert_eq!(workflow.prompt_file_count(), 2);
+    assert_eq!(workflow.get_stage_prompt("plan").expect("plan prompt"), "plan prompt");
+    assert_eq!(
+      workflow.get_stage_prompt("implement").expect("implement prompt"),
+      "implement prompt"
+    );
+    assert_eq!(
+      workflow.get_stage_prompt("review").expect("review prompt"),
+      "implement prompt"
+    );
+  }
+
+  #[test]
+  fn workflow_load_fails_when_stage_prompt_file_is_missing() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workflow_path = temp.path().join("workflow.yml");
+    let loaded = WorkflowSchemaLoader
+      .load_from_str(VALID_WORKFLOW, Some(workflow_path))
+      .expect("workflow parses");
+    let expected_prompt = temp.path().join("prompts/plan.md");
+
+    let err = Workflow::try_from(loaded)
+      .expect("runtime workflow builds without prompt files")
+      .load()
+      .expect_err("missing prompt file should fail dynamic load");
+
+    assert!(matches!(
+      err,
+      WorkflowError::PromptRead(path, _) if path == expected_prompt
     ));
   }
 }
