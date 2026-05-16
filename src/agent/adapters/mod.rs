@@ -9,14 +9,16 @@
 mod claude_code;
 mod codex;
 
-use serde_json::Value;
-
 use crate::config::AgentProfileSchema;
 
 use super::response::AgentEvent;
 
 pub(super) use claude_code::ClaudeCodeAdapter;
+#[allow(unused_imports)]
+pub use claude_code::{ClaudeCodeContentBlock, ClaudeCodeEvent, ClaudeCodeEventKind};
 pub(super) use codex::CodexAdapter;
+#[allow(unused_imports)]
+pub use codex::{CodexEvent, CodexEventKind, CodexUsage};
 
 #[derive(Debug, Clone)]
 pub struct AgentCommand {
@@ -39,8 +41,8 @@ pub enum AgentStdin {
 }
 
 /// Implementations are stateless per spawn: `build_command` is called
-/// once per run and `map_event` once per JSONL line. `provider_event`
-/// classifies and preserves the original parsed provider JSON for
+/// once per run and `map_event` once per parsed provider event.
+/// `provider_event` decodes and preserves one provider JSONL line for
 /// session history. Returning an empty `Vec` from `map_event` means the
 /// line has no semantic snapshot effect. Returning multiple events fans
 /// one line out (e.g. Claude's `result` line yields both `TokenUsage`
@@ -51,11 +53,11 @@ pub trait AgentAdapter: Send + Sync {
   /// Keep one typed provider record for every valid provider JSONL
   /// line. Unknown future shapes should use the provider's `Unknown`
   /// event kind instead of failing the stream.
-  fn provider_event(&self, value: Value) -> AgentEvent;
+  fn provider_event(&self, line: &str) -> Result<AgentEvent, serde_json::Error>;
 
   /// Unknown shapes return `vec![]`; new provider event types still
   /// persist through `provider_event` and must not crash the stream.
-  fn map_event(&self, value: &Value) -> Vec<AgentEvent>;
+  fn map_event(&self, event: &AgentEvent) -> Vec<AgentEvent>;
 }
 
 /// Flatten the YAML `args` map into a flat CLI token list. Booleans

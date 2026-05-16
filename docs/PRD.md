@@ -116,7 +116,7 @@ Current adapter trait: `AgentAdapter`.
 Adapters own:
 
 - provider command construction
-- provider JSONL event mapping
+- provider JSONL event parsing and mapping
 
 Current runtimes:
 

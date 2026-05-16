@@ -30,7 +30,6 @@ pub use factory::*;
 pub use snapshot::*;
 
 use chrono::Utc;
-use serde_json::Value;
 use thiserror::Error;
 use tokio::fs::{self, File};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -396,25 +395,23 @@ async fn stream_agent_events(
 }
 
 fn map_agent_stdout_line(agent: &dyn AgentAdapter, line: &str) -> Vec<AgentEvent> {
-  match serde_json::from_str(line) {
-    Ok(value) => map_provider_value(agent, value),
+  match agent.provider_event(line) {
+    Ok(provider_event) => {
+      let semantic_events = agent.map_event(&provider_event);
+      let mut events = Vec::with_capacity(semantic_events.len() + 1);
+      events.push(provider_event);
+      events.extend(semantic_events);
+      events
+    },
     Err(err) => vec![AgentEvent::Error {
       detail: err.to_string(),
     }],
   }
 }
-
-fn map_provider_value(agent: &dyn AgentAdapter, value: Value) -> Vec<AgentEvent> {
-  let semantic_events = agent.map_event(&value);
-  let mut events = Vec::with_capacity(semantic_events.len() + 1);
-  events.push(agent.provider_event(value));
-  events.extend(semantic_events);
-  events
-}
 #[cfg(test)]
 mod tests {
   use crate::{
-    agent::{ClaudeCodeProviderEventKind, CodexProviderEventKind},
+    agent::{CodexEvent, CodexEventKind},
     config::AgentRuntime,
   };
 
@@ -502,17 +499,12 @@ mod tests {
   fn codex_provider_event_precedes_semantic_events() {
     let agent = get_adapter(AgentRuntime::Codex);
     let line = r#"{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"hello"}}"#;
-    let value: Value = serde_json::from_str(line).expect("fixture is valid JSON");
+    let event: CodexEvent = serde_json::from_str(line).expect("fixture is valid Codex event");
 
     assert_eq!(
       map_agent_stdout_line(agent.as_ref(), line),
       vec![
-        AgentEvent::CodexProviderEvent {
-          event_type: CodexProviderEventKind::ItemCompleted {
-            item_type: Some("agent_message".into()),
-          },
-          event: value,
-        },
+        AgentEvent::CodexProviderEvent { event },
         AgentEvent::Message { text: "hello".into() },
       ]
     );
@@ -522,16 +514,11 @@ mod tests {
   fn codex_tool_call_provider_event_is_retained_without_semantic_events() {
     let agent = get_adapter(AgentRuntime::Codex);
     let line = r#"{"type":"item.completed","item":{"id":"tool_0","type":"tool_call","name":"shell","arguments":"{}"}}"#;
-    let value: Value = serde_json::from_str(line).expect("fixture is valid JSON");
+    let event: CodexEvent = serde_json::from_str(line).expect("fixture is valid Codex event");
 
     assert_eq!(
       map_agent_stdout_line(agent.as_ref(), line),
-      vec![AgentEvent::CodexProviderEvent {
-        event_type: CodexProviderEventKind::ItemCompleted {
-          item_type: Some("tool_call".into()),
-        },
-        event: value,
-      }]
+      vec![AgentEvent::CodexProviderEvent { event }]
     );
   }
 
@@ -539,16 +526,11 @@ mod tests {
   fn codex_unknown_provider_event_is_retained_without_semantic_events() {
     let agent = get_adapter(AgentRuntime::Codex);
     let line = r#"{"type":"future.event","payload":{"ok":true}}"#;
-    let value: Value = serde_json::from_str(line).expect("fixture is valid JSON");
+    let event: CodexEvent = serde_json::from_str(line).expect("fixture is valid Codex event");
 
     assert_eq!(
       map_agent_stdout_line(agent.as_ref(), line),
-      vec![AgentEvent::CodexProviderEvent {
-        event_type: CodexProviderEventKind::Unknown {
-          event_type: Some("future.event".into()),
-        },
-        event: value,
-      }]
+      vec![AgentEvent::CodexProviderEvent { event }]
     );
   }
 
@@ -557,16 +539,11 @@ mod tests {
     let agent = get_adapter(AgentRuntime::ClaudeCode);
     let line =
       r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t-1","name":"Bash","input":{}}]}}"#;
-    let value: Value = serde_json::from_str(line).expect("fixture is valid JSON");
+    let event = serde_json::from_str(line).expect("fixture is valid Claude Code event");
 
     assert_eq!(
       map_agent_stdout_line(agent.as_ref(), line),
-      vec![AgentEvent::ClaudeCodeProviderEvent {
-        event_type: ClaudeCodeProviderEventKind::Assistant {
-          content_types: vec!["tool_use".into()],
-        },
-        event: value,
-      }]
+      vec![AgentEvent::ClaudeCodeProviderEvent { event }]
     );
   }
 
@@ -574,14 +551,11 @@ mod tests {
   fn claude_user_provider_event_is_retained_without_semantic_events() {
     let agent = get_adapter(AgentRuntime::ClaudeCode);
     let line = r#"{"type":"user","message":{"content":[]}}"#;
-    let value: Value = serde_json::from_str(line).expect("fixture is valid JSON");
+    let event = serde_json::from_str(line).expect("fixture is valid Claude Code event");
 
     assert_eq!(
       map_agent_stdout_line(agent.as_ref(), line),
-      vec![AgentEvent::ClaudeCodeProviderEvent {
-        event_type: ClaudeCodeProviderEventKind::User,
-        event: value,
-      }]
+      vec![AgentEvent::ClaudeCodeProviderEvent { event }]
     );
   }
 
@@ -650,10 +624,12 @@ mod tests {
 
     inner.apply_event(
       AgentEvent::CodexProviderEvent {
-        event_type: CodexProviderEventKind::Unknown {
-          event_type: Some("future.event".into()),
+        event: CodexEvent {
+          kind: CodexEventKind::Unknown {
+            event_type: Some("future.event".into()),
+          },
+          raw: serde_json::json!({"type":"future.event"}),
         },
-        event: serde_json::json!({"type":"future.event"}),
       },
       &state_notifier,
     );
@@ -672,17 +648,24 @@ mod tests {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let log_file = tempdir.path().join("session.jsonl");
     let provider_event = AgentEvent::CodexProviderEvent {
-      event_type: CodexProviderEventKind::ItemCompleted {
-        item_type: Some("tool_call".into()),
+      event: CodexEvent {
+        kind: CodexEventKind::ItemCompleted {
+          item_type: Some("tool_call".into()),
+          item: Some(serde_json::json!({
+            "id": "tool_0",
+            "type": "tool_call",
+            "name": "shell"
+          })),
+        },
+        raw: serde_json::json!({
+          "type": "item.completed",
+          "item": {
+            "id": "tool_0",
+            "type": "tool_call",
+            "name": "shell"
+          }
+        }),
       },
-      event: serde_json::json!({
-        "type": "item.completed",
-        "item": {
-          "id": "tool_0",
-          "type": "tool_call",
-          "name": "shell"
-        }
-      }),
     };
     let message_event = AgentEvent::Message { text: "hello".into() };
 

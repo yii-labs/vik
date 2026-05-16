@@ -200,8 +200,13 @@ watchdog config in workflow schema.
 `AgentAdapter` has three methods:
 
 - `build_command(&self, profile, prompt) -> AgentCommand`
-- `provider_event(&self, value) -> AgentEvent`
-- `map_event(&self, value) -> Vec<AgentEvent>`
+- `provider_event(&self, line) -> Result<AgentEvent, serde_json::Error>`
+- `map_event(&self, event) -> Vec<AgentEvent>`
+
+Provider-specific event definitions live in the adapter modules. Codex
+JSONL parses into `CodexEvent`, Claude Code JSONL parses into
+`ClaudeCodeEvent`, and each implements conversion into the shared
+`AgentEvent` session vocabulary.
 
 `get_adapter(runtime)` returns a stateless adapter:
 

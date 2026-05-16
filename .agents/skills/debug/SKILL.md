@@ -135,8 +135,8 @@ Event shapes:
 
 ```json
 {"kind":"session_started","session_id":"..."}
-{"kind":"codex_provider_event","event_type":{"kind":"item_completed","item_type":"tool_call"},"event":{"type":"item.completed","item":{"type":"tool_call"}}}
-{"kind":"claude_code_provider_event","event_type":{"kind":"assistant","content_types":["tool_use"]},"event":{"type":"assistant","message":{"content":[{"type":"tool_use"}]}}}
+{"kind":"codex_provider_event","event":{"kind":"item_completed","item_type":"tool_call","item":{"type":"tool_call"},"raw":{"type":"item.completed","item":{"type":"tool_call"}}}}
+{"kind":"claude_code_provider_event","event":{"kind":"assistant","content":[{"type":"tool_use","text":null,"raw":{"type":"tool_use"}}],"raw":{"type":"assistant","message":{"content":[{"type":"tool_use"}]}}}}
 {"kind":"message","text":"..."}
 {"kind":"token_usage","input":120,"output":45,"cache_read":12}
 {"kind":"rate_limit","scope":"codex:tokens_per_min","remaining":100,"reset_at":"...","observed_at":"..."}

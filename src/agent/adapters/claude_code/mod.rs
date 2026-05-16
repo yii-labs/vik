@@ -12,9 +12,9 @@
 //! totals and stream completion, so `map_event` may fan out into two
 //! [`AgentEvent`]s for that single line.
 
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
-use crate::agent::ClaudeCodeProviderEventKind;
 use crate::config::AgentProfileSchema;
 
 use super::{AgentAdapter, AgentCommand, AgentEvent, AgentStdin, build_extra_args};
@@ -23,6 +23,96 @@ const CLAUDE_PROGRAM: &str = "claude";
 
 #[derive(Debug, Clone)]
 pub struct ClaudeCodeAdapter;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ClaudeCodeEvent {
+  #[serde(flatten)]
+  pub kind: ClaudeCodeEventKind,
+  pub raw: Value,
+}
+
+impl<'de> Deserialize<'de> for ClaudeCodeEvent {
+  fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+  where
+    D: Deserializer<'de>,
+  {
+    let value = Value::deserialize(deserializer)?;
+    if value.get("raw").is_some() && value.get("kind").is_some() {
+      #[derive(Deserialize)]
+      struct StoredClaudeCodeEvent {
+        #[serde(flatten)]
+        kind: ClaudeCodeEventKind,
+        raw: Value,
+      }
+
+      if let Ok(stored) = serde_json::from_value::<StoredClaudeCodeEvent>(value.clone()) {
+        return Ok(Self {
+          kind: stored.kind,
+          raw: stored.raw,
+        });
+      }
+    }
+
+    Ok(Self::from_provider_value(value))
+  }
+}
+
+impl ClaudeCodeEvent {
+  fn from_provider_value(raw: Value) -> Self {
+    let kind = claude_code_event_kind(&raw);
+    Self { kind, raw }
+  }
+}
+
+impl From<ClaudeCodeEvent> for AgentEvent {
+  fn from(event: ClaudeCodeEvent) -> Self {
+    AgentEvent::ClaudeCodeProviderEvent { event }
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ClaudeCodeEventKind {
+  System {
+    subtype: Option<String>,
+    session_id: Option<String>,
+  },
+  Assistant {
+    content: Vec<ClaudeCodeContentBlock>,
+  },
+  User,
+  Result {
+    usage: Option<ClaudeCodeUsage>,
+  },
+  Unknown {
+    event_type: Option<String>,
+  },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaudeCodeContentBlock {
+  #[serde(rename = "type")]
+  pub block_type: String,
+  pub text: Option<String>,
+  pub raw: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaudeCodeUsage {
+  pub input_tokens: u64,
+  pub output_tokens: u64,
+  pub cache_read_input_tokens: u64,
+}
+
+impl ClaudeCodeUsage {
+  fn from_value(value: &Value) -> Self {
+    Self {
+      input_tokens: value.get("input_tokens").and_then(Value::as_u64).unwrap_or(0),
+      output_tokens: value.get("output_tokens").and_then(Value::as_u64).unwrap_or(0),
+      cache_read_input_tokens: value.get("cache_read_input_tokens").and_then(Value::as_u64).unwrap_or(0),
+    }
+  }
+}
 
 impl AgentAdapter for ClaudeCodeAdapter {
   fn build_command(&self, profile: &AgentProfileSchema, prompt: String) -> AgentCommand {
@@ -44,39 +134,43 @@ impl AgentAdapter for ClaudeCodeAdapter {
     }
   }
 
-  fn provider_event(&self, value: Value) -> AgentEvent {
-    AgentEvent::ClaudeCodeProviderEvent {
-      event_type: provider_event_kind(&value),
-      event: value,
-    }
+  fn provider_event(&self, line: &str) -> Result<AgentEvent, serde_json::Error> {
+    let event: ClaudeCodeEvent = serde_json::from_str(line)?;
+    Ok(event.into())
   }
 
-  fn map_event(&self, value: &Value) -> Vec<AgentEvent> {
-    map_value(value)
+  fn map_event(&self, event: &AgentEvent) -> Vec<AgentEvent> {
+    match event {
+      AgentEvent::ClaudeCodeProviderEvent { event } => map_value(event),
+      _ => Vec::new(),
+    }
   }
 }
 
-fn provider_event_kind(value: &Value) -> ClaudeCodeProviderEventKind {
+fn claude_code_event_kind(value: &Value) -> ClaudeCodeEventKind {
   let Some(ty) = value.get("type").and_then(Value::as_str) else {
-    return ClaudeCodeProviderEventKind::Unknown { event_type: None };
+    return ClaudeCodeEventKind::Unknown { event_type: None };
   };
 
   match ty {
-    "system" => ClaudeCodeProviderEventKind::System {
+    "system" => ClaudeCodeEventKind::System {
       subtype: value.get("subtype").and_then(Value::as_str).map(ToString::to_string),
+      session_id: value.get("session_id").and_then(Value::as_str).map(ToString::to_string),
     },
-    "assistant" => ClaudeCodeProviderEventKind::Assistant {
-      content_types: assistant_content_types(value),
+    "assistant" => ClaudeCodeEventKind::Assistant {
+      content: assistant_content(value),
     },
-    "user" => ClaudeCodeProviderEventKind::User,
-    "result" => ClaudeCodeProviderEventKind::Result,
-    other => ClaudeCodeProviderEventKind::Unknown {
+    "user" => ClaudeCodeEventKind::User,
+    "result" => ClaudeCodeEventKind::Result {
+      usage: value.get("usage").map(ClaudeCodeUsage::from_value),
+    },
+    other => ClaudeCodeEventKind::Unknown {
       event_type: Some(other.to_string()),
     },
   }
 }
 
-fn assistant_content_types(value: &Value) -> Vec<String> {
+fn assistant_content(value: &Value) -> Vec<ClaudeCodeContentBlock> {
   value
     .get("message")
     .and_then(|message| message.get("content"))
@@ -84,34 +178,39 @@ fn assistant_content_types(value: &Value) -> Vec<String> {
     .map(|content| {
       content
         .iter()
-        .filter_map(|block| block.get("type").and_then(Value::as_str).map(ToString::to_string))
+        .filter_map(|block| {
+          block
+            .get("type")
+            .and_then(Value::as_str)
+            .map(|block_type| ClaudeCodeContentBlock {
+              block_type: block_type.to_string(),
+              text: block.get("text").and_then(Value::as_str).map(ToString::to_string),
+              raw: block.clone(),
+            })
+        })
         .collect()
     })
     .unwrap_or_default()
 }
 
-pub(super) fn map_value(value: &Value) -> Vec<AgentEvent> {
-  let Some(ty) = value.get("type").and_then(Value::as_str) else {
-    return Vec::new();
-  };
-
-  match ty {
-    "system" => {
+pub(super) fn map_value(event: &ClaudeCodeEvent) -> Vec<AgentEvent> {
+  match &event.kind {
+    ClaudeCodeEventKind::System { subtype, session_id } => {
       // Only the `init` subtype reports session_id; other system
       // subtypes (config dumps, hook outputs) carry data we do not
       // surface as events.
-      let subtype = value.get("subtype").and_then(Value::as_str);
-      if subtype != Some("init") {
+      if subtype.as_deref() != Some("init") {
         return Vec::new();
       }
-      let session_id = value.get("session_id").and_then(Value::as_str).unwrap_or("").to_string();
-      if session_id.is_empty() {
+      let Some(session_id) = session_id else {
         return Vec::new();
-      }
-      vec![AgentEvent::SessionStarted { session_id }]
+      };
+      vec![AgentEvent::SessionStarted {
+        session_id: session_id.clone(),
+      }]
     },
-    "assistant" => {
-      let text = extract_assistant_text(value);
+    ClaudeCodeEventKind::Assistant { content } => {
+      let text = extract_assistant_text(content);
       // Tool-only turns have no semantic `Message`; the session still
       // writes the typed provider event before this mapper runs.
       if text.is_empty() {
@@ -119,27 +218,23 @@ pub(super) fn map_value(value: &Value) -> Vec<AgentEvent> {
       }
       vec![AgentEvent::Message { text }]
     },
-    "result" => {
+    ClaudeCodeEventKind::Result { usage } => {
       let mut out = Vec::new();
-      if let Some(usage) = value.get("usage") {
-        let input = usage.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
-        let output = usage.get("output_tokens").and_then(Value::as_u64).unwrap_or(0);
-        // Note the field-name divergence from Codex: Claude reports
-        // `cache_read_input_tokens`, Codex reports `cached_input_tokens`.
-        let cache_read = usage.get("cache_read_input_tokens").and_then(Value::as_u64).unwrap_or(0);
+      if let Some(usage) = usage {
         out.push(AgentEvent::TokenUsage {
-          input,
-          output,
-          cache_read,
+          input: usage.input_tokens,
+          output: usage.output_tokens,
+          cache_read: usage.cache_read_input_tokens,
         });
       }
       out.push(AgentEvent::Completed);
       out
     },
-    other => {
+    ClaudeCodeEventKind::User => Vec::new(),
+    ClaudeCodeEventKind::Unknown { event_type } => {
       tracing::debug!(
         runtime = "claude_code",
-        claude_event_type = other,
+        claude_event_type = event_type.as_deref().unwrap_or("unknown"),
         "claude_code event ignored: unknown type",
       );
       Vec::new()
@@ -150,19 +245,16 @@ pub(super) fn map_value(value: &Value) -> Vec<AgentEvent> {
 /// `message.content` is an array of blocks (text, tool_use, …). Only
 /// `text` blocks are user-facing; concatenate them with newlines so a
 /// multi-block reply still reads naturally in `last_message`.
-fn extract_assistant_text(value: &Value) -> String {
-  let Some(content) = value.get("message").and_then(|m| m.get("content")).and_then(Value::as_array) else {
-    return String::new();
-  };
+fn extract_assistant_text(content: &[ClaudeCodeContentBlock]) -> String {
   let mut buf = String::new();
   for block in content {
-    if block.get("type").and_then(Value::as_str) == Some("text")
-      && let Some(text) = block.get("text").and_then(Value::as_str)
+    if block.block_type == "text"
+      && let Some(text) = &block.text
     {
       if !buf.is_empty() {
         buf.push('\n');
       }
-      buf.push_str(text);
+      buf.push_str(text.as_str());
     }
   }
   buf
@@ -174,28 +266,40 @@ mod tests {
 
   use super::*;
   fn parse(line: &str) -> Vec<AgentEvent> {
-    let value: Value = serde_json::from_str(line).expect("fixture is valid JSON");
-    map_value(&value)
+    let event: ClaudeCodeEvent = serde_json::from_str(line).expect("fixture is valid Claude Code event");
+    map_value(&event)
   }
 
   #[test]
   fn provider_event_kind_recognizes_system_and_assistant_details() {
-    let system: Value =
+    let system: ClaudeCodeEvent =
       serde_json::from_str(r#"{"type":"system","subtype":"init","session_id":"S-42"}"#).expect("fixture");
     assert_eq!(
-      provider_event_kind(&system),
-      ClaudeCodeProviderEventKind::System {
+      system.kind,
+      ClaudeCodeEventKind::System {
         subtype: Some("init".into()),
+        session_id: Some("S-42".into()),
       }
     );
 
-    let assistant: Value =
+    let assistant: ClaudeCodeEvent =
       serde_json::from_str(r#"{"type":"assistant","message":{"content":[{"type":"tool_use"},{"type":"text"}]}}"#)
         .expect("fixture");
     assert_eq!(
-      provider_event_kind(&assistant),
-      ClaudeCodeProviderEventKind::Assistant {
-        content_types: vec!["tool_use".into(), "text".into()],
+      assistant.kind,
+      ClaudeCodeEventKind::Assistant {
+        content: vec![
+          ClaudeCodeContentBlock {
+            block_type: "tool_use".into(),
+            text: None,
+            raw: serde_json::json!({"type": "tool_use"}),
+          },
+          ClaudeCodeContentBlock {
+            block_type: "text".into(),
+            text: None,
+            raw: serde_json::json!({"type": "text"}),
+          },
+        ],
       }
     );
   }

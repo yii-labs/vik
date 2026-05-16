@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+
+use super::adapters::{ClaudeCodeEvent, CodexEvent};
 
 /// Session event vocabulary.
 ///
@@ -15,19 +16,16 @@ use serde_json::Value;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AgentEvent {
-  /// Exact parsed Codex JSONL event plus the recognized Codex event
-  /// type. Unknown future Codex event types are still retained.
+  /// Exact parsed Codex JSONL event. Unknown future Codex event types
+  /// are still retained by the Codex adapter.
   CodexProviderEvent {
-    event_type: CodexProviderEventKind,
-    event: Value,
+    event: CodexEvent,
   },
 
-  /// Exact parsed Claude Code JSONL event plus the recognized Claude
-  /// Code event type. Unknown future Claude event types are still
-  /// retained.
+  /// Exact parsed Claude Code JSONL event. Unknown future Claude event
+  /// types are still retained by the Claude Code adapter.
   ClaudeCodeProviderEvent {
-    event_type: ClaudeCodeProviderEventKind,
-    event: Value,
+    event: ClaudeCodeEvent,
   },
 
   /// Emitted as early as the provider allows so the session layer can
@@ -77,36 +75,11 @@ impl AgentEvent {
   }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum CodexProviderEventKind {
-  SessionConfigured,
-  AgentMessage,
-  TokenCount,
-  RateLimitWarning,
-  RateLimitReset,
-  TurnComplete,
-  ShutdownComplete,
-  ThreadStarted,
-  ItemCompleted { item_type: Option<String> },
-  TurnCompleted,
-  Error,
-  Unknown { event_type: Option<String> },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum ClaudeCodeProviderEventKind {
-  System { subtype: Option<String> },
-  Assistant { content_types: Vec<String> },
-  User,
-  Result,
-  Unknown { event_type: Option<String> },
-}
-
 #[cfg(test)]
 mod tests {
   use serde_json::json;
+
+  use crate::agent::{ClaudeCodeContentBlock, ClaudeCodeEventKind, CodexEventKind};
 
   use super::*;
 
@@ -268,60 +241,84 @@ mod tests {
     let cases = [
       (
         AgentEvent::CodexProviderEvent {
-          event_type: CodexProviderEventKind::ItemCompleted {
-            item_type: Some("tool_call".into()),
+          event: CodexEvent {
+            kind: CodexEventKind::ItemCompleted {
+              item_type: Some("tool_call".into()),
+              item: Some(json!({
+                "type": "tool_call"
+              })),
+            },
+            raw: json!({
+              "type": "item.completed",
+              "item": {
+                "type": "tool_call"
+              }
+            }),
           },
-          event: json!({
-            "type": "item.completed",
-            "item": {
-              "type": "tool_call"
-            }
-          }),
         },
         json!({
           "kind": "codex_provider_event",
-          "event_type": {
-            "kind": "item_completed",
-            "item_type": "tool_call"
-          },
           "event": {
-            "type": "item.completed",
+            "kind": "item_completed",
+            "item_type": "tool_call",
             "item": {
               "type": "tool_call"
+            },
+            "raw": {
+              "type": "item.completed",
+              "item": {
+                "type": "tool_call"
+              }
             }
           }
         }),
       ),
       (
         AgentEvent::ClaudeCodeProviderEvent {
-          event_type: ClaudeCodeProviderEventKind::Assistant {
-            content_types: vec!["tool_use".into()],
-          },
-          event: json!({
-            "type": "assistant",
-            "message": {
-              "content": [
-                {
+          event: ClaudeCodeEvent {
+            kind: ClaudeCodeEventKind::Assistant {
+              content: vec![ClaudeCodeContentBlock {
+                block_type: "tool_use".into(),
+                text: None,
+                raw: json!({
                   "type": "tool_use"
-                }
-              ]
-            }
-          }),
+                }),
+              }],
+            },
+            raw: json!({
+              "type": "assistant",
+              "message": {
+                "content": [
+                  {
+                    "type": "tool_use"
+                  }
+                ]
+              }
+            }),
+          },
         },
         json!({
           "kind": "claude_code_provider_event",
-          "event_type": {
-            "kind": "assistant",
-            "content_types": ["tool_use"]
-          },
           "event": {
-            "type": "assistant",
-            "message": {
-              "content": [
-                {
+            "kind": "assistant",
+            "content": [
+              {
+                "type": "tool_use",
+                "text": null,
+                "raw": {
                   "type": "tool_use"
                 }
-              ]
+              }
+            ],
+            "raw": {
+              "type": "assistant",
+              "message": {
+                "content": [
+                  {
+                    "type": "tool_use"
+                  }
+                ]
+              }
             }
           }
         }),

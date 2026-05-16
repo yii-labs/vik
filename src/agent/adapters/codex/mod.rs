@@ -14,16 +14,122 @@
 //! Unknown shapes have no semantic snapshot effect, but the session
 //! still writes them as typed unknown Codex provider records.
 
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use super::{AgentAdapter, AgentCommand, AgentEvent, AgentStdin, build_extra_args};
-use crate::agent::CodexProviderEventKind;
 use crate::config::AgentProfileSchema;
 
 const CODEX_PROGRAM: &str = "codex";
 
 #[derive(Debug, Clone)]
 pub struct CodexAdapter;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CodexEvent {
+  #[serde(flatten)]
+  pub kind: CodexEventKind,
+  pub raw: Value,
+}
+
+impl<'de> Deserialize<'de> for CodexEvent {
+  fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+  where
+    D: Deserializer<'de>,
+  {
+    let value = Value::deserialize(deserializer)?;
+    if value.get("raw").is_some() && value.get("kind").is_some() {
+      #[derive(Deserialize)]
+      struct StoredCodexEvent {
+        #[serde(flatten)]
+        kind: CodexEventKind,
+        raw: Value,
+      }
+
+      if let Ok(stored) = serde_json::from_value::<StoredCodexEvent>(value.clone()) {
+        return Ok(Self {
+          kind: stored.kind,
+          raw: stored.raw,
+        });
+      }
+    }
+
+    Ok(Self::from_provider_value(value))
+  }
+}
+
+impl CodexEvent {
+  fn from_provider_value(raw: Value) -> Self {
+    let kind = codex_event_kind(&raw);
+    Self { kind, raw }
+  }
+}
+
+impl From<CodexEvent> for AgentEvent {
+  fn from(event: CodexEvent) -> Self {
+    AgentEvent::CodexProviderEvent { event }
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CodexEventKind {
+  SessionConfigured {
+    event_id: Option<String>,
+    session_id: Option<String>,
+  },
+  AgentMessage {
+    text: Option<String>,
+  },
+  TokenCount {
+    usage: Option<CodexUsage>,
+  },
+  RateLimitWarning {
+    scope: Option<String>,
+    remaining: Option<u64>,
+    reset_at: Option<String>,
+  },
+  RateLimitReset {
+    scope: Option<String>,
+    remaining: Option<u64>,
+    reset_at: Option<String>,
+  },
+  TurnComplete,
+  ShutdownComplete,
+  ThreadStarted {
+    thread_id: Option<String>,
+  },
+  ItemCompleted {
+    item_type: Option<String>,
+    item: Option<Value>,
+  },
+  TurnCompleted {
+    usage: Option<CodexUsage>,
+  },
+  Error {
+    message: Option<String>,
+  },
+  Unknown {
+    event_type: Option<String>,
+  },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodexUsage {
+  pub input_tokens: u64,
+  pub output_tokens: u64,
+  pub cached_input_tokens: u64,
+}
+
+impl CodexUsage {
+  fn from_value(value: &Value) -> Self {
+    Self {
+      input_tokens: value.get("input_tokens").and_then(Value::as_u64).unwrap_or(0),
+      output_tokens: value.get("output_tokens").and_then(Value::as_u64).unwrap_or(0),
+      cached_input_tokens: value.get("cached_input_tokens").and_then(Value::as_u64).unwrap_or(0),
+    }
+  }
+}
 
 impl AgentAdapter for CodexAdapter {
   fn build_command(&self, profile: &AgentProfileSchema, prompt: String) -> AgentCommand {
@@ -40,87 +146,181 @@ impl AgentAdapter for CodexAdapter {
     }
   }
 
-  fn provider_event(&self, value: Value) -> AgentEvent {
-    AgentEvent::CodexProviderEvent {
-      event_type: provider_event_kind(&value),
-      event: value,
-    }
+  fn provider_event(&self, line: &str) -> Result<AgentEvent, serde_json::Error> {
+    let event: CodexEvent = serde_json::from_str(line)?;
+    Ok(event.into())
   }
 
-  fn map_event(&self, value: &Value) -> Vec<AgentEvent> {
-    map_events(value)
+  fn map_event(&self, event: &AgentEvent) -> Vec<AgentEvent> {
+    match event {
+      AgentEvent::CodexProviderEvent { event } => map_events(event),
+      _ => Vec::new(),
+    }
   }
 }
 
-fn provider_event_kind(value: &Value) -> CodexProviderEventKind {
+fn codex_event_kind(value: &Value) -> CodexEventKind {
   if let Some(msg_ty) = value.get("msg").and_then(|msg| msg.get("type")).and_then(Value::as_str) {
     return match msg_ty {
-      "session_configured" => CodexProviderEventKind::SessionConfigured,
-      "agent_message" => CodexProviderEventKind::AgentMessage,
-      "token_count" => CodexProviderEventKind::TokenCount,
-      "rate_limit_warning" => CodexProviderEventKind::RateLimitWarning,
-      "rate_limit_reset" => CodexProviderEventKind::RateLimitReset,
-      "turn_complete" => CodexProviderEventKind::TurnComplete,
-      "shutdown_complete" => CodexProviderEventKind::ShutdownComplete,
-      "error" => CodexProviderEventKind::Error,
-      other => CodexProviderEventKind::Unknown {
+      "session_configured" => CodexEventKind::SessionConfigured {
+        event_id: value.get("id").and_then(Value::as_str).map(ToString::to_string),
+        session_id: value
+          .get("msg")
+          .and_then(|msg| msg.get("session_id"))
+          .and_then(Value::as_str)
+          .or_else(|| value.get("id").and_then(Value::as_str))
+          .map(ToString::to_string),
+      },
+      "agent_message" => CodexEventKind::AgentMessage {
+        text: value
+          .get("msg")
+          .and_then(|msg| msg.get("message"))
+          .and_then(Value::as_str)
+          .or_else(|| value.get("msg").and_then(|msg| msg.get("text")).and_then(Value::as_str))
+          .map(ToString::to_string),
+      },
+      "token_count" => CodexEventKind::TokenCount {
+        usage: codex_legacy_usage(value),
+      },
+      "rate_limit_warning" => codex_rate_limit(value, true),
+      "rate_limit_reset" => codex_rate_limit(value, false),
+      "turn_complete" => CodexEventKind::TurnComplete,
+      "shutdown_complete" => CodexEventKind::ShutdownComplete,
+      "error" => CodexEventKind::Error {
+        message: value
+          .get("msg")
+          .and_then(|msg| msg.get("message"))
+          .and_then(Value::as_str)
+          .map(ToString::to_string),
+      },
+      other => CodexEventKind::Unknown {
         event_type: Some(other.to_string()),
       },
     };
   }
 
   let Some(ty) = value.get("type").and_then(Value::as_str) else {
-    return CodexProviderEventKind::Unknown { event_type: None };
+    return CodexEventKind::Unknown { event_type: None };
   };
 
   match ty {
-    "thread.started" => CodexProviderEventKind::ThreadStarted,
-    "item.completed" => CodexProviderEventKind::ItemCompleted {
+    "thread.started" => CodexEventKind::ThreadStarted {
+      thread_id: value.get("thread_id").and_then(Value::as_str).map(ToString::to_string),
+    },
+    "item.completed" => CodexEventKind::ItemCompleted {
       item_type: value
         .get("item")
         .and_then(|item| item.get("type"))
         .and_then(Value::as_str)
         .map(ToString::to_string),
+      item: value.get("item").cloned(),
     },
-    "turn.completed" => CodexProviderEventKind::TurnCompleted,
-    "error" => CodexProviderEventKind::Error,
-    other => CodexProviderEventKind::Unknown {
+    "turn.completed" => CodexEventKind::TurnCompleted {
+      usage: value.get("usage").map(CodexUsage::from_value),
+    },
+    "error" => CodexEventKind::Error {
+      message: value.get("message").and_then(Value::as_str).map(ToString::to_string),
+    },
+    other => CodexEventKind::Unknown {
       event_type: Some(other.to_string()),
     },
   }
 }
 
-fn map_events(value: &Value) -> Vec<AgentEvent> {
-  // Try the legacy nested-`msg` form first; if that misses, fall through
-  // to the flat `type` form. Trying both lets us cope with mixed
-  // streams from different Codex CLI versions in one run.
-  if let Some(event) = map_value(value) {
-    return vec![event];
+fn codex_legacy_usage(value: &Value) -> Option<CodexUsage> {
+  let info = value.get("msg")?.get("info")?;
+  let totals = info.get("total_token_usage").unwrap_or(info);
+  Some(CodexUsage::from_value(totals))
+}
+
+fn codex_rate_limit(value: &Value, warning: bool) -> CodexEventKind {
+  let msg = value.get("msg");
+  let scope = msg
+    .and_then(|msg| msg.get("scope"))
+    .and_then(Value::as_str)
+    .map(ToString::to_string);
+  let remaining = msg.and_then(|msg| msg.get("remaining")).and_then(Value::as_u64);
+  let reset_at = msg
+    .and_then(|msg| msg.get("reset_at"))
+    .and_then(Value::as_str)
+    .map(ToString::to_string);
+
+  if warning {
+    CodexEventKind::RateLimitWarning {
+      scope,
+      remaining,
+      reset_at,
+    }
+  } else {
+    CodexEventKind::RateLimitReset {
+      scope,
+      remaining,
+      reset_at,
+    }
   }
+}
 
-  let Some(ty) = value.get("type").and_then(Value::as_str) else {
-    return Vec::new();
-  };
-
-  match ty {
-    "thread.started" => value
-      .get("thread_id")
-      .and_then(Value::as_str)
+fn map_events(event: &CodexEvent) -> Vec<AgentEvent> {
+  match &event.kind {
+    CodexEventKind::SessionConfigured { session_id, .. } => session_id
+      .as_ref()
       .map(|session_id| {
         vec![AgentEvent::SessionStarted {
-          session_id: session_id.to_string(),
+          session_id: session_id.clone(),
         }]
       })
       .unwrap_or_default(),
-    "item.completed" => map_current_item_completed(value),
-    "turn.completed" => map_current_turn_completed(value),
-    "error" => vec![AgentEvent::Error {
-      detail: value.get("message").and_then(Value::as_str).unwrap_or("").to_string(),
+    CodexEventKind::AgentMessage { text } => vec![AgentEvent::Message {
+      text: text.clone().unwrap_or_default(),
     }],
-    other => {
+    CodexEventKind::TokenCount { usage } => usage.as_ref().map(token_usage_event).into_iter().collect(),
+    CodexEventKind::RateLimitWarning {
+      scope,
+      remaining,
+      reset_at,
+    }
+    | CodexEventKind::RateLimitReset {
+      scope,
+      remaining,
+      reset_at,
+    } => {
+      vec![rate_limit_event(scope, *remaining, reset_at)]
+    },
+    CodexEventKind::TurnComplete | CodexEventKind::ShutdownComplete => vec![AgentEvent::Completed],
+    CodexEventKind::ThreadStarted { thread_id } => thread_id
+      .as_ref()
+      .map(|session_id| {
+        vec![AgentEvent::SessionStarted {
+          session_id: session_id.clone(),
+        }]
+      })
+      .unwrap_or_default(),
+    CodexEventKind::ItemCompleted { item_type, item } => match item_type.as_deref() {
+      Some("agent_message") => vec![AgentEvent::Message {
+        text: item
+          .as_ref()
+          .and_then(|item| item.get("text"))
+          .and_then(Value::as_str)
+          .unwrap_or("")
+          .to_string(),
+      }],
+      _ => Vec::new(),
+    },
+    CodexEventKind::TurnCompleted { usage } => {
+      let mut events = Vec::new();
+      if let Some(usage) = usage {
+        events.push(token_usage_event(usage));
+      }
+      events.push(AgentEvent::Completed);
+      events
+    },
+    CodexEventKind::Error { message } => vec![AgentEvent::Error {
+      detail: message.clone().unwrap_or_default(),
+    }],
+    CodexEventKind::Unknown { event_type } => {
       tracing::debug!(
         runtime = "codex",
-        codex_event_type = other,
+        codex_event_type = event_type.as_deref().unwrap_or("unknown"),
         "codex event ignored: unknown type",
       );
       Vec::new()
@@ -128,110 +328,25 @@ fn map_events(value: &Value) -> Vec<AgentEvent> {
   }
 }
 
-fn map_current_item_completed(value: &Value) -> Vec<AgentEvent> {
-  let Some(item) = value.get("item") else {
-    return Vec::new();
-  };
-  let Some(item_type) = item.get("type").and_then(Value::as_str) else {
-    return Vec::new();
-  };
-
-  match item_type {
-    "agent_message" => vec![AgentEvent::Message {
-      text: item.get("text").and_then(Value::as_str).unwrap_or("").to_string(),
-    }],
-    _ => Vec::new(),
+fn token_usage_event(usage: &CodexUsage) -> AgentEvent {
+  AgentEvent::TokenUsage {
+    input: usage.input_tokens,
+    output: usage.output_tokens,
+    cache_read: usage.cached_input_tokens,
   }
 }
 
-/// `turn.completed` carries both the per-turn usage and the stream
-/// terminator — fan out into two events so the session sees both.
-fn map_current_turn_completed(value: &Value) -> Vec<AgentEvent> {
-  let mut events = Vec::new();
-  if let Some(usage) = value.get("usage") {
-    events.push(AgentEvent::TokenUsage {
-      input: usage.get("input_tokens").and_then(Value::as_u64).unwrap_or(0),
-      output: usage.get("output_tokens").and_then(Value::as_u64).unwrap_or(0),
-      cache_read: usage.get("cached_input_tokens").and_then(Value::as_u64).unwrap_or(0),
-    });
-  }
-  events.push(AgentEvent::Completed);
-  events
-}
-
-/// `pub(super)` so the in-module tests below can drive it directly
-/// without round-tripping through the adapter.
-pub(super) fn map_value(value: &Value) -> Option<AgentEvent> {
-  let msg = value.get("msg")?;
-  let ty = msg.get("type")?.as_str()?;
-
-  match ty {
-    "session_configured" => {
-      // Newer codex versions report session id under `msg.session_id`,
-      // older ones under the outer envelope's `id`. Try both.
-      let session_id = msg
-        .get("session_id")
-        .and_then(Value::as_str)
-        .or_else(|| value.get("id").and_then(Value::as_str))?
-        .to_string();
-      Some(AgentEvent::SessionStarted { session_id })
-    },
-    "agent_message" => {
-      let text = msg
-        .get("message")
-        .and_then(Value::as_str)
-        .or_else(|| msg.get("text").and_then(Value::as_str))
-        .unwrap_or("")
-        .to_string();
-      Some(AgentEvent::Message { text })
-    },
-    "token_count" => {
-      let info = msg.get("info")?;
-      // Prefer the `total_token_usage` subtree when present — it
-      // already represents the cumulative count, so we don't need to
-      // accumulate per-turn deltas ourselves.
-      let totals = info.get("total_token_usage").unwrap_or(info);
-      let input = totals.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
-      let output = totals.get("output_tokens").and_then(Value::as_u64).unwrap_or(0);
-      let cache_read = totals.get("cached_input_tokens").and_then(Value::as_u64).unwrap_or(0);
-      Some(AgentEvent::TokenUsage {
-        input,
-        output,
-        cache_read,
-      })
-    },
-    "rate_limit_warning" | "rate_limit_reset" => {
-      let scope_raw = msg.get("scope").and_then(Value::as_str).unwrap_or("unknown");
-      // Provider prefix keeps Codex limits from colliding with Claude
-      // limits in the session's per-scope map.
-      let scope = format!("codex:{scope_raw}");
-      let remaining = msg.get("remaining").and_then(Value::as_u64).unwrap_or(0);
-      let reset_at = msg
-        .get("reset_at")
-        .and_then(Value::as_str)
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| dt.with_timezone(&chrono::Utc))
-        .unwrap_or_else(chrono::Utc::now);
-      Some(AgentEvent::RateLimit {
-        scope,
-        remaining,
-        reset_at,
-        observed_at: chrono::Utc::now(),
-      })
-    },
-    "turn_complete" | "shutdown_complete" => Some(AgentEvent::Completed),
-    "error" => {
-      let detail = msg.get("message").and_then(Value::as_str).unwrap_or("").to_string();
-      Some(AgentEvent::Error { detail })
-    },
-    other => {
-      tracing::debug!(
-        runtime = "codex",
-        codex_event_type = other,
-        "codex event ignored: unknown type",
-      );
-      None
-    },
+fn rate_limit_event(scope: &Option<String>, remaining: Option<u64>, reset_at: &Option<String>) -> AgentEvent {
+  let reset_at = reset_at
+    .as_deref()
+    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+    .map(|dt| dt.with_timezone(&chrono::Utc))
+    .unwrap_or_else(chrono::Utc::now);
+  AgentEvent::RateLimit {
+    scope: format!("codex:{}", scope.as_deref().unwrap_or("unknown")),
+    remaining: remaining.unwrap_or(0),
+    reset_at,
+    observed_at: chrono::Utc::now(),
   }
 }
 
@@ -241,28 +356,40 @@ mod tests {
 
   use super::*;
 
-  fn parse(line: &str) -> Option<AgentEvent> {
-    let value: Value = serde_json::from_str(line).expect("fixture is valid JSON");
-    map_value(&value)
+  fn parse_events(line: &str) -> Vec<AgentEvent> {
+    let event: CodexEvent = serde_json::from_str(line).expect("fixture is valid Codex event");
+    map_events(&event)
   }
 
-  fn parse_events(line: &str) -> Vec<AgentEvent> {
-    let value: Value = serde_json::from_str(line).expect("fixture is valid JSON");
-    map_events(&value)
+  fn parse_one(line: &str) -> Option<AgentEvent> {
+    parse_events(line).into_iter().next()
   }
 
   #[test]
   fn provider_event_kind_recognizes_known_legacy_and_flat_types() {
-    let legacy: Value =
+    let legacy: CodexEvent =
       serde_json::from_str(r#"{"id":"evt-2","msg":{"type":"token_count","info":{}}}"#).expect("fixture");
-    assert_eq!(provider_event_kind(&legacy), CodexProviderEventKind::TokenCount);
+    assert_eq!(
+      legacy.kind,
+      CodexEventKind::TokenCount {
+        usage: Some(CodexUsage {
+          input_tokens: 0,
+          output_tokens: 0,
+          cached_input_tokens: 0,
+        }),
+      }
+    );
 
-    let flat: Value =
+    let flat: CodexEvent =
       serde_json::from_str(r#"{"type":"item.completed","item":{"id":"tool_0","type":"tool_call"}}"#).expect("fixture");
     assert_eq!(
-      provider_event_kind(&flat),
-      CodexProviderEventKind::ItemCompleted {
+      flat.kind,
+      CodexEventKind::ItemCompleted {
         item_type: Some("tool_call".into()),
+        item: Some(serde_json::json!({
+          "id": "tool_0",
+          "type": "tool_call",
+        })),
       }
     );
   }
@@ -271,7 +398,7 @@ mod tests {
   fn session_configured_maps_to_session_started() {
     let line = r#"{"id":"evt-0","msg":{"type":"session_configured","session_id":"S-1"}}"#;
     assert_eq!(
-      parse(line),
+      parse_one(line),
       Some(AgentEvent::SessionStarted {
         session_id: "S-1".into(),
       })
@@ -281,14 +408,14 @@ mod tests {
   #[test]
   fn agent_message_maps_to_message() {
     let line = r#"{"id":"evt-1","msg":{"type":"agent_message","message":"hi"}}"#;
-    assert_eq!(parse(line), Some(AgentEvent::Message { text: "hi".into() }));
+    assert_eq!(parse_one(line), Some(AgentEvent::Message { text: "hi".into() }));
   }
 
   #[test]
   fn token_count_reads_total_usage() {
     let line = r#"{"id":"evt-2","msg":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"output_tokens":20,"cached_input_tokens":5}}}}"#;
     assert_eq!(
-      parse(line),
+      parse_one(line),
       Some(AgentEvent::TokenUsage {
         input: 10,
         output: 20,
@@ -300,19 +427,19 @@ mod tests {
   #[test]
   fn turn_complete_maps_to_completed() {
     let line = r#"{"id":"evt-3","msg":{"type":"turn_complete"}}"#;
-    assert_eq!(parse(line), Some(AgentEvent::Completed));
+    assert_eq!(parse_one(line), Some(AgentEvent::Completed));
   }
 
   #[test]
   fn unknown_event_has_no_semantic_mapping() {
     let line = r#"{"id":"evt-4","msg":{"type":"future_event_kind"}}"#;
-    assert_eq!(parse(line), None);
+    assert_eq!(parse_events(line), Vec::<AgentEvent>::new());
   }
 
   #[test]
   fn rate_limit_emits_scope_prefix() {
     let line = r#"{"id":"evt-5","msg":{"type":"rate_limit_warning","scope":"tokens_per_min","remaining":100}}"#;
-    match parse(line) {
+    match parse_one(line) {
       Some(AgentEvent::RateLimit { scope, remaining, .. }) => {
         assert_eq!(scope, "codex:tokens_per_min");
         assert_eq!(remaining, 100);
@@ -324,7 +451,7 @@ mod tests {
   #[test]
   fn error_event_maps_to_provider_error() {
     let line = r#"{"id":"evt-6","msg":{"type":"error","message":"boom"}}"#;
-    match parse(line) {
+    match parse_one(line) {
       Some(AgentEvent::Error { detail }) => {
         assert_eq!(detail, "boom");
       },
@@ -406,7 +533,7 @@ mod tests {
     let mut rl_count = 0usize;
     let mut saw_error = false;
     for line in body.lines() {
-      match parse(line) {
+      match parse_one(line) {
         Some(AgentEvent::RateLimit { scope, .. }) => {
           assert!(scope.starts_with("codex:"), "scope must be prefixed");
           rl_count += 1;
