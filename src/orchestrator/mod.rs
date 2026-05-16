@@ -212,18 +212,20 @@ impl Orchestrator {
   ///
   /// Matching is exact string equality. `Workflow::stages` is an
   /// `IndexMap`, so iteration order matches the YAML so stage launch
-  /// order is deterministic. Concurrency and running-key filters happen
-  /// here, before any background work — the central loop is the only
-  /// place these decisions are made.
+  /// order is deterministic. Stage matching happens before capacity checks so
+  /// invalid workflow states stay visible even when the issue concurrency cap is
+  /// full. Concurrency and running-key filters happen here, before any
+  /// background work. The central loop is the only place these decisions are
+  /// made.
   fn should_dispatch(&self, issue_run: Arc<IssueRun>) -> DispatchDecision {
-    let issue = issue_run.issue();
-    if !self.running.can_accept_issue(&issue.id) {
-      return DispatchDecision::skip(DispatchSkipReason::IssueConcurrencyFull);
-    }
-
+    let issue_id = issue_run.issue().id.clone();
     let matching_stages = IssueRun::matching_stages(issue_run);
     if matching_stages.is_empty() {
       return DispatchDecision::skip(DispatchSkipReason::NoMatchingStage);
+    }
+
+    if !self.running.can_accept_issue(&issue_id) {
+      return DispatchDecision::skip(DispatchSkipReason::IssueConcurrencyFull);
     }
 
     let issue_stages = matching_stages
@@ -346,6 +348,17 @@ mod tests {
       "different issue is blocked by max_issue_concurrency"
     );
     assert!(different_issue.issue_stages.is_empty());
+
+    let different_issue_state_mismatch = orchestrator.should_dispatch(Arc::new(IssueRun::new(
+      Arc::clone(&orchestrator.workflow),
+      issue("ABC-2", "review"),
+    )));
+    assert_eq!(
+      different_issue_state_mismatch.skip_reason,
+      Some(DispatchSkipReason::NoMatchingStage),
+      "no-match issue states stay visible when concurrency is full"
+    );
+    assert!(different_issue_state_mismatch.issue_stages.is_empty());
 
     let case_mismatch = orchestrator.should_dispatch(Arc::new(IssueRun::new(
       Arc::clone(&orchestrator.workflow),
