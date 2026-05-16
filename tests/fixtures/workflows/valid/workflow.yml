@@ -21,12 +21,12 @@ issue:
     after_create: |
       echo created
   stages:
-    plan:
+    - name: plan
       when:
         state: plan
       agent: codex
       prompt_file: ./prompts/plan.md
-    implement:
+    - name: implement
       when:
         state: wip
       agent: claude

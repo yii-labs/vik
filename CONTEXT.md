@@ -39,7 +39,7 @@ _Avoid_: normalized status, built-in state machine
 
 **Workflow State**:
 An opaque string returned by intake as `issue.state` and matched against
-`issue.stages.<stage>.when.state`.
+stage `when.state`.
 _Avoid_: status normalization, Linear-only state
 
 **Prompt Source**:
@@ -93,7 +93,7 @@ _Avoid_: direct adapter calls from orchestrator
   Issue Stage can spawn.
 - A runtime **Issue Stage** belongs to one **Issue Run** and uses the Issue
   Run context when rendering hooks, rendering prompts, and spawning a Session.
-- `issue.state == issue.stages.<name>.when.state` is the only dispatch rule.
+- `issue.state == issue.stages[].when.state` is the only dispatch rule.
 - Stage iteration preserves workflow author order.
 - Orchestrator reserves `(issue.id, stage.name)` before async setup so
   duplicate intake results do not launch the same stage twice.

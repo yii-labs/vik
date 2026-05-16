@@ -43,7 +43,7 @@ include at least:
 - `id` — the GitHub issue number, **as a string** (Vik uses this for
   workspace folder names).
 - `title` — the GitHub issue title.
-- `state` — the value Vik will match against `issue.stages.<stage>.when.state`.
+- `state` — the value Vik will match against a stage `when.state`.
   Match is case-sensitive.
 
 GitHub does not have a built-in "workflow state" field. Use one of

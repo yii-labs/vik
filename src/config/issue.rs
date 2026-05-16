@@ -2,13 +2,13 @@
 //!
 //! Two separate top-level keys map to two separate concerns. `issues`
 //! (plural) holds the intake pull command. `issue` (singular) holds
-//! per-issue handling: hooks and the named stages the orchestrator
+//! per-issue handling: hooks and the stages the orchestrator
 //! dispatches against `issue.state`. Splitting them keeps intake config
-//! editable without touching the stage map.
+//! editable without touching the stage list.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
-use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use super::WorkflowSchema;
@@ -54,10 +54,9 @@ pub struct IssueHandlingSchema {
   #[serde(default)]
   pub hooks: IssueHooks,
 
-  /// `IndexMap` preserves author order so `should_dispatch` can iterate
-  /// stages in workflow-file order — multiple stages may match the same
+  /// Array order is workflow order. Multiple stages may match the same
   /// state, and authors expect deterministic launch order.
-  pub stages: IndexMap<String, IssueStageSchema>,
+  pub stages: Vec<IssueStageSchema>,
 
   #[serde(flatten)]
   unknown_fields: serde_yaml::Mapping,
@@ -76,6 +75,7 @@ pub struct IssueHooks {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IssueStageSchema {
+  pub name: String,
   pub when: IssueStageMatch,
   pub agent: String,
   pub prompt_file: PathBuf,
@@ -88,8 +88,9 @@ pub struct IssueStageSchema {
 
 #[cfg(test)]
 impl IssueStageSchema {
-  pub fn new(when: impl Into<String>) -> Self {
+  pub fn new(name: impl Into<String>, when: impl Into<String>) -> Self {
     Self {
+      name: name.into(),
       when: IssueStageMatch {
         state: when.into(),
         unknown_fields: Default::default(),
@@ -155,11 +156,19 @@ impl Diagnose for IssueHandlingSchema {
   fn diagnose(&self, schema: &WorkflowSchema) -> Diagnostics {
     let mut diagnostics = Diagnostics::new();
 
-    diagnostics.error_if_empty_map("stages", self.stages.is_empty());
+    diagnostics.error_if_empty_list("stages", self.stages.is_empty());
     if !self.stages.is_empty() {
-      self.stages.iter().for_each(|(stage_name, stage)| {
-        diagnostics.extends_with_pointer(&format!("stages.{stage_name}"), stage.diagnose(schema));
-      });
+      let mut stage_names = HashSet::new();
+      for (index, stage) in self.stages.iter().enumerate() {
+        let pointer = format!("stages.{index}");
+        diagnostics.extends_with_pointer(&pointer, stage.diagnose(schema));
+        if !stage.name.trim().is_empty() && !stage_names.insert(stage.name.as_str()) {
+          diagnostics.push(Diagnostic::error(
+            &format!("{pointer}.name"),
+            DiagnosticCode::DuplicateStageName(stage.name.clone()),
+          ));
+        }
+      }
     }
 
     diagnose_fields!(diagnostics, self, schema, "hooks" => hooks);
@@ -180,6 +189,7 @@ impl Diagnose for IssueStageSchema {
       "when" => when,
       "hooks" => hooks,
     );
+    diagnostics.error_if_empty_str("name", &self.name);
     diagnostics.error_if_empty_str("agent", &self.agent);
 
     // Stage's `agent` must reference an entry in the top-level `agents`
@@ -265,6 +275,7 @@ command: ./scripts/issues-json
     );
     let stage: IssueStageSchema = serde_yaml::from_str(
       r#"
+name: plan
 when:
   state: Todo
 agent: codex

@@ -50,8 +50,8 @@ must include at least:
   workspace folder names, so prefer the human-readable identifier
   over the internal UUID.
 - `title` — issue title.
-- `state` — the value Vik will match against
-  `issue.stages.<stage>.when.state`. Case-sensitive.
+- `state` — the value Vik will match against a stage `when.state`.
+  Case-sensitive.
 
 Linear has a real workflow state field, so the typical pattern is:
 

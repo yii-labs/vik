@@ -157,7 +157,7 @@ issues:
     idle_sec: 5
 issue:
   stages:
-    plan:
+    - name: plan
       when:
         state: todo
       agent: codex
@@ -189,7 +189,13 @@ issue:
     assert_eq!(loaded.schema.loop_.max_issue_concurrency, 2);
     assert_eq!(loaded.schema.issues.pull.command, "./scripts/issues-json");
     assert_eq!(
-      loaded.schema.issue.stages.keys().map(String::as_str).collect::<Vec<_>>(),
+      loaded
+        .schema
+        .issue
+        .stages
+        .iter()
+        .map(|stage| stage.name.as_str())
+        .collect::<Vec<_>>(),
       ["plan"]
     );
   }

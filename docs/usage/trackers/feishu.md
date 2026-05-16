@@ -52,8 +52,8 @@ profile and keychain entries.
 Use one Base table as the issue list. The smallest useful schema is:
 
 - `Title`: text field used as the Vik issue title.
-- `State`: writable text or single-select field. Values must match
-  `issue.stages.<stage>.when.state` exactly, including case.
+- `State`: writable text or single-select field. Values must match a stage
+  `when.state` exactly, including case.
 - `Description`: optional long-text field for full issue context.
 - `Workpad`: optional long-text field where agents can keep a running
   plan and validation notes.

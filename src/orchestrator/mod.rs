@@ -162,9 +162,9 @@ impl Orchestrator {
 
   /// Match one issue against workflow stages and current capacity.
   ///
-  /// Matching is exact string equality. `Workflow::stages` is an
-  /// `IndexMap`, so iteration order matches the YAML so stage launch
-  /// order is deterministic. Concurrency and running-key filters happen
+  /// Matching is exact string equality. `Workflow::stages` follows YAML
+  /// array order so stage launch order is deterministic. Concurrency and
+  /// running-key filters happen
   /// here, before any background work — the central loop is the only
   /// place these decisions are made.
   fn should_dispatch(&self, issue_run: Arc<IssueRun>) -> Vec<IssueStage> {

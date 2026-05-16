@@ -15,7 +15,6 @@ pub mod loader;
 
 use std::path::{Path, PathBuf};
 
-use indexmap::IndexMap;
 use thiserror::Error;
 
 use crate::config::diagnose::Diagnostics;
@@ -53,7 +52,7 @@ impl Workflow {
     &self.schema.agents
   }
 
-  pub fn stages(&self) -> &IndexMap<String, issue::IssueStageSchema> {
+  pub fn stages(&self) -> &[issue::IssueStageSchema] {
     &self.schema.issue.stages
   }
 

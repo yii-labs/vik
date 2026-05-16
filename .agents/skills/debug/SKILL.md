@@ -68,7 +68,7 @@ Important workflow facts:
 - Vik appends `workflows/<workflow-path-key>` to make the runtime workspace root.
 - `<workflow-path-key>` is the absolute workflow file path with `/` replaced by `-`.
 - `<workspace.root>/workflows` must exist before `vik run`; Vik creates only the final workflow root.
-- `issue.state` matches `issue.stages.<stage>.when.state` by exact string equality.
+- `issue.state` matches a stage `when.state` by exact string equality.
 - `issues.pull.command` must print one JSON issue sequence.
 - Issue identifiers become path segments under `<workflow-workspace-root>/issues`; unsafe names break dispatch.
 - Prompt files are MiniJinja first, then prompt-command expansion.

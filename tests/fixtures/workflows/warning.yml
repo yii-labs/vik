@@ -14,7 +14,7 @@ issues:
     command: ./scripts/issues-json
 issue:
   stages:
-    plan:
+    - name: plan
       when:
         state: plan
       agent: codex

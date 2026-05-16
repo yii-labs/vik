@@ -31,25 +31,25 @@ issue:
       git clone --depth 1 git@github.com:yii-labs/vik .
 
   stages:
-    plan:
+    - name: plan
       when:
         state: todo
       agent: codex-medium
       prompt_file: ./.agents/prompts/plan.md
 
-    implement:
+    - name: implement
       when:
         state: work
       agent: codex
       prompt_file: ./.agents/prompts/implement.md
 
-    rework:
+    - name: rework
       when:
         state: rework
       agent: codex
       prompt_file: ./.agents/prompts/implement.md
 
-    merge:
+    - name: merge
       when:
         state: merging
       agent: codex-medium

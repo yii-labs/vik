@@ -88,6 +88,12 @@ impl Diagnostics {
     self.error_if_empty_map("", is_empty);
   }
 
+  pub fn error_if_empty_list(&mut self, pointer: &str, is_empty: bool) {
+    if is_empty {
+      self.push(Diagnostic::error(pointer, DiagnosticCode::EmptyList));
+    }
+  }
+
   pub fn error_if_non_positive(&mut self, pointer: &str, value: usize) {
     if value == 0 {
       self.push(Diagnostic::error(pointer, DiagnosticCode::NonPositiveNumber(value)));
@@ -165,7 +171,9 @@ pub enum DiagnosticCode {
   UnknownField,
   EmptyStr,
   EmptyMap,
+  EmptyList,
   UnknownAgent(String),
+  DuplicateStageName(String),
 }
 
 impl Display for Diagnostic {
@@ -177,11 +185,19 @@ impl Display for Diagnostic {
       DiagnosticCode::UnknownField => write!(f, "unknown field '{}'", self.pointer),
       DiagnosticCode::EmptyStr => write!(f, "'{}' cannot be empty string", self.pointer),
       DiagnosticCode::EmptyMap => write!(f, "'{}' cannot be empty map", self.pointer),
+      DiagnosticCode::EmptyList => write!(f, "'{}' cannot be empty list", self.pointer),
       DiagnosticCode::UnknownAgent(agent) => write!(
         f,
         "agent profile '{}' set for '{}' is not defined in agents configuration section",
         agent, self.pointer
       ),
+      DiagnosticCode::DuplicateStageName(stage_name) => {
+        write!(
+          f,
+          "stage name '{}' set for '{}' is already defined",
+          stage_name, self.pointer
+        )
+      },
     }
   }
 }

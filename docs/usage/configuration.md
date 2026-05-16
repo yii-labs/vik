@@ -38,7 +38,7 @@ issue:
     after_create: |
       git clone --depth 1 git@github.com:yii-labs/vik .
   stages:
-    plan:
+    - name: plan
       when:
         state: plan
       agent: codex-medium
@@ -168,10 +168,11 @@ Duplicate issue ids in one intake result are skipped after the first one.
 
 ## Stages
 
-`issue.stages` is an ordered map. Stage keys are user-defined names.
+`issue.stages` is an ordered array. Each stage has a user-defined `name`.
 
 Each stage requires:
 
+- `name`: stable stage identity for logs, sessions, hooks, and running work.
 - `when.state`: exact issue state that triggers the stage.
 - `agent`: agent profile name.
 - `prompt_file`: prompt file for the stage.
@@ -179,7 +180,7 @@ Each stage requires:
 Dispatch uses exact, case-sensitive state match:
 
 ```text
-issue.state == issue.stages.<stage>.when.state
+issue.state == issue.stages[].when.state
 ```
 
 Multiple stages may match one issue state. Vik reserves and launches every
@@ -195,8 +196,8 @@ Issue hook:
 
 Stage hooks:
 
-- `issue.stages.<stage>.hooks.before_run`: runs before the agent session.
-- `issue.stages.<stage>.hooks.after_run`: runs after terminal session state,
+- `issue.stages[].hooks.before_run`: runs before the agent session.
+- `issue.stages[].hooks.after_run`: runs after terminal session state,
   except cancelled sessions.
 
 Hook shell bodies are MiniJinja-rendered and then executed with the shared shell

@@ -65,7 +65,7 @@ impl WorkflowBuilder {
       .schema
       .issue
       .stages
-      .insert(name.into(), IssueStageSchema::new(state).with_prompt_file(prompt_file));
+      .push(IssueStageSchema::new(name, state).with_prompt_file(prompt_file));
     self
   }
 
@@ -112,7 +112,13 @@ mod tests {
       Some("echo created")
     );
     assert_eq!(
-      workflow.schema().issue.stages.keys().map(String::as_str).collect::<Vec<_>>(),
+      workflow
+        .schema()
+        .issue
+        .stages
+        .iter()
+        .map(|stage| stage.name.as_str())
+        .collect::<Vec<_>>(),
       ["implement"]
     );
     assert_eq!(

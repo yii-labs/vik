@@ -92,8 +92,8 @@ impl IssueRun {
       .workflow()
       .stages()
       .iter()
-      .filter(|(_, stage)| stage.when.state == issue_run.issue.state)
-      .map(|(name, stage)| IssueStage::new(Arc::clone(&issue_run), name.clone(), stage.clone()))
+      .filter(|stage| stage.when.state == issue_run.issue.state)
+      .map(|stage| IssueStage::new(Arc::clone(&issue_run), stage.clone()))
       .collect()
   }
 
@@ -170,7 +170,8 @@ impl Serialize for IssueStage {
 }
 
 impl IssueStage {
-  pub fn new(issue: Arc<IssueRun>, name: String, stage_schema: StageSchema) -> Self {
+  pub fn new(issue: Arc<IssueRun>, stage_schema: StageSchema) -> Self {
+    let name = stage_schema.name.clone();
     // State prefix is for human eyeballing; UUIDv7 keeps names unique
     // and sorts runs within one state. Provider session ids land inside
     // the JSONL, not in the filename, because they are not always known
@@ -325,6 +326,28 @@ mod tests {
         workflow.workspace().root().display()
       )
     );
+  }
+
+  #[test]
+  fn matching_stages_preserve_workflow_array_order() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workflow = Arc::new(
+      Workflow::builder()
+        .workflow_path(temp.path().join("workflow.yml"))
+        .workspace_root(temp.path().join("workspace"))
+        .add_stage("plan", "todo", "./plan.md")
+        .add_stage("implement", "todo", "./implement.md")
+        .add_stage("review", "review", "./review.md")
+        .build(),
+    );
+    let issue_run = Arc::new(IssueRun::new(Arc::clone(&workflow), issue("ABC-1", "todo")));
+
+    let stage_names = IssueRun::matching_stages(issue_run)
+      .into_iter()
+      .map(|stage| stage.stage_name().to_string())
+      .collect::<Vec<_>>();
+
+    assert_eq!(stage_names, vec!["plan".to_string(), "implement".to_string()]);
   }
 
   #[tokio::test]
