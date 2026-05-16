@@ -8,6 +8,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::context::{IssueStage, IssueStageKey};
+use crate::logging::stage_span;
 use crate::session::{Session, SessionSnapshot};
 
 pub(super) struct RunningMap {
@@ -76,11 +77,24 @@ impl RunningMap {
     self.stages.remove(key)
   }
 
+  /// Each cancel runs inside the stage's own span so the lifecycle log
+  /// emitted from `Session::cancel` carries the same `phase` / `issue_id`
+  /// / `stage_name` / `agent_profile` fields as the rest of the stage
+  /// run. Without this, hard-shutdown cancellations would emit
+  /// uncorrelated logs because `cancel_all` is called from the main
+  /// loop, outside any stage span.
   pub(super) fn cancel_all(&self) {
     for stage in self.stages.values() {
-      if let Some(session) = &stage.session {
-        session.cancel();
-      }
+      let Some(session) = &stage.session else {
+        continue;
+      };
+      let _entered = stage_span(
+        &stage.issue_stage.issue().id,
+        stage.issue_stage.stage_name(),
+        &stage.issue_stage.stage().agent,
+      )
+      .entered();
+      session.cancel();
     }
   }
 
