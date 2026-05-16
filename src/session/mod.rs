@@ -595,6 +595,48 @@ mod tests {
   }
 
   #[test]
+  fn codex_fixture_retains_one_provider_record_per_line() {
+    let path = concat!(
+      env!("CARGO_MANIFEST_DIR"),
+      "/tests/fixtures/agent_events/codex/happy_path.jsonl"
+    );
+    assert_fixture_retains_one_provider_record_per_line(AgentRuntime::Codex, path);
+  }
+
+  #[test]
+  fn claude_code_fixture_retains_one_provider_record_per_line() {
+    let path = concat!(
+      env!("CARGO_MANIFEST_DIR"),
+      "/tests/fixtures/agent_events/claude_code/happy_path.jsonl"
+    );
+    assert_fixture_retains_one_provider_record_per_line(AgentRuntime::ClaudeCode, path);
+  }
+
+  fn assert_fixture_retains_one_provider_record_per_line(runtime: AgentRuntime, path: &str) {
+    let agent = get_adapter(runtime);
+    let body = std::fs::read_to_string(path).expect("fixture present");
+
+    for (index, line) in body.lines().enumerate() {
+      let events = map_agent_stdout_line(agent.as_ref(), line);
+      assert_eq!(
+        events.iter().filter(|event| event.is_provider_record()).count(),
+        1,
+        "line {index} must produce one provider record"
+      );
+      match runtime {
+        AgentRuntime::Codex => assert!(
+          matches!(events.first(), Some(AgentEvent::CodexProviderEvent { .. })),
+          "line {index} must start with Codex provider record"
+        ),
+        AgentRuntime::ClaudeCode => assert!(
+          matches!(events.first(), Some(AgentEvent::ClaudeCodeProviderEvent { .. })),
+          "line {index} must start with Claude Code provider record"
+        ),
+      }
+    }
+  }
+
+  #[test]
   fn provider_event_does_not_change_snapshot_semantics() {
     let (state_notifier, state_rx) = watch::channel(SessionState::Running);
     let mut inner = SessionInner {

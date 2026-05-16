@@ -262,4 +262,80 @@ mod tests {
       assert_eq!(serde_json::to_value(event).expect("event serializes"), value);
     }
   }
+
+  #[test]
+  fn typed_provider_events_roundtrip() {
+    let cases = [
+      (
+        AgentEvent::CodexProviderEvent {
+          event_type: CodexProviderEventKind::ItemCompleted {
+            item_type: Some("tool_call".into()),
+          },
+          event: json!({
+            "type": "item.completed",
+            "item": {
+              "type": "tool_call"
+            }
+          }),
+        },
+        json!({
+          "kind": "codex_provider_event",
+          "event_type": {
+            "kind": "item_completed",
+            "item_type": "tool_call"
+          },
+          "event": {
+            "type": "item.completed",
+            "item": {
+              "type": "tool_call"
+            }
+          }
+        }),
+      ),
+      (
+        AgentEvent::ClaudeCodeProviderEvent {
+          event_type: ClaudeCodeProviderEventKind::Assistant {
+            content_types: vec!["tool_use".into()],
+          },
+          event: json!({
+            "type": "assistant",
+            "message": {
+              "content": [
+                {
+                  "type": "tool_use"
+                }
+              ]
+            }
+          }),
+        },
+        json!({
+          "kind": "claude_code_provider_event",
+          "event_type": {
+            "kind": "assistant",
+            "content_types": ["tool_use"]
+          },
+          "event": {
+            "type": "assistant",
+            "message": {
+              "content": [
+                {
+                  "type": "tool_use"
+                }
+              ]
+            }
+          }
+        }),
+      ),
+    ];
+
+    for (event, expected) in cases {
+      let value = serde_json::to_value(&event).expect("event serializes");
+
+      assert_eq!(value, expected);
+      assert_eq!(
+        serde_json::from_value::<AgentEvent>(value).expect("event deserializes"),
+        event
+      );
+    }
+  }
 }
