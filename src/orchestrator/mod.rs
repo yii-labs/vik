@@ -300,7 +300,7 @@ mod tests {
 
   use super::*;
   use crate::context::Issue;
-  use crate::logging::tests::CaptureLayer;
+  use crate::logging::tests::{CaptureLayer, captured_event, captured_message_exists};
   use crate::workflow::Workflow;
 
   #[test]
@@ -498,16 +498,5 @@ mod tests {
       state: state.to_string(),
       extra_payload: serde_yaml::Mapping::new(),
     }
-  }
-
-  fn captured_event<'event>(events: &'event [serde_json::Value], message: &str) -> &'event serde_json::Value {
-    events
-      .iter()
-      .find(|event| event["message"] == message)
-      .unwrap_or_else(|| panic!("missing captured message: {message}"))
-  }
-
-  fn captured_message_exists(events: &[serde_json::Value], message: &str) -> bool {
-    events.iter().any(|event| event["message"] == message)
   }
 }
