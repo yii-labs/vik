@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use super::WorkflowSchema;
 use super::diagnose::*;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IssueIntakeSchema {
   pub pull: IssuePullSchema,
 
@@ -37,7 +37,17 @@ fn default_idle_sec() -> u64 {
   5
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl Default for IssuePullSchema {
+  fn default() -> Self {
+    Self {
+      command: String::new(),
+      idle_sec: default_idle_sec(),
+      unknown_fields: serde_yaml::Mapping::new(),
+    }
+  }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IssueHandlingSchema {
   /// Cross-cutting hooks; run for every matched issue regardless of which
   /// stages fire. `after_create` is the only kind today.
@@ -47,11 +57,12 @@ pub struct IssueHandlingSchema {
   /// `IndexMap` preserves author order so `should_dispatch` can iterate
   /// stages in workflow-file order — multiple stages may match the same
   /// state, and authors expect deterministic launch order.
-  pub stages: IndexMap<String, IssueStage>,
+  pub stages: IndexMap<String, IssueStageSchema>,
 
   #[serde(flatten)]
   unknown_fields: serde_yaml::Mapping,
 }
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IssueHooks {
   /// Runs once after the issue workdir is created and before any stage
@@ -64,7 +75,7 @@ pub struct IssueHooks {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IssueStage {
+pub struct IssueStageSchema {
   pub when: IssueStageMatch,
   pub agent: String,
   pub prompt_file: PathBuf,
@@ -73,6 +84,27 @@ pub struct IssueStage {
 
   #[serde(flatten)]
   unknown_fields: serde_yaml::Mapping,
+}
+
+#[cfg(test)]
+impl IssueStageSchema {
+  pub fn new(when: impl Into<String>) -> Self {
+    Self {
+      when: IssueStageMatch {
+        state: when.into(),
+        unknown_fields: Default::default(),
+      },
+      agent: String::new(),
+      prompt_file: PathBuf::new(),
+      hooks: IssueStageHooks::default(),
+      unknown_fields: Default::default(),
+    }
+  }
+
+  pub fn with_prompt_file(mut self, prompt_file: impl Into<PathBuf>) -> Self {
+    self.prompt_file = prompt_file.into();
+    self
+  }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -137,7 +169,7 @@ impl Diagnose for IssueHandlingSchema {
   }
 }
 
-impl Diagnose for IssueStage {
+impl Diagnose for IssueStageSchema {
   fn diagnose(&self, schema: &WorkflowSchema) -> Diagnostics {
     let mut diagnostics = Diagnostics::new();
 

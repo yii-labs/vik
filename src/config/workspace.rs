@@ -20,6 +20,15 @@ pub struct WorkspaceSchema {
   unknown_fields: serde_yaml::Mapping,
 }
 
+impl Default for WorkspaceSchema {
+  fn default() -> Self {
+    Self {
+      root: Some(".vik".into()),
+      unknown_fields: Default::default(),
+    }
+  }
+}
+
 impl Diagnose for WorkspaceSchema {
   fn diagnose(&self, _: &WorkflowSchema) -> Diagnostics {
     let mut diagnostics = Diagnostics::new();

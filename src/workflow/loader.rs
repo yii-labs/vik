@@ -8,8 +8,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::WorkflowError;
+use super::{Workflow, WorkflowError};
 use crate::config::WorkflowSchema;
+use crate::hooks::HookRunner;
+use crate::workspace::Workspace;
 use crate::{logging, utils};
 
 #[derive(Debug)]
@@ -83,5 +85,48 @@ impl WorkflowSchemaLoader {
     let cwd = std::env::current_dir().map_err(|err| WorkflowError::PathResolution(path.to_path_buf(), err))?;
 
     Ok(utils::paths::canonicalize_from(&cwd, path))
+  }
+}
+
+impl TryFrom<LoadedWorkflowSchema> for Workflow {
+  type Error = WorkflowError;
+
+  fn try_from(LoadedWorkflowSchema { path, schema }: LoadedWorkflowSchema) -> Result<Self, Self::Error> {
+    // Diagnose runs here, not in the loader, so the doctor command can
+    // surface warnings on a parsed-but-not-promoted schema.
+    let diagnostics = schema.diagnose();
+
+    if diagnostics.has_errors() {
+      return Err(WorkflowError::Diagnose(diagnostics));
+    }
+
+    Workflow::from_schema_unchecked(path, schema)
+  }
+}
+
+impl Workflow {
+  pub(super) fn from_schema_unchecked(path: PathBuf, schema: WorkflowSchema) -> Result<Self, WorkflowError> {
+    let workflow_dir = path
+      .parent()
+      .expect("path to workflow.yml must be valid because we've already read from it.")
+      .to_path_buf();
+
+    // Workspace root in YAML is optional; the supervisor needs an
+    // absolute path so resolution happens here, anchored at the
+    // workflow file's directory rather than process cwd.
+    let unresolved_workspace_home_dir = schema.workspace.root.clone().unwrap_or_else(utils::paths::default_home);
+
+    let workspace_root_dir = utils::paths::resolve_from(&workflow_dir, &unresolved_workspace_home_dir)
+      .ok_or(WorkflowError::WorkspaceRoot(unresolved_workspace_home_dir))?
+      .join("workflows")
+      .join(path.to_string_lossy().replace('/', "-"));
+
+    Ok(Workflow {
+      workflow_dir: workflow_dir.clone(),
+      workflow_path: path,
+      schema,
+      workspace: Workspace::new(workspace_root_dir),
+      hooks: HookRunner::new(),
+    })
   }
 }

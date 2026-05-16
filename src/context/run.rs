@@ -5,7 +5,7 @@ use serde::Serialize;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::config::IssueStage as StageSchema;
+use crate::config::IssueStageSchema as StageSchema;
 use crate::hooks::HookError;
 use crate::workflow::Workflow;
 
@@ -225,7 +225,6 @@ mod tests {
 
   use super::*;
   use crate::workflow::Workflow;
-  use crate::workflow::loader::WorkflowSchemaLoader;
 
   #[tokio::test]
   async fn prepare_skips_after_create_when_issue_workdir_exists() {
@@ -246,41 +245,11 @@ mod tests {
   }
 
   fn workflow_fixture(root: &std::path::Path, workflow_path: std::path::PathBuf, after_create: &str) -> Workflow {
-    let root_yaml = root.to_string_lossy();
-    let loaded = WorkflowSchemaLoader
-      .load_from_str(&workflow_yaml(root_yaml.as_ref(), after_create), Some(workflow_path))
-      .expect("workflow schema parses");
-
-    Workflow::try_from(loaded).expect("load workflow")
-  }
-
-  fn workflow_yaml(root_yaml: &str, after_create: &str) -> String {
-    format!(
-      r#"
-loop:
-  max_issue_concurrency: 1
-  wait_ms: 10
-workspace:
-  root: '{root_yaml}'
-agents:
-  codex:
-    runtime: codex
-    model: gpt-5.5
-issues:
-  pull:
-    command: ./issues-json
-    idle_sec: 1
-issue:
-  hooks:
-    after_create: {after_create}
-  stages:
-    plan:
-      when:
-        state: todo
-      agent: codex
-      prompt_file: ./plan.md
-"#
-    )
+    Workflow::builder()
+      .workflow_path(workflow_path)
+      .workspace_root(root)
+      .after_issue_workdir_create_hook(after_create)
+      .build()
   }
 
   fn issue(id: &str, state: &str) -> Issue {

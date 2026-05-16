@@ -18,6 +18,7 @@
 
 use std::fmt::Display;
 use std::ops::Deref;
+use std::ops::DerefMut;
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -81,7 +82,7 @@ impl AgentProfileSchema {
   }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AgentProfilesSchema(IndexMap<String, AgentProfileSchema>);
 
 impl Diagnose for AgentProfileSchema {
@@ -113,5 +114,11 @@ impl Deref for AgentProfilesSchema {
 
   fn deref(&self) -> &Self::Target {
     &self.0
+  }
+}
+
+impl DerefMut for AgentProfilesSchema {
+  fn deref_mut(&mut self) -> &mut Self::Target {
+    &mut self.0
   }
 }

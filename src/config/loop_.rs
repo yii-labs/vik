@@ -33,6 +33,17 @@ fn default_wait_ms() -> u64 {
   5000
 }
 
+impl Default for LoopSchema {
+  fn default() -> Self {
+    Self {
+      max_issue_concurrency: default_max_issue_concurrency(),
+      wait_ms: default_wait_ms(),
+      max_iterations: None,
+      unknown_fields: serde_yaml::Mapping::new(),
+    }
+  }
+}
+
 impl Diagnose for LoopSchema {
   fn diagnose(&self, _: &WorkflowSchema) -> Diagnostics {
     let mut diagnostics = Diagnostics::new();

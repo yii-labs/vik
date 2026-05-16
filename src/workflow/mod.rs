@@ -9,7 +9,8 @@
 //! The split lets `vik doctor` validate raw YAML through
 //! [`crate::config::WorkflowSchema`] without instantiating the workspace
 //! or pulling in the agent registry.
-pub mod builder;
+#[cfg(test)]
+mod builder;
 pub mod loader;
 
 use std::path::{Path, PathBuf};
@@ -23,6 +24,8 @@ use crate::utils;
 use crate::workspace::Workspace;
 
 pub use crate::config::*;
+#[cfg(test)]
+pub use builder::WorkflowBuilder;
 
 #[derive(Debug)]
 pub struct Workflow {
@@ -34,12 +37,6 @@ pub struct Workflow {
 }
 
 impl Workflow {
-  #[cfg(test)]
-  pub fn load_from_str(yaml: &str) -> Result<Self, WorkflowError> {
-    let loader = loader::WorkflowSchemaLoader.load_from_str(yaml, None)?;
-    loader.try_into()
-  }
-
   pub fn schema(&self) -> &WorkflowSchema {
     &self.schema
   }
@@ -56,7 +53,7 @@ impl Workflow {
     &self.schema.agents
   }
 
-  pub fn stages(&self) -> &IndexMap<String, issue::IssueStage> {
+  pub fn stages(&self) -> &IndexMap<String, issue::IssueStageSchema> {
     &self.schema.issue.stages
   }
 
