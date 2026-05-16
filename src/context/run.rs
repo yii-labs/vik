@@ -35,28 +35,10 @@ impl Serialize for IssueRun {
   where
     S: serde::Serializer,
   {
-    let json = serde_json::to_value(&self.issue).map_err(serde::ser::Error::custom)?;
-
-    let mut issue = serde_json::Map::new();
-    if let serde_json::Value::Object(issue_map) = json {
-      for (k, v) in issue_map {
-        issue.insert(k, v);
-      }
-      issue.insert("workdir".into(), self.workdir.to_string_lossy().into());
-    }
-
-    let mut root = serde_json::Map::new();
-    root.insert("issue".into(), issue.into());
-    root.insert(
-      "workflow_path".into(),
-      self.workflow().workflow_path().to_string_lossy().into(),
-    );
-    root.insert(
-      "workspace_root".into(),
-      self.workflow().workspace().root().to_string_lossy().into(),
-    );
-
-    root.serialize(serializer)
+    self
+      .template_context(None)
+      .map_err(serde::ser::Error::custom)?
+      .serialize(serializer)
   }
 }
 
@@ -85,6 +67,42 @@ impl IssueRun {
 
   pub fn workdir(&self) -> &Path {
     &self.workdir
+  }
+
+  fn template_context(
+    &self,
+    stage: Option<&StageSchema>,
+  ) -> Result<serde_json::Map<String, serde_json::Value>, serde_json::Error> {
+    let json = serde_json::to_value(&self.issue)?;
+
+    let mut issue = serde_json::Map::new();
+    if let serde_json::Value::Object(issue_map) = json {
+      for (k, v) in issue_map {
+        issue.insert(k, v);
+      }
+      issue.insert("workdir".into(), self.workdir.to_string_lossy().into());
+      if let Some(stage) = stage {
+        issue.insert(
+          "stage".into(),
+          serde_json::json!({
+            "name": stage.name.as_str(),
+          }),
+        );
+      }
+    }
+
+    let mut root = serde_json::Map::new();
+    root.insert("issue".into(), issue.into());
+    root.insert(
+      "workflow_path".into(),
+      self.workflow().workflow_path().to_string_lossy().into(),
+    );
+    root.insert(
+      "workspace_root".into(),
+      self.workflow().workspace().root().to_string_lossy().into(),
+    );
+
+    Ok(root)
   }
 
   pub fn matching_stages(issue_run: Arc<Self>) -> Vec<IssueStage> {
@@ -155,7 +173,6 @@ impl IssueStageKey {
 #[derive(Debug, Clone)]
 pub struct IssueStage {
   issue: Arc<IssueRun>,
-  name: String,
   schema: StageSchema,
   log_file: PathBuf,
 }
@@ -165,27 +182,28 @@ impl Serialize for IssueStage {
   where
     S: serde::Serializer,
   {
-    self.issue.serialize(serializer)
+    self
+      .issue
+      .template_context(Some(&self.schema))
+      .map_err(serde::ser::Error::custom)?
+      .serialize(serializer)
   }
 }
 
 impl IssueStage {
   pub fn new(issue: Arc<IssueRun>, stage_schema: StageSchema) -> Self {
-    let name = stage_schema.name.clone();
     // State prefix is for human eyeballing; UUIDv7 keeps names unique
     // and sorts runs within one state. Provider session ids land inside
     // the JSONL, not in the filename, because they are not always known
     // when the file must be created.
-    let log_file =
-      issue
-        .workflow()
-        .workspace()
-        .issue_sessions_dir(issue.id())
-        .join(format!("{}-{}.jsonl", &name, Uuid::now_v7()));
+    let log_file = issue.workflow().workspace().issue_sessions_dir(issue.id()).join(format!(
+      "{}-{}.jsonl",
+      stage_schema.name.as_str(),
+      Uuid::now_v7()
+    ));
 
     Self {
       issue,
-      name,
       schema: stage_schema,
       log_file,
     }
@@ -208,7 +226,7 @@ impl IssueStage {
   }
 
   pub fn stage_name(&self) -> &str {
-    &self.name
+    &self.schema.name
   }
 
   pub fn stage(&self) -> &StageSchema {
@@ -216,7 +234,7 @@ impl IssueStage {
   }
 
   pub fn key(&self) -> IssueStageKey {
-    IssueStageKey::new(self.issue().id.clone(), self.name.clone())
+    IssueStageKey::new(self.issue().id.clone(), self.stage_name().to_string())
   }
 }
 
@@ -290,7 +308,7 @@ mod tests {
   }
 
   #[test]
-  fn issue_stage_serializes_same_template_context_as_issue_run() {
+  fn issue_stage_serializes_stage_context_under_issue() {
     let temp = tempfile::tempdir().expect("tempdir");
     let workflow = Arc::new(
       Workflow::builder()
@@ -305,14 +323,16 @@ mod tests {
       .next()
       .expect("stage matches issue state");
 
-    assert_eq!(
-      serde_json::to_value(&stage).expect("issue stage serializes"),
-      serde_json::to_value(issue_run.as_ref()).expect("issue run serializes")
-    );
+    let issue_run_context = serde_json::to_value(issue_run.as_ref()).expect("issue run serializes");
+    let stage_context = serde_json::to_value(&stage).expect("issue stage serializes");
+
+    assert!(issue_run_context["issue"].get("stage").is_none());
+    assert_eq!(stage_context["issue"]["stage"]["name"], "plan");
+    assert_eq!(stage_context.get("stage"), None);
 
     let rendered = JinjaRenderer::new()
       .render(
-        "{{ issue.id }}|{{ issue.priority }}|{{ issue.workdir }}|{{ workflow_path }}|{{ workspace_root }}",
+        "{{ issue.id }}|{{ issue.priority }}|{{ issue.workdir }}|{{ issue.stage.name }}|{{ workflow_path }}|{{ workspace_root }}",
         &stage,
       )
       .expect("issue stage context renders");
@@ -320,7 +340,7 @@ mod tests {
     assert_eq!(
       rendered,
       format!(
-        "ABC-1|high|{}|{}|{}",
+        "ABC-1|high|{}|plan|{}|{}",
         stage.workdir().display(),
         workflow.workflow_path().display(),
         workflow.workspace().root().display()

@@ -162,7 +162,7 @@ Required issue fields:
 
 Optional issue fields are preserved under `issue` in the prompt and hook
 context. Avoid extra field names that collide with Vik issue bindings such as
-`id`, `title`, `description`, `state`, or `workdir`.
+`id`, `title`, `description`, `state`, `workdir`, or `stage`.
 
 Duplicate issue ids in one intake result are skipped after the first one.
 
@@ -209,7 +209,7 @@ Hook contexts:
 - stage hooks: same context as `after_create`.
 
 `issue` contains `id`, `title`, `description`, `state`, `workdir`, and optional
-extra issue fields.
+extra issue fields. Stage hook context also adds `issue.stage.name`.
 
 Hooks run with current directory set to the issue workspace.
 
@@ -242,6 +242,7 @@ Stage prompt context includes:
 
 - `issue.id`, `issue.title`, `issue.description`, and `issue.state`.
 - `issue.workdir`: issue workspace path.
+- `issue.stage.name`: current stage name.
 - optional extra issue fields returned by `issues.pull.command` as
   `issue.<field>`.
 - `workspace_root`: workflow-scoped workspace root.
@@ -250,8 +251,8 @@ Stage prompt context includes:
 
 Current agent subprocesses run with current directory set to the issue
 workspace. `issue.workdir` exists for prompts that need to print or pass the
-path. Current code does not expose `stage`, `workflow`, `loop`, or `profile`
-template objects.
+path. Current code does not expose root `stage`, `workflow`, `loop`, or
+`profile` template objects.
 
 ## Observation
 

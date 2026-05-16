@@ -50,10 +50,11 @@ Review for:
 - Prompt files may use ``!`exec(command)` ``.
 - Hooks do not run prompt-command expansion.
 - Hook and prompt context keeps issue data under `issue`, with `issue.workdir`
-  available for the issue workspace path.
+  available for the issue workspace path and `issue.stage.name` available for
+  stage-level hooks and prompts.
 - Root template bindings remain limited to `issue`, `workspace_root`,
   `workflow_path`, and `env`.
-- Template objects such as `stage`, `workflow`, `loop`, `profile`, and
+- Root template objects such as `stage`, `workflow`, `loop`, `profile`, and
   `workspace` are not available unless current code adds them.
 
 ## 5. Error Surface

@@ -178,7 +178,8 @@ Agent subprocess cwd is the issue workspace.
 - Hooks do not expand prompt commands.
 - Hook template context includes `issue`, `workspace_root`, `workflow_path`, and
   `env`. `issue` contains `id`, `title`, `description`, `state`, `workdir`, and
-  optional extra issue fields.
+  optional extra issue fields. Stage hook and prompt context also includes
+  `issue.stage.name`.
 
 ## Prompt Rendering
 
@@ -191,7 +192,7 @@ Agent subprocess cwd is the issue workspace.
 - non-zero exit fails rendering.
 - Prompt context is the same context used by hooks.
 - Prompt context can read `env.<VAR>` from the Vik process environment.
-- Current code does not expose `stage`, `workflow`, `loop`, or `profile`
+- Current code does not expose root `stage`, `workflow`, `loop`, or `profile`
   template objects.
 
 ## CLI Surface

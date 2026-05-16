@@ -269,7 +269,7 @@ mod tests {
   #[tokio::test]
   async fn configured_hook_renders_template_and_executes_in_cwd() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let hook = Some("echo {{ issue.id }}:{{ stage.name }}>hook-output.txt".to_string());
+    let hook = Some("echo {{ issue.id }}:{{ issue.stage.name }}>hook-output.txt".to_string());
 
     HookRunner::new()
       .schedule_inner(
@@ -277,8 +277,10 @@ mod tests {
         temp.path(),
         &hook,
         serde_json::json!({
-          "issue": { "id": "ISS-7" },
-          "stage": { "name": "plan" }
+          "issue": {
+            "id": "ISS-7",
+            "stage": { "name": "plan" }
+          }
         }),
       )
       .await
