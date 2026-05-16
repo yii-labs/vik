@@ -32,6 +32,17 @@ impl CaptureLayer {
   }
 }
 
+pub(crate) fn captured_event<'event>(events: &'event [serde_json::Value], message: &str) -> &'event serde_json::Value {
+  events
+    .iter()
+    .find(|event| event["message"] == message)
+    .unwrap_or_else(|| panic!("missing captured message: {message}"))
+}
+
+pub(crate) fn captured_message_exists(events: &[serde_json::Value], message: &str) -> bool {
+  events.iter().any(|event| event["message"] == message)
+}
+
 impl<S> Layer<S> for CaptureLayer
 where
   S: Subscriber + for<'lookup> LookupSpan<'lookup>,
