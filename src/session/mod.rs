@@ -498,11 +498,10 @@ mod tests {
   fn observation_events_write_jsonl_without_snapshot_updates() {
     let temp = tempfile::tempdir().expect("tempdir");
     let path = temp.path().join("session.jsonl");
-    let rx;
 
     {
       let (mut inner, state_notifier) = session_inner();
-      rx = state_notifier.subscribe();
+      let rx = state_notifier.subscribe();
       inner.writer = Some(JsonlWriter::open(&path).expect("writer opens"));
 
       inner.apply_event(

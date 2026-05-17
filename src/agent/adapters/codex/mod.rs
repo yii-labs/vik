@@ -15,10 +15,13 @@
 //! full parsed provider JSON so future Codex event kinds stay visible
 //! in session JSONL.
 
+mod events;
+
 use serde_json::Value;
 
 use super::{AgentAdapter, AgentCommand, AgentEvent, AgentStdin, ToolCallPhase, build_extra_args};
 use crate::config::AgentProfileSchema;
+use events::{CurrentEvent, ThreadItem};
 
 const CODEX_PROGRAM: &str = "codex";
 
@@ -53,99 +56,82 @@ fn map_events(value: &Value) -> Vec<AgentEvent> {
     return vec![event];
   }
 
-  let Some(ty) = value.get("type").and_then(Value::as_str) else {
+  let Some(event) = events::parse_current(value) else {
     return vec![unknown_event(value)];
   };
 
-  match ty {
-    "thread.started" => value
-      .get("thread_id")
-      .and_then(Value::as_str)
-      .map(|session_id| {
-        vec![AgentEvent::SessionStarted {
-          session_id: session_id.to_string(),
-        }]
-      })
-      .unwrap_or_default(),
-    "item.started" => map_current_item_started(value),
-    "item.completed" => map_current_item_completed(value),
-    "turn.completed" => map_current_turn_completed(value),
-    "collabAgentToolCall" => map_collab_agent_tool_call(value),
-    "error" => vec![AgentEvent::Error {
-      detail: value.get("message").and_then(Value::as_str).unwrap_or("").to_string(),
+  match event {
+    CurrentEvent::ThreadStarted { thread_id } => thread_id
+      .map(|session_id| vec![AgentEvent::SessionStarted { session_id }])
+      .unwrap_or_else(|| vec![unknown_event(value)]),
+    CurrentEvent::ItemStarted { item } => map_current_item(value, item, ToolCallPhase::Request),
+    CurrentEvent::ItemCompleted { item } => map_current_item(value, item, ToolCallPhase::Result),
+    CurrentEvent::TurnCompleted { usage } => map_current_turn_completed(usage),
+    CurrentEvent::TurnFailed { error } => vec![AgentEvent::Error {
+      detail: error.and_then(|error| error.message).unwrap_or_default(),
     }],
-    _ => {
+    CurrentEvent::LegacyCollabAgentToolCall(event) => map_collab_agent_tool_call(value, event),
+    CurrentEvent::Error { message } => vec![AgentEvent::Error {
+      detail: message.unwrap_or_default(),
+    }],
+    CurrentEvent::TurnStarted | CurrentEvent::ItemUpdated | CurrentEvent::Unknown => {
       tracing::debug!(
         runtime = "codex",
-        codex_event_type = ty,
-        "codex event ignored: unknown type",
+        codex_event_type = event_type(value).unwrap_or("unknown"),
+        "codex event retained as unknown",
       );
       vec![unknown_event(value)]
     },
   }
 }
 
-fn map_collab_agent_tool_call(value: &Value) -> Vec<AgentEvent> {
-  let target_ids = value
-    .get("receiverThreadIds")
-    .and_then(Value::as_array)
-    .map(|ids| {
-      ids
-        .iter()
-        .filter_map(Value::as_str)
-        .map(str::to_string)
-        .collect::<Vec<String>>()
-    })
-    .unwrap_or_default();
-
+fn map_collab_agent_tool_call(value: &Value, event: events::LegacyCollabAgentToolCall) -> Vec<AgentEvent> {
   vec![AgentEvent::Subagent {
-    call_id: value.get("id").and_then(Value::as_str).map(str::to_string),
-    action: value.get("tool").and_then(Value::as_str).unwrap_or("unknown").to_string(),
-    status: value.get("status").and_then(Value::as_str).map(str::to_string),
-    target_ids,
+    call_id: event.id,
+    action: event.tool.unwrap_or_else(|| "unknown".into()),
+    status: event.status,
+    target_ids: event.receiver_thread_ids.unwrap_or_default(),
     raw: value.clone(),
   }]
 }
 
-fn map_current_item_started(value: &Value) -> Vec<AgentEvent> {
-  let Some(item) = value.get("item") else {
-    return vec![unknown_event(value)];
-  };
-  let Some(item_type) = item.get("type").and_then(Value::as_str) else {
+fn map_current_item(value: &Value, item: Option<ThreadItem>, phase: ToolCallPhase) -> Vec<AgentEvent> {
+  let Some(item) = item else {
     return vec![unknown_event(value)];
   };
 
-  match item_type {
-    "command_execution" => vec![AgentEvent::ToolCall {
-      call_id: item.get("id").and_then(Value::as_str).map(str::to_string),
-      name: Some(item_type.to_string()),
-      phase: ToolCallPhase::Request,
-      input: Some(item.clone()),
-      output: None,
-      raw: value.clone(),
-    }],
-    _ => vec![unknown_event(value)],
-  }
-}
-
-fn map_current_item_completed(value: &Value) -> Vec<AgentEvent> {
-  let Some(item) = value.get("item") else {
+  let Some(item_type) = item.kind.as_deref() else {
     return vec![unknown_event(value)];
   };
-  let Some(item_type) = item.get("type").and_then(Value::as_str) else {
+  let Some(raw_item) = value.get("item").cloned() else {
     return vec![unknown_event(value)];
   };
 
   match item_type {
     "agent_message" => vec![AgentEvent::Message {
-      text: item.get("text").and_then(Value::as_str).unwrap_or("").to_string(),
+      text: item.text.unwrap_or_default(),
     }],
     "command_execution" => vec![AgentEvent::ToolCall {
-      call_id: item.get("id").and_then(Value::as_str).map(str::to_string),
+      call_id: item.id,
       name: Some(item_type.to_string()),
-      phase: ToolCallPhase::Result,
-      input: None,
-      output: Some(item.clone()),
+      phase,
+      input: (phase == ToolCallPhase::Request).then_some(raw_item.clone()),
+      output: (phase == ToolCallPhase::Result).then_some(raw_item),
+      raw: value.clone(),
+    }],
+    "mcp_tool_call" => vec![AgentEvent::ToolCall {
+      call_id: item.id,
+      name: item.tool,
+      phase,
+      input: (phase == ToolCallPhase::Request).then(|| item.arguments.clone()).flatten(),
+      output: (phase == ToolCallPhase::Result).then(|| item.result.or(item.error)).flatten(),
+      raw: value.clone(),
+    }],
+    "collab_tool_call" => vec![AgentEvent::Subagent {
+      call_id: item.id,
+      action: item.tool.unwrap_or_else(|| "unknown".into()),
+      status: item.status,
+      target_ids: item.receiver_thread_ids.unwrap_or_default(),
       raw: value.clone(),
     }],
     _ => vec![unknown_event(value)],
@@ -154,13 +140,13 @@ fn map_current_item_completed(value: &Value) -> Vec<AgentEvent> {
 
 /// `turn.completed` carries both the per-turn usage and the stream
 /// terminator — fan out into two events so the session sees both.
-fn map_current_turn_completed(value: &Value) -> Vec<AgentEvent> {
+fn map_current_turn_completed(usage: Option<events::TokenUsage>) -> Vec<AgentEvent> {
   let mut events = Vec::new();
-  if let Some(usage) = value.get("usage") {
+  if let Some(usage) = usage {
     events.push(AgentEvent::TokenUsage {
-      input: usage.get("input_tokens").and_then(Value::as_u64).unwrap_or(0),
-      output: usage.get("output_tokens").and_then(Value::as_u64).unwrap_or(0),
-      cache_read: usage.get("cached_input_tokens").and_then(Value::as_u64).unwrap_or(0),
+      input: usage.input_tokens.unwrap_or(0),
+      output: usage.output_tokens.unwrap_or(0),
+      cache_read: usage.cached_input_tokens.unwrap_or(0),
     });
   }
   events.push(AgentEvent::Completed);
@@ -170,38 +156,29 @@ fn map_current_turn_completed(value: &Value) -> Vec<AgentEvent> {
 /// `pub(super)` so the in-module tests below can drive it directly
 /// without round-tripping through the adapter.
 pub(super) fn map_value(value: &Value) -> Option<AgentEvent> {
-  let msg = value.get("msg")?;
-  let ty = msg.get("type")?.as_str()?;
+  let envelope = events::parse_legacy(value)?;
+  let msg = envelope.msg;
 
-  match ty {
+  match msg.kind.as_str() {
     "session_configured" => {
       // Newer codex versions report session id under `msg.session_id`,
       // older ones under the outer envelope's `id`. Try both.
-      let session_id = msg
-        .get("session_id")
-        .and_then(Value::as_str)
-        .or_else(|| value.get("id").and_then(Value::as_str))?
-        .to_string();
+      let session_id = msg.session_id.or(envelope.id)?;
       Some(AgentEvent::SessionStarted { session_id })
     },
     "agent_message" => {
-      let text = msg
-        .get("message")
-        .and_then(Value::as_str)
-        .or_else(|| msg.get("text").and_then(Value::as_str))
-        .unwrap_or("")
-        .to_string();
+      let text = msg.message.or(msg.text).unwrap_or_default();
       Some(AgentEvent::Message { text })
     },
     "token_count" => {
-      let info = msg.get("info")?;
+      let info = msg.info?;
       // Prefer the `total_token_usage` subtree when present — it
       // already represents the cumulative count, so we don't need to
       // accumulate per-turn deltas ourselves.
-      let totals = info.get("total_token_usage").unwrap_or(info);
-      let input = totals.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
-      let output = totals.get("output_tokens").and_then(Value::as_u64).unwrap_or(0);
-      let cache_read = totals.get("cached_input_tokens").and_then(Value::as_u64).unwrap_or(0);
+      let totals = info.usage();
+      let input = totals.input_tokens.unwrap_or(0);
+      let output = totals.output_tokens.unwrap_or(0);
+      let cache_read = totals.cached_input_tokens.unwrap_or(0);
       Some(AgentEvent::TokenUsage {
         input,
         output,
@@ -209,14 +186,14 @@ pub(super) fn map_value(value: &Value) -> Option<AgentEvent> {
       })
     },
     "rate_limit_warning" | "rate_limit_reset" => {
-      let scope_raw = msg.get("scope").and_then(Value::as_str).unwrap_or("unknown");
+      let scope_raw = msg.scope.as_deref().unwrap_or("unknown");
       // Provider prefix keeps Codex limits from colliding with Claude
       // limits in the session's per-scope map.
       let scope = format!("codex:{scope_raw}");
-      let remaining = msg.get("remaining").and_then(Value::as_u64).unwrap_or(0);
+      let remaining = msg.remaining.unwrap_or(0);
       let reset_at = msg
-        .get("reset_at")
-        .and_then(Value::as_str)
+        .reset_at
+        .as_deref()
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&chrono::Utc))
         .unwrap_or_else(chrono::Utc::now);
@@ -229,14 +206,14 @@ pub(super) fn map_value(value: &Value) -> Option<AgentEvent> {
     },
     "turn_complete" | "shutdown_complete" => Some(AgentEvent::Completed),
     "error" => {
-      let detail = msg.get("message").and_then(Value::as_str).unwrap_or("").to_string();
+      let detail = msg.message.unwrap_or_default();
       Some(AgentEvent::Error { detail })
     },
     other => {
       tracing::debug!(
         runtime = "codex",
         codex_event_type = other,
-        "codex event ignored: unknown type",
+        "codex legacy event retained as unknown",
       );
       None
     },
@@ -245,13 +222,16 @@ pub(super) fn map_value(value: &Value) -> Option<AgentEvent> {
 
 fn unknown_event(value: &Value) -> AgentEvent {
   AgentEvent::Unknown {
-    event_type: value
-      .get("type")
-      .and_then(Value::as_str)
-      .or_else(|| value.pointer("/msg/type").and_then(Value::as_str))
-      .map(str::to_string),
+    event_type: event_type(value).map(str::to_string),
     raw: value.clone(),
   }
+}
+
+fn event_type(value: &Value) -> Option<&str> {
+  value
+    .get("type")
+    .and_then(Value::as_str)
+    .or_else(|| value.pointer("/msg/type").and_then(Value::as_str))
 }
 
 #[cfg(test)]
@@ -354,6 +334,18 @@ mod tests {
   }
 
   #[test]
+  fn current_thread_started_without_thread_id_maps_to_unknown() {
+    let line = r#"{"type":"thread.started"}"#;
+    assert_eq!(
+      parse_events(line),
+      vec![AgentEvent::Unknown {
+        event_type: Some("thread.started".into()),
+        raw: json!({"type": "thread.started"}),
+      }]
+    );
+  }
+
+  #[test]
   fn current_item_completed_agent_message_maps_to_message() {
     let line = r#"{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"hello"}}"#;
     assert_eq!(parse_events(line), vec![AgentEvent::Message { text: "hello".into() }]);
@@ -442,6 +434,33 @@ mod tests {
   }
 
   #[test]
+  fn current_mcp_tool_call_completed_maps_to_tool_call_result() {
+    let line = r#"{"type":"item.completed","item":{"id":"item_2","type":"mcp_tool_call","server":"github","tool":"pulls.get","arguments":{"number":96},"result":{"state":"OPEN"},"status":"completed"}}"#;
+    assert_eq!(
+      parse_events(line),
+      vec![AgentEvent::ToolCall {
+        call_id: Some("item_2".into()),
+        name: Some("pulls.get".into()),
+        phase: ToolCallPhase::Result,
+        input: None,
+        output: Some(json!({"state": "OPEN"})),
+        raw: json!({
+          "type": "item.completed",
+          "item": {
+            "id": "item_2",
+            "type": "mcp_tool_call",
+            "server": "github",
+            "tool": "pulls.get",
+            "arguments": {"number": 96},
+            "result": {"state": "OPEN"},
+            "status": "completed"
+          }
+        }),
+      }]
+    );
+  }
+
+  #[test]
   fn current_turn_started_maps_to_unknown_event_with_raw_payload() {
     let line = r#"{"type":"turn.started"}"#;
     assert_eq!(
@@ -449,6 +468,32 @@ mod tests {
       vec![AgentEvent::Unknown {
         event_type: Some("turn.started".into()),
         raw: json!({"type": "turn.started"}),
+      }]
+    );
+  }
+
+  #[test]
+  fn current_collab_tool_call_maps_to_subagent_event() {
+    let line = r#"{"type":"item.started","item":{"id":"call_2","type":"collab_tool_call","tool":"spawn_agent","status":"in_progress","sender_thread_id":"thread-1","receiver_thread_ids":["thread-3"],"prompt":"scan docs"}}"#;
+    assert_eq!(
+      parse_events(line),
+      vec![AgentEvent::Subagent {
+        call_id: Some("call_2".into()),
+        action: "spawn_agent".into(),
+        status: Some("in_progress".into()),
+        target_ids: vec!["thread-3".into()],
+        raw: json!({
+          "type": "item.started",
+          "item": {
+            "id": "call_2",
+            "type": "collab_tool_call",
+            "tool": "spawn_agent",
+            "status": "in_progress",
+            "sender_thread_id": "thread-1",
+            "receiver_thread_ids": ["thread-3"],
+            "prompt": "scan docs"
+          }
+        }),
       }]
     );
   }

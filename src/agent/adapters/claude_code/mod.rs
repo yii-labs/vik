@@ -12,11 +12,14 @@
 //! totals and stream completion, so `map_event` may fan out into two
 //! [`AgentEvent`]s for that single line.
 
+mod events;
+
 use serde_json::Value;
 
 use crate::config::AgentProfileSchema;
 
 use super::{AgentAdapter, AgentCommand, AgentEvent, AgentStdin, ToolCallPhase, build_extra_args};
+use events::{ClaudeEvent, ContentBlock, MessageEvent};
 
 const CLAUDE_PROGRAM: &str = "claude";
 
@@ -49,53 +52,52 @@ impl AgentAdapter for ClaudeCodeAdapter {
 }
 
 pub(super) fn map_value(value: &Value) -> Vec<AgentEvent> {
-  let Some(ty) = value.get("type").and_then(Value::as_str) else {
+  let Some(event) = events::parse(value) else {
     return vec![unknown_event(value)];
   };
 
-  match ty {
-    "system" => {
+  match event {
+    ClaudeEvent::System(event) => {
       // Only the `init` subtype reports session_id; other system
       // subtypes (config dumps, hook outputs) carry data we do not
       // surface as events.
-      let subtype = value.get("subtype").and_then(Value::as_str);
-      if subtype != Some("init") {
+      if event.subtype.as_deref() != Some("init") {
         return vec![unknown_event(value)];
       }
-      let session_id = value.get("session_id").and_then(Value::as_str).unwrap_or("").to_string();
-      if session_id.is_empty() {
-        return vec![unknown_event(value)];
-      }
-      vec![AgentEvent::SessionStarted { session_id }]
+      event
+        .session_id
+        .filter(|session_id| !session_id.is_empty())
+        .map(|session_id| vec![AgentEvent::SessionStarted { session_id }])
+        .unwrap_or_else(|| vec![unknown_event(value)])
     },
-    "assistant" => {
+    ClaudeEvent::Assistant(event) => {
       let mut events = Vec::new();
-      let text = extract_assistant_text(value);
+      let text = extract_assistant_text(&event);
       if !text.is_empty() {
         events.push(AgentEvent::Message { text });
       }
-      events.extend(extract_tool_uses(value));
+      events.extend(extract_tool_uses(value, &event));
       if events.is_empty() {
         events.push(unknown_event(value));
       }
       events
     },
-    "user" => {
-      let events = extract_tool_results(value);
+    ClaudeEvent::User(event) => {
+      let events = extract_tool_results(value, &event);
       if events.is_empty() {
         vec![unknown_event(value)]
       } else {
         events
       }
     },
-    "result" => {
+    ClaudeEvent::Result(event) => {
       let mut out = Vec::new();
-      if let Some(usage) = value.get("usage") {
-        let input = usage.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
-        let output = usage.get("output_tokens").and_then(Value::as_u64).unwrap_or(0);
+      if let Some(usage) = event.usage {
+        let input = usage.input_tokens.unwrap_or(0);
+        let output = usage.output_tokens.unwrap_or(0);
         // Note the field-name divergence from Codex: Claude reports
         // `cache_read_input_tokens`, Codex reports `cached_input_tokens`.
-        let cache_read = usage.get("cache_read_input_tokens").and_then(Value::as_u64).unwrap_or(0);
+        let cache_read = usage.cache_read_input_tokens.unwrap_or(0);
         out.push(AgentEvent::TokenUsage {
           input,
           output,
@@ -105,11 +107,11 @@ pub(super) fn map_value(value: &Value) -> Vec<AgentEvent> {
       out.push(AgentEvent::Completed);
       out
     },
-    _ => {
+    ClaudeEvent::Unknown => {
       tracing::debug!(
         runtime = "claude_code",
-        claude_event_type = ty,
-        "claude_code event ignored: unknown type",
+        claude_event_type = event_type(value).unwrap_or("unknown"),
+        "claude_code event retained as unknown",
       );
       vec![unknown_event(value)]
     },
@@ -119,86 +121,79 @@ pub(super) fn map_value(value: &Value) -> Vec<AgentEvent> {
 /// `message.content` is an array of blocks (text, tool_use, …). Only
 /// `text` blocks are user-facing; concatenate them with newlines so a
 /// multi-block reply still reads naturally in `last_message`.
-fn extract_assistant_text(value: &Value) -> String {
-  let Some(content) = value.get("message").and_then(|m| m.get("content")).and_then(Value::as_array) else {
-    return String::new();
-  };
+fn extract_assistant_text(event: &MessageEvent) -> String {
   let mut buf = String::new();
-  for block in content {
-    if block.get("type").and_then(Value::as_str) == Some("text")
-      && let Some(text) = block.get("text").and_then(Value::as_str)
-    {
+  for block in content_blocks(event) {
+    if let ContentBlock::Text { text: Some(text) } = block {
       if !buf.is_empty() {
         buf.push('\n');
       }
-      buf.push_str(text);
+      buf.push_str(text.as_str());
     }
   }
   buf
 }
 
-fn extract_tool_uses(value: &Value) -> Vec<AgentEvent> {
-  value
-    .get("message")
-    .and_then(|m| m.get("content"))
-    .and_then(Value::as_array)
-    .map(|content| {
-      content
-        .iter()
-        .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
-        .map(|block| {
-          let name = block.get("name").and_then(Value::as_str);
-          if name == Some("Task") {
-            AgentEvent::Subagent {
-              call_id: block.get("id").and_then(Value::as_str).map(str::to_string),
-              action: "Task".into(),
-              status: None,
-              target_ids: Vec::new(),
-              raw: value.clone(),
-            }
-          } else {
-            AgentEvent::ToolCall {
-              call_id: block.get("id").and_then(Value::as_str).map(str::to_string),
-              name: name.map(str::to_string),
-              phase: ToolCallPhase::Request,
-              input: block.get("input").cloned(),
-              output: None,
-              raw: value.clone(),
-            }
-          }
-        })
-        .collect()
+fn extract_tool_uses(value: &Value, event: &MessageEvent) -> Vec<AgentEvent> {
+  content_blocks(event)
+    .iter()
+    .filter_map(|block| match block {
+      ContentBlock::ToolUse { id, name, .. } if is_subagent_tool(name.as_deref()) => Some(AgentEvent::Subagent {
+        call_id: id.clone(),
+        action: name.clone().unwrap_or_else(|| "unknown".into()),
+        status: None,
+        target_ids: Vec::new(),
+        raw: value.clone(),
+      }),
+      ContentBlock::ToolUse { id, name, input } => Some(AgentEvent::ToolCall {
+        call_id: id.clone(),
+        name: name.clone(),
+        phase: ToolCallPhase::Request,
+        input: input.clone(),
+        output: None,
+        raw: value.clone(),
+      }),
+      _ => None,
     })
-    .unwrap_or_default()
+    .collect()
 }
 
-fn extract_tool_results(value: &Value) -> Vec<AgentEvent> {
-  value
-    .get("message")
-    .and_then(|m| m.get("content"))
-    .and_then(Value::as_array)
-    .map(|content| {
-      content
-        .iter()
-        .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
-        .map(|block| AgentEvent::ToolCall {
-          call_id: block.get("tool_use_id").and_then(Value::as_str).map(str::to_string),
-          name: None,
-          phase: ToolCallPhase::Result,
-          input: None,
-          output: block.get("content").cloned(),
-          raw: value.clone(),
-        })
-        .collect()
+fn extract_tool_results(value: &Value, event: &MessageEvent) -> Vec<AgentEvent> {
+  content_blocks(event)
+    .iter()
+    .filter_map(|block| match block {
+      ContentBlock::ToolResult {
+        tool_use_id, content, ..
+      } => Some(AgentEvent::ToolCall {
+        call_id: tool_use_id.clone(),
+        name: None,
+        phase: ToolCallPhase::Result,
+        input: None,
+        output: content.clone(),
+        raw: value.clone(),
+      }),
+      _ => None,
     })
-    .unwrap_or_default()
+    .collect()
 }
 
 fn unknown_event(value: &Value) -> AgentEvent {
   AgentEvent::Unknown {
-    event_type: value.get("type").and_then(Value::as_str).map(str::to_string),
+    event_type: event_type(value).map(str::to_string),
     raw: value.clone(),
   }
+}
+
+fn content_blocks(event: &MessageEvent) -> &[ContentBlock] {
+  event.message.as_ref().map(|message| message.content.blocks()).unwrap_or(&[])
+}
+
+fn is_subagent_tool(name: Option<&str>) -> bool {
+  matches!(name, Some("Agent" | "Task"))
+}
+
+fn event_type(value: &Value) -> Option<&str> {
+  value.get("type").and_then(Value::as_str)
 }
 
 #[cfg(test)]
@@ -361,6 +356,37 @@ mod tests {
                   "description": "scan docs",
                   "prompt": "Find docs drift",
                   "subagent_type": "general-purpose"
+                }
+              }
+            ]
+          }
+        }),
+      }]
+    );
+  }
+
+  #[test]
+  fn agent_tool_use_maps_to_subagent_event() {
+    let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"agent-1","name":"Agent","input":{"description":"scan docs","prompt":"Find docs drift","agent_type":"general-purpose"}}]}}"#;
+    assert_eq!(
+      parse(line),
+      vec![AgentEvent::Subagent {
+        call_id: Some("agent-1".into()),
+        action: "Agent".into(),
+        status: None,
+        target_ids: Vec::new(),
+        raw: json!({
+          "type": "assistant",
+          "message": {
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "agent-1",
+                "name": "Agent",
+                "input": {
+                  "description": "scan docs",
+                  "prompt": "Find docs drift",
+                  "agent_type": "general-purpose"
                 }
               }
             ]
