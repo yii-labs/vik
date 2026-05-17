@@ -52,8 +52,7 @@ when a run stalls, crashes, or restarts.
 - **Issue Stage**: one named stage matched by exact issue state.
 - **Issue Workspace**:
   `<workflow-workspace-root>/issues/<issue.id>/`.
-- **Session**: one stage execution with state snapshot and decoded `AgentEvent`
-  JSONL.
+- **Session**: one stage execution with state snapshot and `AgentEvent` JSONL.
 - **Session Factory**: orchestrator spawn boundary for sessions.
 
 ## Workflow Config
@@ -136,7 +135,8 @@ today.
 - renders the prompt file
 - starts the selected provider process
 - maps provider stdout JSONL to `AgentEvent`
-- writes decoded events to JSONL
+- writes events to JSONL, including retained tool-call, subagent, and unknown
+  provider evidence
 - tracks `SessionState`, last message, token usage, and rate-limit observations
 - exposes cancellation through the child process wrapper
 

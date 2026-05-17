@@ -11,12 +11,13 @@
 //! Codex emits two event shapes today and we accept both: the legacy
 //! `{"msg": {"type": ...}}` envelope and the newer flat
 //! `{"type": "thread.started" | "item.completed" | "turn.completed"}`.
-//! Unknown shapes log at DEBUG and drop — the stream must survive new
-//! event kinds shipped by Codex.
+//! Unknown shapes log at DEBUG and emit `AgentEvent::Unknown` with the
+//! full parsed provider JSON so future Codex event kinds stay visible
+//! in session JSONL.
 
 use serde_json::Value;
 
-use super::{AgentAdapter, AgentCommand, AgentEvent, AgentStdin, build_extra_args};
+use super::{AgentAdapter, AgentCommand, AgentEvent, AgentStdin, ToolCallPhase, build_extra_args};
 use crate::config::AgentProfileSchema;
 
 const CODEX_PROGRAM: &str = "codex";
@@ -53,7 +54,7 @@ fn map_events(value: &Value) -> Vec<AgentEvent> {
   }
 
   let Some(ty) = value.get("type").and_then(Value::as_str) else {
-    return Vec::new();
+    return vec![unknown_event(value)];
   };
 
   match ty {
@@ -66,35 +67,88 @@ fn map_events(value: &Value) -> Vec<AgentEvent> {
         }]
       })
       .unwrap_or_default(),
+    "item.started" => map_current_item_started(value),
     "item.completed" => map_current_item_completed(value),
     "turn.completed" => map_current_turn_completed(value),
+    "collabAgentToolCall" => map_collab_agent_tool_call(value),
     "error" => vec![AgentEvent::Error {
       detail: value.get("message").and_then(Value::as_str).unwrap_or("").to_string(),
     }],
-    other => {
+    _ => {
       tracing::debug!(
         runtime = "codex",
-        codex_event_type = other,
+        codex_event_type = ty,
         "codex event ignored: unknown type",
       );
-      Vec::new()
+      vec![unknown_event(value)]
     },
+  }
+}
+
+fn map_collab_agent_tool_call(value: &Value) -> Vec<AgentEvent> {
+  let target_ids = value
+    .get("receiverThreadIds")
+    .and_then(Value::as_array)
+    .map(|ids| {
+      ids
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect::<Vec<String>>()
+    })
+    .unwrap_or_default();
+
+  vec![AgentEvent::Subagent {
+    call_id: value.get("id").and_then(Value::as_str).map(str::to_string),
+    action: value.get("tool").and_then(Value::as_str).unwrap_or("unknown").to_string(),
+    status: value.get("status").and_then(Value::as_str).map(str::to_string),
+    target_ids,
+    raw: value.clone(),
+  }]
+}
+
+fn map_current_item_started(value: &Value) -> Vec<AgentEvent> {
+  let Some(item) = value.get("item") else {
+    return vec![unknown_event(value)];
+  };
+  let Some(item_type) = item.get("type").and_then(Value::as_str) else {
+    return vec![unknown_event(value)];
+  };
+
+  match item_type {
+    "command_execution" => vec![AgentEvent::ToolCall {
+      call_id: item.get("id").and_then(Value::as_str).map(str::to_string),
+      name: Some(item_type.to_string()),
+      phase: ToolCallPhase::Request,
+      input: Some(item.clone()),
+      output: None,
+      raw: value.clone(),
+    }],
+    _ => vec![unknown_event(value)],
   }
 }
 
 fn map_current_item_completed(value: &Value) -> Vec<AgentEvent> {
   let Some(item) = value.get("item") else {
-    return Vec::new();
+    return vec![unknown_event(value)];
   };
   let Some(item_type) = item.get("type").and_then(Value::as_str) else {
-    return Vec::new();
+    return vec![unknown_event(value)];
   };
 
   match item_type {
     "agent_message" => vec![AgentEvent::Message {
       text: item.get("text").and_then(Value::as_str).unwrap_or("").to_string(),
     }],
-    _ => Vec::new(),
+    "command_execution" => vec![AgentEvent::ToolCall {
+      call_id: item.get("id").and_then(Value::as_str).map(str::to_string),
+      name: Some(item_type.to_string()),
+      phase: ToolCallPhase::Result,
+      input: None,
+      output: Some(item.clone()),
+      raw: value.clone(),
+    }],
+    _ => vec![unknown_event(value)],
   }
 }
 
@@ -189,9 +243,21 @@ pub(super) fn map_value(value: &Value) -> Option<AgentEvent> {
   }
 }
 
+fn unknown_event(value: &Value) -> AgentEvent {
+  AgentEvent::Unknown {
+    event_type: value
+      .get("type")
+      .and_then(Value::as_str)
+      .or_else(|| value.pointer("/msg/type").and_then(Value::as_str))
+      .map(str::to_string),
+    raw: value.clone(),
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use crate::config::AgentRuntime;
+  use serde_json::json;
 
   use super::*;
 
@@ -242,9 +308,15 @@ mod tests {
   }
 
   #[test]
-  fn unknown_event_is_dropped() {
+  fn unknown_msg_event_maps_to_unknown_event_with_raw_payload() {
     let line = r#"{"id":"evt-4","msg":{"type":"future_event_kind"}}"#;
-    assert_eq!(parse(line), None);
+    assert_eq!(
+      parse_events(line),
+      vec![AgentEvent::Unknown {
+        event_type: Some("future_event_kind".into()),
+        raw: json!({"id": "evt-4", "msg": {"type": "future_event_kind"}}),
+      }]
+    );
   }
 
   #[test]
@@ -300,6 +372,110 @@ mod tests {
         },
         AgentEvent::Completed,
       ]
+    );
+  }
+
+  #[test]
+  fn current_command_execution_started_maps_to_tool_call_request() {
+    let line = r#"{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc pwd","aggregated_output":"","exit_code":null,"status":"in_progress"}}"#;
+    assert_eq!(
+      parse_events(line),
+      vec![AgentEvent::ToolCall {
+        call_id: Some("item_1".into()),
+        name: Some("command_execution".into()),
+        phase: ToolCallPhase::Request,
+        input: Some(json!({
+          "id": "item_1",
+          "type": "command_execution",
+          "command": "/bin/zsh -lc pwd",
+          "aggregated_output": "",
+          "exit_code": null,
+          "status": "in_progress"
+        })),
+        output: None,
+        raw: json!({
+          "type": "item.started",
+          "item": {
+            "id": "item_1",
+            "type": "command_execution",
+            "command": "/bin/zsh -lc pwd",
+            "aggregated_output": "",
+            "exit_code": null,
+            "status": "in_progress"
+          }
+        }),
+      }]
+    );
+  }
+
+  #[test]
+  fn current_command_execution_completed_maps_to_tool_call_result() {
+    let line = r#"{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc pwd","aggregated_output":"/tmp\n","exit_code":0,"status":"completed"}}"#;
+    assert_eq!(
+      parse_events(line),
+      vec![AgentEvent::ToolCall {
+        call_id: Some("item_1".into()),
+        name: Some("command_execution".into()),
+        phase: ToolCallPhase::Result,
+        input: None,
+        output: Some(json!({
+          "id": "item_1",
+          "type": "command_execution",
+          "command": "/bin/zsh -lc pwd",
+          "aggregated_output": "/tmp\n",
+          "exit_code": 0,
+          "status": "completed"
+        })),
+        raw: json!({
+          "type": "item.completed",
+          "item": {
+            "id": "item_1",
+            "type": "command_execution",
+            "command": "/bin/zsh -lc pwd",
+            "aggregated_output": "/tmp\n",
+            "exit_code": 0,
+            "status": "completed"
+          }
+        }),
+      }]
+    );
+  }
+
+  #[test]
+  fn current_turn_started_maps_to_unknown_event_with_raw_payload() {
+    let line = r#"{"type":"turn.started"}"#;
+    assert_eq!(
+      parse_events(line),
+      vec![AgentEvent::Unknown {
+        event_type: Some("turn.started".into()),
+        raw: json!({"type": "turn.started"}),
+      }]
+    );
+  }
+
+  #[test]
+  fn collab_agent_tool_call_maps_to_subagent_event() {
+    let line = r#"{"type":"collabAgentToolCall","id":"call_1","tool":"spawnAgent","status":"completed","senderThreadId":"thread-1","receiverThreadIds":["thread-2"],"agentsStates":{},"model":"gpt-5.5","reasoningEffort":"medium","prompt":"scan docs"}"#;
+    assert_eq!(
+      parse_events(line),
+      vec![AgentEvent::Subagent {
+        call_id: Some("call_1".into()),
+        action: "spawnAgent".into(),
+        status: Some("completed".into()),
+        target_ids: vec!["thread-2".into()],
+        raw: json!({
+          "type": "collabAgentToolCall",
+          "id": "call_1",
+          "tool": "spawnAgent",
+          "status": "completed",
+          "senderThreadId": "thread-1",
+          "receiverThreadIds": ["thread-2"],
+          "agentsStates": {},
+          "model": "gpt-5.5",
+          "reasoningEffort": "medium",
+          "prompt": "scan docs"
+        }),
+      }]
     );
   }
 

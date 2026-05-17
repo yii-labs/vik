@@ -12,8 +12,9 @@
 //! - [`Session::cancel`] — kill the child and force `Cancelled` (no-op
 //!   if already terminal).
 //!
-//! Decoded provider events accumulate into the snapshot and are also
-//! appended to a JSONL file as the durable record.
+//! Decoded provider events append to session JSONL as the durable
+//! record. Semantic events also accumulate into the snapshot;
+//! observation-only events stay JSONL-only.
 #![allow(dead_code)]
 mod factory;
 mod jsonl_writer;
@@ -282,14 +283,14 @@ impl SessionInner {
       tracing::error!("session jsonl write failed: {err}");
     }
 
-    self.snapshot.last_event_at = Some(Utc::now());
-
     match event {
       AgentEvent::SessionStarted { session_id } => {
+        self.snapshot.last_event_at = Some(Utc::now());
         tracing::info!(session_id = %session_id, "agent session id observed");
         self.snapshot.agent_session_id = Some(session_id);
       },
       AgentEvent::Message { text } => {
+        self.snapshot.last_event_at = Some(Utc::now());
         self.snapshot.last_message = Some(text);
       },
       AgentEvent::TokenUsage {
@@ -297,6 +298,7 @@ impl SessionInner {
         output,
         cache_read,
       } => {
+        self.snapshot.last_event_at = Some(Utc::now());
         // saturating_add tolerates duplicated TokenUsage events
         // without panicking; providers occasionally report twice on
         // retry and the totals only grow.
@@ -310,6 +312,7 @@ impl SessionInner {
         reset_at,
         observed_at,
       } => {
+        self.snapshot.last_event_at = Some(Utc::now());
         // Latest-wins by observation time: a provider retry can land a
         // stale observation after a newer one, and we want to keep the
         // most recent ground truth.
@@ -329,11 +332,14 @@ impl SessionInner {
         }
       },
       AgentEvent::Completed => {
+        self.snapshot.last_event_at = Some(Utc::now());
         self.set_state(SessionState::Completed, state_notifier);
       },
       AgentEvent::Error { detail: _ } => {
+        self.snapshot.last_event_at = Some(Utc::now());
         self.set_state(SessionState::Failed, state_notifier);
       },
+      AgentEvent::ToolCall { .. } | AgentEvent::Subagent { .. } | AgentEvent::Unknown { .. } => return,
     }
 
     state_notifier.send_replace(self.snapshot.state);
@@ -401,10 +407,13 @@ async fn stream_agent_events(
 
 #[cfg(test)]
 mod tests {
+  use serde_json::json;
   use tracing::subscriber::with_default;
   use tracing_subscriber::{Registry, layer::SubscriberExt};
 
   use super::*;
+  use crate::agent::ToolCallPhase;
+  use crate::agent::{AgentAdapter, AgentCommand};
   use crate::logging::tests::{CaptureLayer, captured_event, captured_message_exists};
 
   fn session_inner() -> (SessionInner, watch::Sender<SessionState>) {
@@ -483,6 +492,148 @@ mod tests {
       .expect("rate limit observation stored");
     assert_eq!(observation.remaining, 50);
     assert_eq!(observation.observed_at, fresh);
+  }
+
+  #[test]
+  fn observation_events_write_jsonl_without_snapshot_updates() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("session.jsonl");
+    let rx;
+
+    {
+      let (mut inner, state_notifier) = session_inner();
+      rx = state_notifier.subscribe();
+      inner.writer = Some(JsonlWriter::open(&path).expect("writer opens"));
+
+      inner.apply_event(
+        AgentEvent::ToolCall {
+          call_id: Some("tool-1".into()),
+          name: Some("Bash".into()),
+          phase: ToolCallPhase::Request,
+          input: Some(json!({"command": "ls"})),
+          output: None,
+          raw: json!({"type": "assistant"}),
+        },
+        &state_notifier,
+      );
+      inner.apply_event(
+        AgentEvent::Subagent {
+          call_id: Some("collab-1".into()),
+          action: "spawnAgent".into(),
+          status: Some("completed".into()),
+          target_ids: vec!["thread-2".into()],
+          raw: json!({"type": "collabAgentToolCall"}),
+        },
+        &state_notifier,
+      );
+      inner.apply_event(
+        AgentEvent::Unknown {
+          event_type: Some("future_event_kind".into()),
+          raw: json!({"type": "future_event_kind"}),
+        },
+        &state_notifier,
+      );
+
+      assert!(matches!(inner.snapshot.state, SessionState::UnStarted));
+      assert!(inner.snapshot.agent_session_id.is_none());
+      assert!(inner.snapshot.last_event_at.is_none());
+      assert!(inner.snapshot.last_message.is_none());
+      assert_eq!(inner.snapshot.tokens.input, 0);
+      assert_eq!(inner.snapshot.tokens.output, 0);
+      assert_eq!(inner.snapshot.tokens.cache_read, 0);
+      assert!(inner.snapshot.rate_limits.is_empty());
+      assert!(!rx.has_changed().expect("watch sender alive"));
+    }
+
+    let lines = std::fs::read_to_string(&path)
+      .expect("session JSONL reads")
+      .lines()
+      .map(|line| serde_json::from_str(line).expect("line is JSON"))
+      .collect::<Vec<serde_json::Value>>();
+
+    assert_eq!(
+      lines,
+      vec![
+        json!({
+          "kind": "tool_call",
+          "call_id": "tool-1",
+          "name": "Bash",
+          "phase": "request",
+          "input": {"command": "ls"},
+          "output": null,
+          "raw": {"type": "assistant"}
+        }),
+        json!({
+          "kind": "subagent",
+          "call_id": "collab-1",
+          "action": "spawnAgent",
+          "status": "completed",
+          "target_ids": ["thread-2"],
+          "raw": {"type": "collabAgentToolCall"}
+        }),
+        json!({
+          "kind": "unknown",
+          "event_type": "future_event_kind",
+          "raw": {"type": "future_event_kind"}
+        }),
+      ]
+    );
+  }
+
+  #[tokio::test]
+  async fn malformed_jsonl_writes_error_event_and_fails_session() {
+    #[derive(Debug)]
+    struct NoopAdapter;
+
+    impl AgentAdapter for NoopAdapter {
+      fn build_command(&self, _profile: &AgentProfileSchema, _prompt: String) -> AgentCommand {
+        unreachable!("stream parse failure does not call build_command")
+      }
+
+      fn map_event(&self, _value: serde_json::Value) -> Vec<AgentEvent> {
+        Vec::new()
+      }
+    }
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("session.jsonl");
+    let (mut inner, state_notifier) = session_inner();
+    inner.writer = Some(JsonlWriter::open(&path).expect("writer opens"));
+    inner.set_state(SessionState::Running, &state_notifier);
+    let inner = Arc::new(Mutex::new(inner));
+
+    let mut child = Command::new("sh")
+      .arg("-c")
+      .arg("printf '%s\n' '{bad-json'")
+      .stdout(Stdio::piped())
+      .spawn()
+      .expect("test child spawns");
+    let stdout = child.stdout.take().expect("stdout piped");
+
+    stream_agent_events(stdout, Arc::new(NoopAdapter), Arc::clone(&inner), state_notifier).await;
+    let status = child.wait().await.expect("test child exits");
+    assert!(status.success());
+
+    {
+      let mut guard = inner.lock().expect("session mutex never poisoned");
+      assert!(matches!(guard.snapshot.state, SessionState::Failed));
+      guard.writer = None;
+    }
+
+    let lines = std::fs::read_to_string(&path)
+      .expect("session JSONL reads")
+      .lines()
+      .map(|line| serde_json::from_str(line).expect("line is JSON"))
+      .collect::<Vec<serde_json::Value>>();
+
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["kind"], "error");
+    assert!(
+      lines[0]["detail"]
+        .as_str()
+        .expect("error detail is string")
+        .contains("key must be a string")
+    );
   }
 
   #[test]

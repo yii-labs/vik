@@ -63,9 +63,14 @@ Session JSONL files live under:
 <workflow-workspace-root>/sessions/<issue.id>/<stage.name>-<uuid-v7>.jsonl
 ```
 
-The file contains decoded Vik `AgentEvent` records, not raw provider JSONL.
-Records include messages, token usage, rate-limit observations, completion, and
-errors when the provider adapter maps them.
+The file contains Vik `AgentEvent` records. It is not a byte-for-byte copy of
+provider JSONL, but observation records keep the full parsed provider JSON under
+`raw`.
+
+Records include messages, token usage, rate-limit observations, tool calls,
+subagent/delegation events, unknown valid provider events, completion, and
+errors. Tool-call, subagent, and unknown records are JSONL-only evidence; they
+do not update the session snapshot fields used for operator status.
 
 The provider session id, when reported, appears inside events and snapshots. It
 is not used as the filename.

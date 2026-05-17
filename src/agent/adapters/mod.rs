@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::config::AgentProfileSchema;
 
-use super::response::AgentEvent;
+use super::response::{AgentEvent, ToolCallPhase};
 
 pub(super) use claude_code::ClaudeCodeAdapter;
 pub(super) use codex::CodexAdapter;
@@ -39,15 +39,15 @@ pub enum AgentStdin {
 }
 
 /// Implementations are stateless per spawn: `build_command` is called
-/// once per run and `map_event` once per JSONL line. Returning an empty
-/// `Vec` from `map_event` drops the line; returning multiple events
-/// fans one line out (e.g. Claude's `result` line yields both
-/// `TokenUsage` and `Completed`).
+/// once per run and `map_event` once per JSONL line. Returning multiple
+/// events fans one line out (e.g. Claude's `result` line yields both
+/// `TokenUsage` and `Completed`). Valid provider lines that do not map
+/// to a semantic event should emit `AgentEvent::Unknown` instead of
+/// disappearing.
 pub trait AgentAdapter: Send + Sync {
   fn build_command(&self, profile: &AgentProfileSchema, prompt: String) -> AgentCommand;
 
-  /// Unknown shapes return `vec![]`; new provider event types must not
-  /// crash the stream.
+  /// New provider event types must not crash the stream.
   fn map_event(&self, value: Value) -> Vec<AgentEvent>;
 }
 
