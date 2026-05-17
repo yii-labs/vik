@@ -127,6 +127,7 @@ impl Workflow {
       schema,
       workspace: Workspace::new(workspace_root_dir),
       hooks: HookRunner::new(),
+      prompt_sources: Default::default(),
     })
   }
 }
@@ -217,6 +218,18 @@ issue:
       crate::utils::paths::canonicalize_from(&cwd, &relative_path)
     );
     assert_eq!(loaded.schema.workspace.root.as_deref(), Some(Path::new("workspace")));
+  }
+
+  #[test]
+  fn workflow_creation_does_not_read_stage_prompt_files() {
+    let workflow_path = PathBuf::from("/virtual/path/workflow.yml");
+    let loaded = WorkflowSchemaLoader
+      .load_from_str(VALID_WORKFLOW, Some(workflow_path))
+      .expect("valid YAML should load");
+
+    let workflow = Workflow::try_from(loaded).expect("workflow creation should not read missing prompt files");
+
+    assert!(workflow.prompt_sources().is_empty());
   }
 
   #[test]

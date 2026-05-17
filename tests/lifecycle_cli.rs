@@ -23,6 +23,37 @@ fn fixture_workflow() -> PathBuf {
     .join("workflow.yml")
 }
 
+fn missing_prompt_workflow() -> (tempfile::TempDir, PathBuf) {
+  let temp = tempfile::tempdir().expect("tempdir");
+  let workflow = temp.path().join("workflow.yml");
+  std::fs::write(
+    &workflow,
+    r#"
+loop:
+  max_issue_concurrency: 1
+  wait_ms: 100
+workspace:
+  root: .vik
+agents:
+  codex:
+    runtime: codex
+    model: gpt-5.5
+issues:
+  pull:
+    command: printf '[]'
+issue:
+  stages:
+    plan:
+      when:
+        state: todo
+      agent: codex
+      prompt_file: ./prompts/missing.md
+"#,
+  )
+  .expect("write workflow");
+  (temp, workflow)
+}
+
 #[test]
 fn status_reports_not_installed_when_no_state_file() {
   // The valid fixture uses a `.vik/` workspace root relative to the
@@ -90,4 +121,80 @@ fn uninstall_without_state_file_is_noop() {
     String::from_utf8_lossy(&output.stdout),
     String::from_utf8_lossy(&output.stderr),
   );
+}
+
+#[test]
+fn status_does_not_require_prompt_file() {
+  let (_temp, workflow) = missing_prompt_workflow();
+  let output = Command::new(vik_bin())
+    .args(["status", workflow.to_str().expect("utf-8 path")])
+    .output()
+    .expect("spawn vik");
+
+  assert!(
+    output.status.success(),
+    "stdout: {}\nstderr: {}",
+    String::from_utf8_lossy(&output.stdout),
+    String::from_utf8_lossy(&output.stderr),
+  );
+  assert!(!String::from_utf8_lossy(&output.stderr).contains("prompt"));
+}
+
+#[test]
+fn stop_does_not_require_prompt_file() {
+  let (_temp, workflow) = missing_prompt_workflow();
+  let output = Command::new(vik_bin())
+    .args(["stop", workflow.to_str().expect("utf-8 path")])
+    .output()
+    .expect("spawn vik");
+
+  assert!(!output.status.success());
+  assert!(!String::from_utf8_lossy(&output.stderr).contains("prompt"));
+}
+
+#[test]
+fn uninstall_does_not_require_prompt_file() {
+  let (_temp, workflow) = missing_prompt_workflow();
+  let output = Command::new(vik_bin())
+    .args(["uninstall", workflow.to_str().expect("utf-8 path")])
+    .output()
+    .expect("spawn vik");
+
+  assert!(
+    output.status.success(),
+    "stdout: {}\nstderr: {}",
+    String::from_utf8_lossy(&output.stdout),
+    String::from_utf8_lossy(&output.stderr),
+  );
+  assert!(!String::from_utf8_lossy(&output.stderr).contains("prompt"));
+}
+
+#[test]
+fn run_detached_fails_before_daemon_start_when_prompt_file_is_missing() {
+  let (_temp, workflow) = missing_prompt_workflow();
+  let output = Command::new(vik_bin())
+    .args(["run", "-d", workflow.to_str().expect("utf-8 path")])
+    .output()
+    .expect("spawn vik");
+
+  assert!(!output.status.success());
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  assert!(stderr.contains("load workflow dynamic content"), "stderr: {stderr}");
+  assert!(stderr.contains("prompts/missing.md"), "stderr: {stderr}");
+}
+
+#[test]
+fn restart_fails_for_fresh_run_when_prompt_file_is_missing() {
+  let (_temp, workflow) = missing_prompt_workflow();
+  let output = Command::new(vik_bin())
+    .args(["restart", workflow.to_str().expect("utf-8 path")])
+    .output()
+    .expect("spawn vik");
+
+  assert!(!output.status.success());
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  assert!(stdout.contains("starting one"), "stdout: {stdout}");
+  assert!(stderr.contains("load workflow dynamic content"), "stderr: {stderr}");
+  assert!(stderr.contains("prompts/missing.md"), "stderr: {stderr}");
 }

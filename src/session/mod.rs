@@ -19,7 +19,7 @@ mod factory;
 mod jsonl_writer;
 mod snapshot;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -30,8 +30,8 @@ pub use snapshot::*;
 
 use chrono::Utc;
 use thiserror::Error;
-use tokio::fs::{self, File};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::fs;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdout, Command};
 use tokio::sync::watch;
 use tracing::Instrument;
@@ -53,8 +53,8 @@ pub enum SessionError {
   AgentSpawn(#[from] CommandExecError),
   #[error(transparent)]
   TemplateRender(#[from] TemplateError),
-  #[error("prompt path `{0}` could not be resolved")]
-  PromptPath(PathBuf),
+  #[error(transparent)]
+  Workflow(#[from] crate::workflow::WorkflowError),
   #[error(transparent)]
   WriteLog(#[from] std::io::Error),
 }
@@ -224,23 +224,9 @@ impl Session {
 
   async fn render_prompt(&self) -> Result<String, SessionError> {
     let renderer = PromptRenderer::new();
-    let prompt_file = self
-      .stage
-      .workflow()
-      .resolve_path(&self.stage().stage().prompt_file)
-      .ok_or_else(|| SessionError::PromptPath(self.stage().stage().prompt_file.clone()))?;
+    let template = self.stage.workflow().prompt_for_stage(self.stage.stage_name())?;
 
-    let mut file = File::open(&prompt_file)
-      .await
-      .map_err(|err| SessionError::TemplateRender(TemplateError::Io(err)))?;
-
-    let mut template = String::new();
-    file
-      .read_to_string(&mut template)
-      .await
-      .map_err(|err| SessionError::TemplateRender(TemplateError::Io(err)))?;
-
-    Ok(renderer.render(&template, &self.stage).await?)
+    Ok(renderer.render(template, &self.stage).await?)
   }
 
   fn set_state(&self, state: SessionState) {
@@ -401,11 +387,17 @@ async fn stream_agent_events(
 
 #[cfg(test)]
 mod tests {
+  use std::sync::Arc;
+
   use tracing::subscriber::with_default;
   use tracing_subscriber::{Registry, layer::SubscriberExt};
 
   use super::*;
+  use crate::agent::get_adapter;
+  use crate::config::{AgentProfileSchema, AgentRuntime};
+  use crate::context::{Issue, IssueRun, IssueStage};
   use crate::logging::tests::{CaptureLayer, captured_event, captured_message_exists};
+  use crate::workflow::Workflow;
 
   fn session_inner() -> (SessionInner, watch::Sender<SessionState>) {
     let snapshot = SessionSnapshot {
@@ -422,6 +414,51 @@ mod tests {
       },
       state_notifier,
     )
+  }
+
+  #[tokio::test]
+  async fn render_prompt_uses_loaded_stage_prompt_source() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workflow_path = temp.path().join("workflow.yml");
+    let prompts_dir = temp.path().join("prompts");
+    std::fs::create_dir_all(&prompts_dir).expect("prompts dir");
+    let prompt_file = prompts_dir.join("plan.md");
+    std::fs::write(&prompt_file, "issue={{ issue.id }} command=!`exec(printf done)`").expect("prompt file");
+
+    let workflow = Workflow::builder()
+      .workflow_path(&workflow_path)
+      .workspace_root(temp.path().join(".vik"))
+      .add_stage("plan", "todo", "./prompts/plan.md")
+      .build()
+      .load()
+      .expect("runtime load");
+    std::fs::remove_file(&prompt_file).expect("remove source prompt file");
+
+    let issue_run = Arc::new(IssueRun::new(
+      Arc::new(workflow),
+      Issue {
+        id: "VIK-86".into(),
+        title: "Preload prompts".into(),
+        description: String::new(),
+        state: "todo".into(),
+        extra_payload: serde_yaml::Mapping::new(),
+      },
+    ));
+    let stage_schema = issue_run.workflow().stages()["plan"].clone();
+    let stage = IssueStage::new(issue_run, "plan".into(), stage_schema);
+    let profile = AgentProfileSchema::new(AgentRuntime::Codex, "gpt-5.5".into());
+    let (inner, state_notifier) = session_inner();
+    let session = Session {
+      stage,
+      profile,
+      agent: get_adapter(AgentRuntime::Codex),
+      inner: Arc::new(Mutex::new(inner)),
+      state_notifier,
+    };
+
+    let prompt = session.render_prompt().await.expect("render prompt");
+
+    assert_eq!(prompt, "issue=VIK-86 command=done");
   }
 
   #[test]

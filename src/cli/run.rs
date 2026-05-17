@@ -48,6 +48,8 @@ pub fn execute(workflow: Workflow, args: RunArgs) -> ExitCode {
 }
 
 fn run_inner(workflow: Workflow, args: &RunArgs) -> anyhow::Result<()> {
+  let workflow = workflow.load().context("load workflow dynamic content")?;
+
   workflow
     .workspace()
     .ensure_root()
