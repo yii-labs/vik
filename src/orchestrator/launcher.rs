@@ -149,7 +149,8 @@ mod tests {
   use std::sync::Arc;
 
   use tokio_util::sync::CancellationToken;
-  use tracing::subscriber::with_default;
+  use tracing::Dispatch;
+  use tracing::instrument::WithSubscriber;
   use tracing_subscriber::{Registry, layer::SubscriberExt};
 
   use super::*;
@@ -192,39 +193,50 @@ mod tests {
   #[test]
   fn run_emits_stage_launching_lifecycle_log() {
     let (layer, events) = CaptureLayer::new();
-    let subscriber = Registry::default().with(layer);
+    let dispatch = Dispatch::new(Registry::default().with(layer));
 
-    with_default(subscriber, || {
-      let temp = tempfile::tempdir().expect("tempdir");
-      let workflow = Arc::new(
-        Workflow::builder()
-          .workflow_path(temp.path().join("workflow.yml"))
-          .workspace_root(temp.path().join("workspace"))
-          .add_stage("plan", "todo", "./plan.md")
-          .build(),
-      );
-      let issue_stage = issue_stage(Arc::clone(&workflow), "ABC-1", "plan", "exit 7");
-      std::fs::create_dir_all(issue_stage.workdir()).expect("issue workdir exists");
-      let (producer, _consumer) = event_channel();
-      let launcher = StageLauncher::new(
-        Arc::clone(&workflow),
-        SessionFactory::new(Arc::clone(&workflow)),
-        producer,
-      );
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workflow = Arc::new(
+      Workflow::builder()
+        .workflow_path(temp.path().join("workflow.yml"))
+        .workspace_root(temp.path().join("workspace"))
+        .add_stage("plan", "todo", "./plan.md")
+        .build(),
+    );
+    let issue_stage = issue_stage(Arc::clone(&workflow), "ABC-1", "plan", "exit 7");
+    std::fs::create_dir_all(issue_stage.workdir()).expect("issue workdir exists");
+    let (producer, _consumer) = event_channel();
+    let launcher = StageLauncher::new(
+      Arc::clone(&workflow),
+      SessionFactory::new(Arc::clone(&workflow)),
+      producer,
+    );
 
-      let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("test runtime");
-      let span = stage_span(
-        &issue_stage.issue().id,
-        issue_stage.stage_name(),
-        &issue_stage.stage().agent,
-      );
-      runtime.block_on(async move {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+      .enable_all()
+      .build()
+      .expect("test runtime");
+    // `with_default` only attaches the subscriber to the calling thread's
+    // TLS, so sibling tests in the same binary that fire the same
+    // callsite without a subscriber can poison tracing's global
+    // callsite-interest cache to `Interest::never`, which then blocks
+    // this test's dispatch from ever seeing the event. `WithSubscriber`
+    // pins the dispatch to the future regardless of which thread polls
+    // it, and `rebuild_interest_cache` re-evaluates every cached
+    // callsite under that dispatch so a poisoned `never` is replaced
+    // with the layer's true interest.
+    runtime.block_on(
+      async {
+        let span = stage_span(
+          &issue_stage.issue().id,
+          issue_stage.stage_name(),
+          &issue_stage.stage().agent,
+        );
+        tracing::callsite::rebuild_interest_cache();
         launcher.run(issue_stage, CancellationToken::new()).instrument(span).await;
-      });
-    });
+      }
+      .with_subscriber(dispatch),
+    );
 
     let events = events.lock().expect("events mutex");
     assert!(captured_message_exists(&events, "stage launching"));
