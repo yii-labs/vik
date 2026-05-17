@@ -159,6 +159,12 @@ mod tests {
 
   #[tokio::test]
   async fn run_reports_stage_failed_when_before_run_hook_fails() {
+    // Install a capture subscriber even though we don't read from it; without
+    // a real subscriber the `stage launching` callsite registers as
+    // `Interest::never()` and poisons the global cache for parallel tests.
+    let (layer, _events) = CaptureLayer::new();
+    let _guard = tracing::subscriber::set_default(Registry::default().with(layer));
+
     let temp = tempfile::tempdir().expect("tempdir");
     let workflow = Arc::new(
       Workflow::builder()
