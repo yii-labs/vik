@@ -187,14 +187,19 @@ mod tests {
   }
 
   fn issue_stage(workflow: Arc<Workflow>, issue_id: &str, stage_name: &str, before_run: &str) -> IssueStage {
-    let mut schema = workflow.stages().get(stage_name).expect("stage fixture exists").clone();
+    let mut schema = workflow
+      .stages()
+      .iter()
+      .find(|stage| stage.name == stage_name)
+      .expect("stage fixture exists")
+      .clone();
     schema.hooks.before_run = Some(before_run.to_string());
     let issue_run = Arc::new(IssueRun::new(
       Arc::clone(&workflow),
       issue(issue_id, &schema.when.state),
     ));
 
-    IssueStage::new(issue_run, stage_name.to_string(), schema)
+    IssueStage::new(issue_run, schema)
   }
 
   fn issue(id: &str, state: &str) -> Issue {

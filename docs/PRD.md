@@ -189,10 +189,11 @@ Agent subprocess cwd is the issue workspace.
 - stdout is injected as text.
 - one trailing newline is trimmed.
 - non-zero exit fails rendering.
-- Prompt context is the same context used by hooks.
+- Stage prompt context is the same context used by stage hooks.
+- Stage prompt and hook context expose the stage name as `issue.stage.name`.
 - Prompt context can read `env.<VAR>` from the Vik process environment.
-- Current code does not expose `stage`, `workflow`, `loop`, or `profile`
-  template objects.
+- Current code does not expose root-level `stage`, `workflow`, `loop`, or
+  `profile` template objects.
 
 ## CLI Surface
 

@@ -166,6 +166,7 @@ pub enum DiagnosticCode {
   EmptyStr,
   EmptyMap,
   UnknownAgent(String),
+  DuplicateStageName(String),
 }
 
 impl Display for Diagnostic {
@@ -182,6 +183,9 @@ impl Display for Diagnostic {
         "agent profile '{}' set for '{}' is not defined in agents configuration section",
         agent, self.pointer
       ),
+      DiagnosticCode::DuplicateStageName(stage) => {
+        write!(f, "stage name '{}' is duplicated at '{}'", stage, self.pointer)
+      },
     }
   }
 }

@@ -104,6 +104,11 @@ issue:
       hooks:
         before_run: echo before
         after_run: echo after
+    implement:
+      when:
+        state: todo
+      agent: codex
+      prompt_file: ./prompts/implement.md
 "#;
 
   #[test]
@@ -116,18 +121,12 @@ issue:
     assert_eq!(schema.issues.pull.command, "./scripts/issues-json");
     assert_eq!(schema.issues.pull.idle_sec, 5);
     assert_eq!(
-      schema.issue.stages.keys().map(String::as_str).collect::<Vec<_>>(),
-      ["plan"]
+      schema.issue.stages.iter().map(|stage| stage.name.as_str()).collect::<Vec<_>>(),
+      ["plan", "implement"]
     );
     assert_eq!(schema.issue.hooks.after_create.as_deref(), Some("echo created"));
-    assert_eq!(
-      schema.issue.stages["plan"].hooks.before_run.as_deref(),
-      Some("echo before")
-    );
-    assert_eq!(
-      schema.issue.stages["plan"].hooks.after_run.as_deref(),
-      Some("echo after")
-    );
+    assert_eq!(schema.issue.stages[0].hooks.before_run.as_deref(), Some("echo before"));
+    assert_eq!(schema.issue.stages[0].hooks.after_run.as_deref(), Some("echo after"));
   }
 
   #[test]
@@ -144,9 +143,9 @@ issue:
     schema.issues.pull.command = String::new();
     schema.issues.pull.idle_sec = 0;
 
-    let mut stage = IssueStageSchema::new("");
+    let mut stage = IssueStageSchema::new("").with_name("plan");
     stage.agent = "missing".to_string();
-    schema.issue.stages.insert("plan".to_string(), stage);
+    schema.issue.stages.push(stage);
 
     let diagnostics = schema.diagnose();
 

@@ -92,8 +92,8 @@ impl IssueRun {
       .workflow()
       .stages()
       .iter()
-      .filter(|(_, stage)| stage.when.state == issue_run.issue.state)
-      .map(|(name, stage)| IssueStage::new(Arc::clone(&issue_run), name.clone(), stage.clone()))
+      .filter(|stage| stage.when.state == issue_run.issue.state)
+      .map(|stage| IssueStage::new(Arc::clone(&issue_run), stage.clone()))
       .collect()
   }
 
@@ -155,7 +155,6 @@ impl IssueStageKey {
 #[derive(Debug, Clone)]
 pub struct IssueStage {
   issue: Arc<IssueRun>,
-  name: String,
   schema: StageSchema,
   log_file: PathBuf,
 }
@@ -165,26 +164,36 @@ impl Serialize for IssueStage {
   where
     S: serde::Serializer,
   {
-    self.issue.serialize(serializer)
+    let mut root = serde_json::to_value(self.issue.as_ref()).map_err(serde::ser::Error::custom)?;
+    let issue = root
+      .get_mut("issue")
+      .and_then(serde_json::Value::as_object_mut)
+      .ok_or_else(|| serde::ser::Error::custom("issue context must serialize as object"))?;
+    issue.insert(
+      "stage".into(),
+      serde_json::json!({
+        "name": self.stage_name(),
+      }),
+    );
+
+    root.serialize(serializer)
   }
 }
 
 impl IssueStage {
-  pub fn new(issue: Arc<IssueRun>, name: String, stage_schema: StageSchema) -> Self {
+  pub fn new(issue: Arc<IssueRun>, stage_schema: StageSchema) -> Self {
     // State prefix is for human eyeballing; UUIDv7 keeps names unique
     // and sorts runs within one state. Provider session ids land inside
     // the JSONL, not in the filename, because they are not always known
     // when the file must be created.
-    let log_file =
-      issue
-        .workflow()
-        .workspace()
-        .issue_sessions_dir(issue.id())
-        .join(format!("{}-{}.jsonl", &name, Uuid::now_v7()));
+    let log_file = issue.workflow().workspace().issue_sessions_dir(issue.id()).join(format!(
+      "{}-{}.jsonl",
+      &stage_schema.name,
+      Uuid::now_v7()
+    ));
 
     Self {
       issue,
-      name,
       schema: stage_schema,
       log_file,
     }
@@ -207,7 +216,7 @@ impl IssueStage {
   }
 
   pub fn stage_name(&self) -> &str {
-    &self.name
+    &self.schema.name
   }
 
   pub fn stage(&self) -> &StageSchema {
@@ -215,7 +224,7 @@ impl IssueStage {
   }
 
   pub fn key(&self) -> IssueStageKey {
-    IssueStageKey::new(self.issue().id.clone(), self.name.clone())
+    IssueStageKey::new(self.issue().id.clone(), self.schema.name.clone())
   }
 }
 
@@ -289,7 +298,7 @@ mod tests {
   }
 
   #[test]
-  fn issue_stage_serializes_same_template_context_as_issue_run() {
+  fn issue_stage_serializes_stage_context_under_issue() {
     let temp = tempfile::tempdir().expect("tempdir");
     let workflow = Arc::new(
       Workflow::builder()
@@ -304,14 +313,18 @@ mod tests {
       .next()
       .expect("stage matches issue state");
 
-    assert_eq!(
-      serde_json::to_value(&stage).expect("issue stage serializes"),
-      serde_json::to_value(issue_run.as_ref()).expect("issue run serializes")
+    let context = serde_json::to_value(&stage).expect("issue stage serializes");
+    assert_eq!(context["issue"]["stage"]["name"], "plan");
+    assert!(context.get("stage").is_none());
+    assert!(
+      serde_json::to_value(issue_run.as_ref()).expect("issue run serializes")["issue"]
+        .get("stage")
+        .is_none()
     );
 
     let rendered = JinjaRenderer::new()
       .render(
-        "{{ issue.id }}|{{ issue.priority }}|{{ issue.workdir }}|{{ workflow_path }}|{{ workspace_root }}",
+        "{{ issue.id }}|{{ issue.priority }}|{{ issue.stage.name }}|{{ issue.workdir }}|{{ workflow_path }}|{{ workspace_root }}",
         &stage,
       )
       .expect("issue stage context renders");
@@ -319,11 +332,33 @@ mod tests {
     assert_eq!(
       rendered,
       format!(
-        "ABC-1|high|{}|{}|{}",
+        "ABC-1|high|plan|{}|{}|{}",
         stage.workdir().display(),
         workflow.workflow_path().display(),
         workflow.workspace().root().display()
       )
+    );
+  }
+
+  #[test]
+  fn matching_stages_preserve_workflow_author_order() {
+    let workflow = Arc::new(
+      Workflow::builder()
+        .add_stage("plan", "todo", "./plan.md")
+        .add_stage("implement", "todo", "./implement.md")
+        .add_stage("merge", "merging", "./merge.md")
+        .build(),
+    );
+    let issue_run = Arc::new(IssueRun::new(Arc::clone(&workflow), issue("ABC-1", "todo")));
+
+    let matching_stages = IssueRun::matching_stages(issue_run);
+
+    assert_eq!(
+      matching_stages
+        .iter()
+        .map(|issue_stage| issue_stage.stage_name())
+        .collect::<Vec<_>>(),
+      ["plan", "implement"]
     );
   }
 
