@@ -180,7 +180,8 @@ fn run_detached_fails_before_daemon_start_when_prompt_file_is_missing() {
   assert!(!output.status.success());
   let stderr = String::from_utf8_lossy(&output.stderr);
   assert!(stderr.contains("load workflow dynamic content"), "stderr: {stderr}");
-  assert!(stderr.contains("prompts/missing.md"), "stderr: {stderr}");
+  assert!(stderr.contains("missing.md"), "stderr: {stderr}");
+  assert!(stderr.contains("stage `plan`"), "stderr: {stderr}");
 }
 
 #[test]
@@ -196,5 +197,6 @@ fn restart_fails_for_fresh_run_when_prompt_file_is_missing() {
   let stderr = String::from_utf8_lossy(&output.stderr);
   assert!(stdout.contains("starting one"), "stdout: {stdout}");
   assert!(stderr.contains("load workflow dynamic content"), "stderr: {stderr}");
-  assert!(stderr.contains("prompts/missing.md"), "stderr: {stderr}");
+  assert!(stderr.contains("missing.md"), "stderr: {stderr}");
+  assert!(stderr.contains("stage `plan`"), "stderr: {stderr}");
 }
