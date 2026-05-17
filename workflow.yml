@@ -37,15 +37,15 @@ issue:
       agent: codex
       prompt_file: ./.agents/prompts/plan.md
 
-    implement:
-      when:
-        state: work
-      agent: codex
-      prompt_file: ./.agents/prompts/implement.md
-
     rework:
       when:
         state: rework
+      agent: codex
+      prompt_file: ./.agents/prompts/plan.md
+
+    implement:
+      when:
+        state: work
       agent: codex
       prompt_file: ./.agents/prompts/implement.md
 
