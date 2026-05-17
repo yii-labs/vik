@@ -1,25 +1,23 @@
 # Agent Instructions
 
-## Development Docs
+## Doc Routing
 
-Read the relevant docs before changing this repo:
+Read this file first, and understand the task type you were given. Then read only the rows that match the task type.
+Skip unlisted docs unless scope changes.
 
-- [Development index](docs/development/index.md)
-- [Checks](docs/development/checks.md)
-- [Pull requests](docs/development/pull-requests.md)
-- [Code conventions](docs/development/code-conventions.md)
-
-## Agent Workflow
-
-1. Sync with `origin/main` before implementation and before handoff.
-2. Prefer narrow, reviewable changes.
-3. Run the checks listed in [Checks](docs/development/checks.md).
-4. Keep PR title, body, labels current.
+| Task type | Must read |
+| --- | --- |
+| Plan, research, or grill | [Development index](docs/development/index.md), [Architecture](docs/development/architecture.md) |
+| Code implementation, refactor, or bug fix | [Development index](docs/development/index.md), [Architecture](docs/development/architecture.md), [Code conventions](docs/development/code-conventions.md), [Testing](docs/development/testing.md), [Checks](docs/development/checks.md) |
+| Test-only change | [Development index](docs/development/index.md), [Testing](docs/development/testing.md), [Code conventions](docs/development/code-conventions.md), [Checks](docs/development/checks.md) |
+| Docs-only change | [Development index](docs/development/index.md), [Checks](docs/development/checks.md), touched docs |
+| Review or audit | [Architecture](docs/development/architecture.md), [Code conventions](docs/development/code-conventions.md), [Testing](docs/development/testing.md), [Review checklist](docs/development/review-checklist.md), [Checks](docs/development/checks.md) |
+| PR, push, or handoff | [Checks](docs/development/checks.md), [Pull requests](docs/development/pull-requests.md), [Review checklist](docs/development/review-checklist.md) |
 
 ## Repo Rules
 
 - Use `rg` for search.
-- Use `cargo fmt`, `cargo clippy`, and `cargo test` before handoff.
 - Keep docs concrete enough for another agent to execute.
-- Never commit secrets, local logs, target artifacts, or generated temp files.
+- Everything committed to git must be English, except non-English text is
+  by designed to be used in tests or demonstrations.
 - Do not hide failing validation. Record the exact command and result.
