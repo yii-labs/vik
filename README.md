@@ -32,6 +32,8 @@ cargo install vik --locked
 ## Usage
 
 - Start with [Get Started](docs/usage/get-started.md).
+- Generate starter workflow files with
+  `vik init --template symphony --tracker github ./workflow.yml`.
 - Run as a detached local process through
   [Service Daemon](docs/usage/service-daemon.md).
 - Tune workflow settings through [Configuration](docs/usage/configuration.md).

@@ -27,6 +27,20 @@ fn top_level_help_prefers_subcommand_first_usage() {
 }
 
 #[test]
+fn top_level_help_lists_init_command() {
+  let output = Command::new(vik_bin()).args(["--help"]).output().expect("spawn vik");
+  assert!(
+    output.status.success(),
+    "stdout: {}\nstderr: {}",
+    String::from_utf8_lossy(&output.stdout),
+    String::from_utf8_lossy(&output.stderr),
+  );
+  let stdout = String::from_utf8(output.stdout).expect("utf-8 stdout");
+  assert!(stdout.contains("init"), "got: {stdout}");
+  assert!(stdout.contains("Generate a starter workflow setup"), "got: {stdout}");
+}
+
+#[test]
 fn subcommand_help_shows_workflow_argument() {
   let output = Command::new(vik_bin()).args(["run", "-h"]).output().expect("spawn vik");
   assert!(

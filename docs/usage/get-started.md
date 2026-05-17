@@ -6,8 +6,9 @@ on issues for you. You describe how you want it to behave in a single
 file called `workflow.yml`. Once that file is ready, you start Vik and
 walk away.
 
-This guide builds that file with you, one section at a time. Run
-every command from the same folder you are working in.
+This guide starts from `vik init`, then shows the generated pieces you
+will usually edit. Run every command from the same folder you are
+working in.
 
 > Never paste API keys into chat, commit them to git, or print them
 > with `echo` / `cat`. Keep secrets in environment variables.
@@ -52,19 +53,39 @@ jq --version
 
 If any of these fail, install the missing tool before continuing.
 
-## 1. Create `workflow.yml`
+## 1. Generate starter files
 
-Pick (or create) a folder where you want to work from, and start an
-empty config file inside it:
+Pick (or create) a folder where you want to work from, then generate
+the workflow, prompt files, and tracker helper script:
 
 ```sh
 mkdir -p hello-vik
 cd hello-vik
-touch workflow.yml
+vik init ./workflow.yml
 ```
 
-This is the file you will add to in every step below. Open it in
-your editor of choice.
+`vik init` asks for:
+
+- template: `Symphony Like` or `Simple`
+- tracker: `GitHub Issue` or `Linear`
+
+For scripts or CI, pass choices directly:
+
+```sh
+vik init --template symphony --tracker github ./workflow.yml
+vik init --template simple --tracker linear ./workflow.yml
+```
+
+The command refuses to overwrite generated files unless you pass
+`--force`.
+
+Open these generated files in your editor:
+
+```text
+workflow.yml
+.agents/prompts/
+scripts/
+```
 
 ## 2. Tell Vik where to put files
 
@@ -72,10 +93,11 @@ Vik keeps logs, per-issue working folders, and session records under
 one workflow-scoped workspace directory. If you omit `workspace.root`,
 Vik uses `VIK_HOME` when set; otherwise it uses your home directory.
 
-Add to `workflow.yml`:
+`vik init` already writes this local default:
 
 ```yaml
-workspace: {}
+workspace:
+  root: .vik
 ```
 
 You can also set `workspace.root` to an absolute path like
@@ -98,8 +120,8 @@ codex --version
 codex login status
 ```
 
-Add an `agents` section to `workflow.yml`. The name (`coder` here)
-is yours to choose — stages will reference it later.
+`vik init` writes a `coder` profile that uses Codex by default.
+Change it if you want another model or profile name:
 
 ```yaml
 agents:
@@ -117,7 +139,7 @@ claude --version
 claude auth status
 ```
 
-Add an `agents` section to `workflow.yml`:
+Change the generated `agents` section if you want Claude Code:
 
 ```yaml
 agents:
@@ -154,22 +176,17 @@ before pasting it into `issues.pull.command`:
 ./your-pull-command | jq 'length'
 ```
 
-Then add the `issues.pull` block to `workflow.yml` exactly as the
-tracker guide shows. `idle_sec` controls how long Vik waits between
-pull cycles. Start at `5` for GitHub, `10` for Linear or Feishu Base,
-then tune.
+Then compare the generated `issues.pull` block with the tracker guide
+and edit the helper script under `scripts/` for your repo, team, view,
+labels, or states. `idle_sec` controls how long Vik waits between pull
+cycles. Start at `5` for GitHub, `10` for Linear or Feishu Base, then
+tune.
 
 ## 5. Tell Vik what to do per state
 
 For each tracker state, Vik runs a stage: a prompt file given to your
-agent. Create a prompts folder and a starter prompt:
-
-```sh
-mkdir -p ./prompts
-```
-
-Write `./prompts/plan.md` with whatever you want the agent to do
-when an issue is in the `todo` state. For example:
+agent. `vik init` creates starter prompts in `.agents/prompts/`. Edit
+the prompt for each stage. For example, the `plan` prompt can say:
 
 ```text
 You are working on issue {{ issue.id }}: {{ issue.title }}.
@@ -188,7 +205,7 @@ issue:
       when:
         state: todo
       agent: coder
-      prompt_file: ./prompts/plan.md
+      prompt_file: ./.agents/prompts/plan.md
 ```
 
 You can add more stages over time — one per state you want Vik to

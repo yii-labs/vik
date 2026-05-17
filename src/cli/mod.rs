@@ -5,6 +5,7 @@
 //! subcommand wins — that way subcommand modules never re-parse.
 
 pub mod doctor;
+pub mod init;
 pub mod lifecycle;
 pub mod run;
 pub mod shutdown;
@@ -36,6 +37,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+  /// Generate a starter workflow setup.
+  Init(init::InitArgs),
   /// Validate a workflow file without running any agents or mutating
   /// anything outside the process.
   Doctor(doctor::DoctorArgs),
@@ -66,6 +69,10 @@ pub fn run() -> ExitCode {
     },
   };
 
+  if let Command::Init(args) = cli.command {
+    return init::execute(cli.workflow, args);
+  }
+
   let loaded = match WorkflowSchemaLoader.load(&cli.workflow) {
     Ok(loaded) => loaded,
     Err(err) => {
@@ -94,6 +101,7 @@ pub fn run() -> ExitCode {
         Command::Stop(args) => lifecycle::stop(workflow, args),
         Command::Restart(args) => lifecycle::restart(workflow, args),
         Command::Uninstall(args) => lifecycle::uninstall(workflow, args),
+        Command::Init(_) => unreachable!("init command already handled"),
         Command::Doctor(_) => unreachable!("doctor command already handled"),
       }
     },
