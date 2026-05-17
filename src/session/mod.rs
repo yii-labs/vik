@@ -477,9 +477,6 @@ mod tests {
 
   #[tokio::test]
   async fn inline_prompt_renders_issue_variables_and_prompt_commands() {
-    #[cfg(windows)]
-    let prompt_command = "<nul set /p dummy=command";
-    #[cfg(not(windows))]
     let prompt_command = "printf command";
     let temp = tempfile::tempdir().expect("tempdir");
     let workflow = Workflow::builder()
