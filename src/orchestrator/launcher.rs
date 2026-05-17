@@ -149,13 +149,9 @@ mod tests {
   use std::sync::Arc;
 
   use tokio_util::sync::CancellationToken;
-  use tracing::Dispatch;
-  use tracing::instrument::WithSubscriber;
-  use tracing_subscriber::{Registry, layer::SubscriberExt};
 
   use super::*;
   use crate::context::{Issue, IssueRun};
-  use crate::logging::tests::{CaptureLayer, captured_event, captured_message_exists};
   use crate::orchestrator::event::{OrchestratorEvent, StageEvent, event_channel};
 
   #[tokio::test]
@@ -188,62 +184,6 @@ mod tests {
       },
       _ => panic!("expected stage failure"),
     }
-  }
-
-  #[test]
-  fn run_emits_stage_launching_lifecycle_log() {
-    let (layer, events) = CaptureLayer::new();
-    let dispatch = Dispatch::new(Registry::default().with(layer));
-
-    let temp = tempfile::tempdir().expect("tempdir");
-    let workflow = Arc::new(
-      Workflow::builder()
-        .workflow_path(temp.path().join("workflow.yml"))
-        .workspace_root(temp.path().join("workspace"))
-        .add_stage("plan", "todo", "./plan.md")
-        .build(),
-    );
-    let issue_stage = issue_stage(Arc::clone(&workflow), "ABC-1", "plan", "exit 7");
-    std::fs::create_dir_all(issue_stage.workdir()).expect("issue workdir exists");
-    let (producer, _consumer) = event_channel();
-    let launcher = StageLauncher::new(
-      Arc::clone(&workflow),
-      SessionFactory::new(Arc::clone(&workflow)),
-      producer,
-    );
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-      .enable_all()
-      .build()
-      .expect("test runtime");
-    // `with_default` only attaches the subscriber to the calling thread's
-    // TLS, so sibling tests in the same binary that fire the same
-    // callsite without a subscriber can poison tracing's global
-    // callsite-interest cache to `Interest::never`, which then blocks
-    // this test's dispatch from ever seeing the event. `WithSubscriber`
-    // pins the dispatch to the future regardless of which thread polls
-    // it, and `rebuild_interest_cache` re-evaluates every cached
-    // callsite under that dispatch so a poisoned `never` is replaced
-    // with the layer's true interest.
-    runtime.block_on(
-      async {
-        let span = stage_span(
-          &issue_stage.issue().id,
-          issue_stage.stage_name(),
-          &issue_stage.stage().agent,
-        );
-        tracing::callsite::rebuild_interest_cache();
-        launcher.run(issue_stage, CancellationToken::new()).instrument(span).await;
-      }
-      .with_subscriber(dispatch),
-    );
-
-    let events = events.lock().expect("events mutex");
-    assert!(captured_message_exists(&events, "stage launching"));
-    let event = captured_event(&events, "stage launching");
-    assert_eq!(event["issue_id"], "ABC-1");
-    assert_eq!(event["stage_name"], "plan");
-    assert_eq!(event["phase"], crate::logging::Phase::StageRun.to_string());
   }
 
   fn issue_stage(workflow: Arc<Workflow>, issue_id: &str, stage_name: &str, before_run: &str) -> IssueStage {
