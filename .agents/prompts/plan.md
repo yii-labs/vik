@@ -1,6 +1,7 @@
 # Prepare Stage
 
 Issue: `{{ issue.id }}`: `{{ issue.title }}`
+State: `{{ issue.state }}`
 
 You prepare the issue for implementation.
 Do not write production code in this stage.
@@ -8,7 +9,7 @@ Do not write production code in this stage.
 The only successful state transition from this stage is `work`. If blocked before a safe plan exists, keep
 the issue in its current state and record the blocker in the workpad.
 
-## Start
+## Start for `todo` State
 
 1. Read the issue body, comments, attached pull requests, branch links, and any existing `## Vik Workpad` comment
    by `gh issue view`.
@@ -16,6 +17,23 @@ the issue in its current state and record the blocker in the workpad.
 3. Do not create extra progress comments.
 4. Update the same comment for every plan change.
 5. Move issue state to `work` only after the workpad is complete.
+
+## Start for `rework` State
+
+When `{{ issue.state }}` is `rework`, treat the task as a full approach reset:
+
+1. Reread the issue, workpad, PR comments, inline review comments, and CI state.
+2. Identify what must change this attempt.
+3. Close the PR linked to close the issue,
+  do not read and reuse any piece of code from that PR.
+4. Rewind all workpad edits and plan from the very beginning. Take the previous workpad for reference only.
+5. Create or switch to a fresh issue branch from `origin/main` when the old
+  branch is not reusable.
+6. Run the normal implementation flow after the reset.
+
+## Additional Context
+
+- if the skill `grill-me` or `grill-with-docs` available, run with it to tighten the plan.
 
 ## Workpad Template
 

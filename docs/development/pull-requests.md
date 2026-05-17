@@ -1,60 +1,48 @@
 # Pull Requests
 
-## Branches
+## Branch
 
-Use issue-scoped branches:
-
-```sh
-git switch -c vik-16-docs origin/main
-```
-
-Sync with `origin/main` before implementation and before handoff:
+- Use issue-scoped branches from `origin/main`.
+- Sync before implementation and before handoff.
 
 ```sh
 git fetch origin
 git merge origin/main
 ```
 
-## Commits
+## Commit
 
-Use English commit messages. Keep commits logical and reviewable.
-
-Message shape:
+- Use English commit messages.
+- Keep commits logical and reviewable.
+- Include summary, rationale, and tests when commit body is useful.
 
 ```text
-docs: add Vik usage and development guides
+docs: add development testing rules
 
 Summary:
-- Add operator docs for startup, service, config, and observation.
-- Add development docs and agent index.
+- Add concise TDD and fixture rules.
 
 Rationale:
-- Keep README small and make setup steps executable by agents.
+- Keep agent test changes consistent.
 
 Tests:
-- cargo test --all-features
+- cargo run --locked -- doctor --json ./workflow.yml
 ```
 
-## PR Body
+## PR
 
-Include:
-
-- issue id
-- summary of changed behavior or docs
-- validation commands and results
-- risks or known gaps
-
-Add the `vik` label.
+- Keep title, body, and labels current.
+- Link the tracker issue.
+- Summarize changed behavior or docs.
+- List validation commands and results.
+- Name risks or known gaps.
+- Add the `vik` label.
 
 ## Review Loop
 
-Before moving the tracker issue to human review:
-
-1. Push latest branch.
-2. Check PR comments, inline comments, and review summaries.
-3. Address every actionable item or reply with clear pushback.
-4. Rerun required checks.
-5. Confirm CI is green.
-6. Confirm PR is linked to the tracker issue.
-
-Do not leave stale workpad or PR body text after scope changes.
+- Push latest branch.
+- Check comments, reviews, CI, and mergeability.
+- Address actionable items or reply with clear pushback.
+- Rerun required checks.
+- Update PR body and tracker state after scope changes.
+- Move to human review only when CI is green and issue link is current.
