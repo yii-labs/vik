@@ -34,6 +34,10 @@ Prefer TDD for behavior changes and bug fixes.
 - Use in-memory data when code only needs bytes.
 - Use `TempDir` only when filesystem behavior is under test.
 
+## Logging Fixtures
+
+- `CaptureLayer` in logging module is designed for tests need to log content assertions.
+
 ## Validation
 
 Run [Checks](checks.md) before handoff. Use docs-only gate for docs-only changes.

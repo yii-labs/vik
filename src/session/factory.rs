@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use super::{Session, SessionError};
+use super::{SessionCommandSender, SessionError, SessionStateReceiver, SessionTask};
+use crate::agent::get_adapter;
 use crate::{context::IssueStage, workflow::Workflow};
 
-/// Spawn boundary between the orchestrator and `Session`. Resolving the
-/// agent profile here keeps `Session::spawn`'s error surface focused on
-/// runtime failures, and lets the launcher accept stage data without
-/// also wiring in the agent registry.
+/// Spawn boundary between the stage-session manager and session task.
+/// Resolving the agent profile here keeps caller setup focused on
+/// workflow data and leaves runtime failures to the session state stream.
 #[derive(Clone)]
 pub struct SessionFactory {
   workflow: Arc<Workflow>,
@@ -17,7 +17,10 @@ impl SessionFactory {
     SessionFactory { workflow }
   }
 
-  pub async fn spawn_stage(&self, issue_stage: IssueStage) -> Result<Session, SessionError> {
+  pub fn spawn_stage(
+    &self,
+    issue_stage: IssueStage,
+  ) -> Result<(SessionCommandSender, SessionStateReceiver), SessionError> {
     let stage = issue_stage.stage();
     let profile = match self.workflow.agents().get(&stage.agent) {
       Some(profile) => profile,
@@ -28,6 +31,10 @@ impl SessionFactory {
       },
     };
 
-    Session::spawn(issue_stage, profile.clone()).await
+    Ok(SessionTask::spawn(
+      issue_stage,
+      profile.clone(),
+      get_adapter(profile.runtime),
+    ))
   }
 }
