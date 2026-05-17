@@ -25,7 +25,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub use crate::agent::AgentEvent;
-use crate::logging::session_span;
 pub use factory::*;
 pub use snapshot::*;
 
@@ -77,8 +76,6 @@ struct SessionInner {
 
 impl Session {
   pub(super) async fn spawn(stage: IssueStage, profile: AgentProfileSchema) -> Result<Self, SessionError> {
-    let _span = session_span(profile.runtime.as_ref());
-
     let now = Utc::now();
 
     let snapshot = SessionSnapshot {
@@ -102,7 +99,7 @@ impl Session {
       state_notifier,
     };
 
-    let child = session.spawn_inner().in_current_span().await?;
+    let child = session.spawn_inner().await?;
     session.inner.lock().expect("session mutex never poisoned").child = Some(child);
 
     Ok(session)
@@ -143,6 +140,7 @@ impl Session {
   pub fn cancel(&self) {
     let mut inner = self.inner.lock().expect("session mutex never poisoned");
     if let Some(child) = &inner.child {
+      tracing::info!("session cancelling");
       child.cancel();
       inner.set_state(SessionState::Cancelled, &self.state_notifier);
     }
@@ -188,6 +186,8 @@ impl Session {
       .timeout(/* TODO: we need timeout here */ Duration::from_hours(1))
       .spawn()?;
 
+    tracing::info!("session running");
+
     // For `Pipe`, write the prompt and drop the handle so the child
     // sees EOF — Codex blocks on stdin until that happens.
     if let AgentStdin::Pipe(input) = agent_command.stdin
@@ -211,12 +211,12 @@ impl Session {
 
   async fn prepare(&self) -> Result<AgentCommand, SessionError> {
     self.set_state(SessionState::Preparing);
+    tracing::info!("session preparing");
 
     if let Some(parent) = self.log_file().parent() {
       fs::create_dir_all(parent).await?;
     }
 
-    // render the prompt template
     let prompt = self.render_prompt().await?;
 
     Ok(self.agent.build_command(&self.profile, prompt))
@@ -260,7 +260,9 @@ impl Session {
     let inner = Arc::clone(&self.inner);
     let state_notifier = self.state_notifier.clone();
 
-    tokio::spawn(stream_agent_events(stdout, agent, inner, state_notifier));
+    // Inherit the stage span so SessionStarted / terminal logs flatten
+    // `phase`, `issue_id`, and `stage_name` onto each event.
+    tokio::spawn(stream_agent_events(stdout, agent, inner, state_notifier).in_current_span());
 
     Ok(())
   }
@@ -284,6 +286,7 @@ impl SessionInner {
 
     match event {
       AgentEvent::SessionStarted { session_id } => {
+        tracing::info!(session_id = %session_id, "agent session id observed");
         self.snapshot.agent_session_id = Some(session_id);
       },
       AgentEvent::Message { text } => {
@@ -345,6 +348,10 @@ impl SessionInner {
       return;
     }
 
+    if state.is_terminated() {
+      tracing::info!(state = ?state, "session terminal");
+    }
+
     self.snapshot.state = state;
     state_notifier.send_replace(state);
   }
@@ -394,7 +401,11 @@ async fn stream_agent_events(
 
 #[cfg(test)]
 mod tests {
+  use tracing::subscriber::with_default;
+  use tracing_subscriber::{Registry, layer::SubscriberExt};
+
   use super::*;
+  use crate::logging::tests::{CaptureLayer, captured_event, captured_message_exists};
 
   fn session_inner() -> (SessionInner, watch::Sender<SessionState>) {
     let snapshot = SessionSnapshot {
@@ -472,5 +483,42 @@ mod tests {
       .expect("rate limit observation stored");
     assert_eq!(observation.remaining, 50);
     assert_eq!(observation.observed_at, fresh);
+  }
+
+  #[test]
+  fn set_state_emits_terminal_log_on_terminal_transition() {
+    let (layer, events) = CaptureLayer::new();
+    let subscriber = Registry::default().with(layer);
+
+    with_default(subscriber, || {
+      let (mut inner, state_notifier) = session_inner();
+      inner.set_state(SessionState::Running, &state_notifier);
+      inner.set_state(SessionState::Completed, &state_notifier);
+    });
+
+    let events = events.lock().expect("events mutex");
+    assert!(captured_message_exists(&events, "session terminal"));
+    let event = captured_event(&events, "session terminal");
+    assert_eq!(event["state"], "Completed");
+  }
+
+  #[test]
+  fn apply_event_emits_agent_session_id_log() {
+    let (layer, events) = CaptureLayer::new();
+    let subscriber = Registry::default().with(layer);
+
+    with_default(subscriber, || {
+      let (mut inner, state_notifier) = session_inner();
+      inner.apply_event(
+        AgentEvent::SessionStarted {
+          session_id: "sess-123".into(),
+        },
+        &state_notifier,
+      );
+    });
+
+    let events = events.lock().expect("events mutex");
+    let event = captured_event(&events, "agent session id observed");
+    assert_eq!(event["session_id"], "sess-123");
   }
 }

@@ -11,17 +11,9 @@ You implement or fix the issue.
 2. Open and follow `.agents/skills/pull/SKILL.md` before code edits.
 3. Record pull evidence in the workpad: source, result, resulting `HEAD`.
 4. If there is already a PR linked to the issue, review its state and comments to understand the current implementation status and blockers before proceeding.
-5. Follow `{{ issue.state }}` flow below.
-6. If applicable, use `TDD` or `RGR` style incremental development with a narrow green gate for each checklist item.
+5. If applicable, use `TDD` style incremental development with a narrow green gate for each checklist item.
 
-If `.agents/skills/pull/SKILL.md` is missing, run the equivalent:
-
-```sh
-git fetch origin
-git merge origin/main
-```
-
-## `work` Flow
+## Work Flow
 
 - Reconcile the workpad before editing.
 - Capture a concrete reproduction signal or current behavior proof.
@@ -31,22 +23,7 @@ git merge origin/main
 - Keep the workpad checklist current after each meaningful milestone.
 - Add follow-up issues for meaningful out-of-scope work instead of expanding
   scope.
-- Keep all committed source, config, docs, prompts, and commit messages in
-  English.
 
-## `rework` Flow
-
-When `{{ issue.state }}` is `rework`, treat the task as a full approach reset:
-
-- Reread the issue, workpad, PR comments, inline review comments, and CI state.
-- Identify what must change this attempt.
-- Close or supersede stale PR state when it no longer matches the issue.
-- Reset stale workpad sections instead of layering a patch plan on top.
-- Create or switch to a fresh issue branch from `origin/main` when the old
-  branch is not reusable.
-- Run the normal implementation flow after the reset.
-
-## Execution
 
 ## Validation
 

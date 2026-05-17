@@ -7,6 +7,7 @@
 //! sole owner of [`super::running::RunningMap`].
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
@@ -40,7 +41,11 @@ impl StageLauncher {
   /// Spawn the launch task. The runtime `IssueStage` already carries
   /// the issue run context needed for hooks and session spawn.
   pub(super) fn launch(&self, issue_stage: IssueStage, shutdown: CancellationToken) {
-    let span = stage_span(issue_stage.stage_name(), &issue_stage.stage().agent);
+    let span = stage_span(
+      &issue_stage.issue().id,
+      issue_stage.stage_name(),
+      &issue_stage.stage().agent,
+    );
     let launcher = self.clone();
 
     tokio::spawn(async move { launcher.run(issue_stage, shutdown).await }.instrument(span));
@@ -51,7 +56,10 @@ impl StageLauncher {
       return;
     }
 
+    tracing::info!("stage launching");
+
     let key = issue_stage.key();
+    let started_at = Instant::now();
     let session = match self.start_session(&issue_stage).await {
       Ok(session) => session,
       Err(error) => {
@@ -63,6 +71,7 @@ impl StageLauncher {
       },
     };
 
+    tracing::info!("stage session started");
     self.producer.stage_started(issue_stage.clone(), session.clone()).await;
 
     let monitor = SessionMonitor::new(key.clone(), session.clone(), self.producer.clone());
@@ -72,6 +81,7 @@ impl StageLauncher {
         // Cooperative shutdown: cancel the child then wait for the
         // session's own state machine to mark itself Cancelled. Without
         // the wait, `terminal` could observe a stale state.
+        tracing::info!("stage cancellation requested");
         session.cancel();
         session.wait().await
       }
@@ -92,6 +102,16 @@ impl StageLauncher {
         "issue stage after_run hook failed",
       );
     }
+
+    let duration_ms = started_at.elapsed().as_millis() as u64;
+    tracing::info!(
+      state = ?terminal.state,
+      duration_ms,
+      tokens_input = terminal.tokens.input,
+      tokens_output = terminal.tokens.output,
+      tokens_cache_read = terminal.tokens.cache_read,
+      "stage finished",
+    );
 
     self.producer.stage_terminal(key, terminal).await;
   }
