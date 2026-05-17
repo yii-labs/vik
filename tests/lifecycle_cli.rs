@@ -193,9 +193,7 @@ fn restart_fails_for_fresh_run_when_prompt_file_is_missing() {
     .expect("spawn vik");
 
   assert!(!output.status.success());
-  let stdout = String::from_utf8_lossy(&output.stdout);
   let stderr = String::from_utf8_lossy(&output.stderr);
-  assert!(stdout.contains("starting one"), "stdout: {stdout}");
   assert!(stderr.contains("load workflow dynamic content"), "stderr: {stderr}");
   assert!(stderr.contains("missing.md"), "stderr: {stderr}");
   assert!(stderr.contains("stage `plan`"), "stderr: {stderr}");

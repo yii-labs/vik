@@ -92,6 +92,14 @@ fn stop_inner(workflow: &Workflow) -> anyhow::Result<()> {
 /// running — operators can still inspect what happened via the
 /// "no daemon was running" message.
 pub fn restart(workflow: Workflow, args: RestartArgs) -> ExitCode {
+  let workflow = match super::run::load_workflow(workflow) {
+    Ok(workflow) => workflow,
+    Err(err) => {
+      let _ = writeln!(io::stderr(), "vik restart failed: {err:#}");
+      return ExitCode::from(1);
+    },
+  };
+
   match restart_stop_phase(&workflow) {
     Ok(RestartOutcome::Stopped) => {
       let _ = writeln!(io::stdout(), "daemon stopped; starting a fresh one");
@@ -105,7 +113,7 @@ pub fn restart(workflow: Workflow, args: RestartArgs) -> ExitCode {
     },
   }
 
-  super::run::execute(
+  super::run::execute_loaded(
     workflow,
     super::run::RunArgs {
       port: args.port,
@@ -135,4 +143,49 @@ fn uninstall_inner(workflow: &Workflow) -> anyhow::Result<()> {
   daemon::lifecycle::uninstall(&path, STOP_TIMEOUT).map_err(|err| anyhow!(err))?;
   let _ = writeln!(io::stdout(), "daemon uninstalled (state file removed if present)");
   Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+  use chrono::Utc;
+
+  use super::*;
+  use crate::daemon::state::State;
+
+  #[test]
+  fn restart_preflights_prompts_before_stop_phase() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workflow = Workflow::builder()
+      .workflow_path(temp.path().join("workflow.yml"))
+      .workspace_root(temp.path().join(".vik"))
+      .add_stage("plan", "todo", "./prompts/missing.md")
+      .build();
+    let state_path = workflow.workspace().service_state_file().to_path_buf();
+    let state = State {
+      workflow_path: workflow.workflow_path().to_path_buf(),
+      cwd: temp.path().to_path_buf(),
+      pid: u32::MAX,
+      port: 0,
+      bind_address: "127.0.0.1".into(),
+      started_at: Utc::now(),
+      log_dir: workflow.workspace().logs_dir().to_path_buf(),
+      sessions_dir: workflow.workspace().sessions_dir().to_path_buf(),
+      command: "vik run -d workflow.yml".into(),
+    };
+    state.write(&state_path).expect("state file");
+
+    let code = restart(
+      workflow,
+      RestartArgs {
+        port: None,
+        bind_address: "127.0.0.1".into(),
+      },
+    );
+
+    assert_eq!(code, ExitCode::from(1));
+    assert!(
+      state_path.exists(),
+      "restart must not remove state before prompt preflight succeeds"
+    );
+  }
 }

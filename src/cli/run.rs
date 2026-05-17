@@ -38,6 +38,16 @@ pub struct RunArgs {
 }
 
 pub fn execute(workflow: Workflow, args: RunArgs) -> ExitCode {
+  match load_workflow(workflow).and_then(|workflow| run_inner(workflow, &args)) {
+    Ok(()) => ExitCode::SUCCESS,
+    Err(err) => {
+      let _ = writeln!(io::stderr(), "vik run failed: {err:#}");
+      ExitCode::from(1)
+    },
+  }
+}
+
+pub(super) fn execute_loaded(workflow: Workflow, args: RunArgs) -> ExitCode {
   match run_inner(workflow, &args) {
     Ok(()) => ExitCode::SUCCESS,
     Err(err) => {
@@ -47,9 +57,11 @@ pub fn execute(workflow: Workflow, args: RunArgs) -> ExitCode {
   }
 }
 
-fn run_inner(workflow: Workflow, args: &RunArgs) -> anyhow::Result<()> {
-  let workflow = workflow.load().context("load workflow dynamic content")?;
+pub(super) fn load_workflow(workflow: Workflow) -> anyhow::Result<Workflow> {
+  workflow.load().context("load workflow dynamic content")
+}
 
+fn run_inner(workflow: Workflow, args: &RunArgs) -> anyhow::Result<()> {
   workflow
     .workspace()
     .ensure_root()
