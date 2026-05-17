@@ -38,6 +38,7 @@ use tracing::Instrument;
 
 use crate::agent::{AgentAdapter, AgentCommand, AgentStdin, get_adapter};
 use crate::config::AgentProfileSchema;
+use crate::config::IssueStagePromptSource;
 use crate::context::{Issue, IssueStage};
 use crate::shell::{Child, CommandExecError, CommandExt};
 use crate::template::{PromptRenderer, TemplateError};
@@ -224,21 +225,27 @@ impl Session {
 
   async fn render_prompt(&self) -> Result<String, SessionError> {
     let renderer = PromptRenderer::new();
-    let prompt_file = self
-      .stage
-      .workflow()
-      .resolve_path(&self.stage().stage().prompt_file)
-      .ok_or_else(|| SessionError::PromptPath(self.stage().stage().prompt_file.clone()))?;
+    let template = match &self.stage().stage().prompt_source {
+      IssueStagePromptSource::File(prompt_file) => {
+        let prompt_file = self
+          .stage
+          .workflow()
+          .resolve_path(prompt_file)
+          .ok_or_else(|| SessionError::PromptPath(prompt_file.clone()))?;
 
-    let mut file = File::open(&prompt_file)
-      .await
-      .map_err(|err| SessionError::TemplateRender(TemplateError::Io(err)))?;
+        let mut file = File::open(&prompt_file)
+          .await
+          .map_err(|err| SessionError::TemplateRender(TemplateError::Io(err)))?;
 
-    let mut template = String::new();
-    file
-      .read_to_string(&mut template)
-      .await
-      .map_err(|err| SessionError::TemplateRender(TemplateError::Io(err)))?;
+        let mut template = String::new();
+        file
+          .read_to_string(&mut template)
+          .await
+          .map_err(|err| SessionError::TemplateRender(TemplateError::Io(err)))?;
+        template
+      },
+      IssueStagePromptSource::Inline(prompt) => prompt.clone(),
+    };
 
     Ok(renderer.render(&template, &self.stage).await?)
   }
@@ -401,11 +408,16 @@ async fn stream_agent_events(
 
 #[cfg(test)]
 mod tests {
+  use std::sync::Arc;
+
   use tracing::subscriber::with_default;
   use tracing_subscriber::{Registry, layer::SubscriberExt};
 
   use super::*;
+  use crate::config::AgentRuntime;
+  use crate::context::IssueRun;
   use crate::logging::tests::{CaptureLayer, captured_event, captured_message_exists};
+  use crate::workflow::Workflow;
 
   fn session_inner() -> (SessionInner, watch::Sender<SessionState>) {
     let snapshot = SessionSnapshot {
@@ -422,6 +434,88 @@ mod tests {
       },
       state_notifier,
     )
+  }
+
+  fn issue(id: &str, state: &str) -> Issue {
+    Issue {
+      id: id.to_string(),
+      title: "title".to_string(),
+      description: String::new(),
+      state: state.to_string(),
+      extra_payload: serde_yaml::Mapping::new(),
+    }
+  }
+
+  fn session_for_stage(stage: IssueStage) -> Session {
+    let snapshot = SessionSnapshot {
+      started_at: Utc::now(),
+      ..Default::default()
+    };
+    let (state_notifier, _) = watch::channel(snapshot.state);
+
+    Session {
+      stage,
+      profile: AgentProfileSchema::new(AgentRuntime::Codex, "gpt-5.5".to_string()),
+      agent: get_adapter(AgentRuntime::Codex),
+      inner: Arc::new(Mutex::new(SessionInner {
+        snapshot,
+        writer: None,
+        child: None,
+      })),
+      state_notifier,
+    }
+  }
+
+  fn matching_stage(workflow: Workflow, issue_id: &str) -> IssueStage {
+    let workflow = Arc::new(workflow);
+    let issue_run = Arc::new(IssueRun::new(Arc::clone(&workflow), issue(issue_id, "todo")));
+    IssueRun::matching_stages(Arc::clone(&issue_run))
+      .into_iter()
+      .next()
+      .expect("stage matches issue state")
+  }
+
+  #[tokio::test]
+  async fn inline_prompt_renders_issue_variables_and_prompt_commands() {
+    #[cfg(windows)]
+    let prompt_command = "<nul set /p dummy=command";
+    #[cfg(not(windows))]
+    let prompt_command = "printf command";
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workflow = Workflow::builder()
+      .workflow_path(temp.path().join("workflow.yml"))
+      .workspace_root(temp.path().join("workspace"))
+      .add_inline_stage(
+        "plan",
+        "todo",
+        format!("plan {{{{ issue.id }}}} !`exec({prompt_command})`"),
+      )
+      .build();
+    let stage = matching_stage(workflow, "ABC-1");
+    let session = session_for_stage(stage);
+
+    let prompt = session.render_prompt().await.expect("prompt renders");
+
+    assert_eq!(prompt, "plan ABC-1 command");
+  }
+
+  #[tokio::test]
+  async fn prompt_file_renders_from_workflow_relative_path() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let prompts_dir = temp.path().join("prompts");
+    std::fs::create_dir(&prompts_dir).expect("prompts dir");
+    std::fs::write(prompts_dir.join("plan.md"), "file {{ issue.id }}").expect("prompt file");
+    let workflow = Workflow::builder()
+      .workflow_path(temp.path().join("workflow.yml"))
+      .workspace_root(temp.path().join("workspace"))
+      .add_stage("plan", "todo", "./prompts/plan.md")
+      .build();
+    let stage = matching_stage(workflow, "ABC-1");
+    let session = session_for_stage(stage);
+
+    let prompt = session.render_prompt().await.expect("prompt renders");
+
+    assert_eq!(prompt, "file ABC-1");
   }
 
   #[test]

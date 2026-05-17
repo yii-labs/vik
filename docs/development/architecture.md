@@ -175,8 +175,10 @@ executing.
 
 Session spawn:
 
-1. Resolve the stage prompt path through `IssueStage.workflow().resolve_path`.
-2. Read the prompt file.
+1. Resolve the stage prompt source.
+2. For `prompt_file`, resolve the path through
+   `IssueStage.workflow().resolve_path` and read the file. For `prompt`, use
+   the inline text directly.
 3. Render MiniJinja with serialized `IssueStage` context.
 4. Expand prompt commands with ``!`exec(command)` ``.
 5. Pick adapter with `agent::get_adapter(profile.runtime)`.

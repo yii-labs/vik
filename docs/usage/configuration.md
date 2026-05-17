@@ -53,8 +53,9 @@ vik doctor --strict ./workflow.yml
 vik doctor --json ./workflow.yml
 ```
 
-Current `doctor` checks YAML load and schema diagnostics. It does not check
-prompt file existence, CLI binaries, auth, or external tracker access.
+Current `doctor` checks YAML load and schema diagnostics. It rejects stages
+with zero or multiple prompt sources. It does not check prompt file existence,
+CLI binaries, auth, or external tracker access.
 
 ## Loop
 
@@ -174,7 +175,37 @@ Each stage requires:
 
 - `when.state`: exact issue state that triggers the stage.
 - `agent`: agent profile name.
-- `prompt_file`: prompt file for the stage.
+- exactly one prompt source:
+  - `prompt_file`: prompt file for the stage.
+  - `prompt`: inline prompt text for the stage.
+
+Example with a prompt file:
+
+```yaml
+issue:
+  stages:
+    plan:
+      when:
+        state: plan
+      agent: codex-medium
+      prompt_file: ./.agents/prompts/plan.md
+```
+
+Example with inline text:
+
+```yaml
+issue:
+  stages:
+    plan:
+      when:
+        state: plan
+      agent: codex-medium
+      prompt: |
+        Work on issue {{ issue.id }}: {{ issue.title }}.
+```
+
+`prompt_file` and `prompt` are mutually exclusive. A stage with both or neither
+is invalid. `prompt_file` paths resolve from the workflow file directory.
 
 Dispatch uses exact, case-sensitive state match:
 
@@ -212,9 +243,11 @@ extra issue fields.
 
 Hooks run with current directory set to the issue workspace.
 
-## Prompt Files
+## Prompt Sources
 
-Prompt files are MiniJinja templates. Unknown variables fail rendering.
+Prompt sources are MiniJinja templates. Unknown variables fail rendering. For
+`prompt_file`, Vik reads the file first. For `prompt`, Vik uses the inline text
+directly. Both forms share the same context and command expansion.
 
 Prompt render order:
 

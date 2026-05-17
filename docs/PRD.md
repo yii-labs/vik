@@ -4,11 +4,11 @@
 
 Vik is a local service that orchestrates coding agents against issues from an
 external tracker. A workflow file defines how to fetch issues, how issue states
-map to stages, which agent profile each stage uses, and which prompt file each
-run receives.
+map to stages, which agent profile each stage uses, and which prompt source
+each run receives.
 
 Vik does not own tracker state. Workflow pull commands read tracker state, and
-prompt files own tracker updates. Vik observes state on each intake cycle and
+prompts own tracker updates. Vik observes state on each intake cycle and
 dispatches matching stages.
 
 ## Problem
@@ -133,7 +133,7 @@ today.
 
 `SessionFactory` creates sessions for stage runs. A session:
 
-- renders the prompt file
+- renders the prompt source
 - starts the selected provider process
 - maps provider stdout JSONL to `AgentEvent`
 - writes decoded events to JSONL
