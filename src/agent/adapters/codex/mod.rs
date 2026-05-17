@@ -108,7 +108,7 @@ fn map_current_item(value: &Value, item: Option<ThreadItem>, phase: ToolCallPhas
   };
 
   match item_type {
-    "agent_message" => vec![AgentEvent::Message {
+    "agent_message" if phase == ToolCallPhase::Result => vec![AgentEvent::Message {
       text: item.text.unwrap_or_default(),
     }],
     "command_execution" => vec![AgentEvent::ToolCall {
@@ -349,6 +349,25 @@ mod tests {
   fn current_item_completed_agent_message_maps_to_message() {
     let line = r#"{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"hello"}}"#;
     assert_eq!(parse_events(line), vec![AgentEvent::Message { text: "hello".into() }]);
+  }
+
+  #[test]
+  fn current_agent_message_started_maps_to_unknown_event() {
+    let line = r#"{"type":"item.started","item":{"id":"item_0","type":"agent_message","text":""}}"#;
+    assert_eq!(
+      parse_events(line),
+      vec![AgentEvent::Unknown {
+        event_type: Some("item.started".into()),
+        raw: json!({
+          "type": "item.started",
+          "item": {
+            "id": "item_0",
+            "type": "agent_message",
+            "text": ""
+          }
+        }),
+      }]
+    );
   }
 
   #[test]
