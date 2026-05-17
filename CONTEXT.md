@@ -93,7 +93,7 @@ _Avoid_: direct adapter calls from orchestrator
   Issue Stage can spawn.
 - A runtime **Issue Stage** belongs to one **Issue Run** and uses the Issue
   Run context when rendering hooks, rendering prompts, and spawning a Session.
-- `issue.state == issue.stages[].when.state` is the only dispatch rule.
+- `issue.state == issue.stages.<stage>.when.state` is the only dispatch rule.
 - Stage iteration preserves workflow author order.
 - Orchestrator reserves `(issue.id, stage.name)` before async setup so
   duplicate intake results do not launch the same stage twice.

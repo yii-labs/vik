@@ -361,7 +361,7 @@ mod tests {
   }
 
   #[test]
-  fn matching_stages_preserve_workflow_array_order() {
+  fn matching_stages_preserve_workflow_author_order() {
     let temp = tempfile::tempdir().expect("tempdir");
     let workflow = Arc::new(
       Workflow::builder()

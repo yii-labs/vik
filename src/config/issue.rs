@@ -2,14 +2,16 @@
 //!
 //! Two separate top-level keys map to two separate concerns. `issues`
 //! (plural) holds the intake pull command. `issue` (singular) holds
-//! per-issue handling: hooks and the stages the orchestrator
+//! per-issue handling: hooks and the named stages the orchestrator
 //! dispatches against `issue.state`. Splitting them keeps intake config
-//! editable without touching the stage list.
+//! editable without touching the stage map.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
+use indexmap::IndexMap;
+use serde::ser::SerializeMap;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::WorkflowSchema;
 use super::diagnose::*;
@@ -54,8 +56,13 @@ pub struct IssueHandlingSchema {
   #[serde(default)]
   pub hooks: IssueHooks,
 
-  /// Array order is workflow order. Multiple stages may match the same
-  /// state, and authors expect deterministic launch order.
+  /// YAML uses a name-keyed map, but runtime code consumes a vector so
+  /// stage order and stage identity stay owned by this schema boundary.
+  #[serde(
+    default,
+    deserialize_with = "deserialize_stage_map",
+    serialize_with = "serialize_stage_map"
+  )]
   pub stages: Vec<IssueStageSchema>,
 
   #[serde(flatten)]
@@ -75,6 +82,7 @@ pub struct IssueHooks {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IssueStageSchema {
+  #[serde(skip)]
   pub name: String,
   pub when: IssueStageMatch,
   pub agent: String,
@@ -156,15 +164,18 @@ impl Diagnose for IssueHandlingSchema {
   fn diagnose(&self, schema: &WorkflowSchema) -> Diagnostics {
     let mut diagnostics = Diagnostics::new();
 
-    diagnostics.error_if_empty_list("stages", self.stages.is_empty());
+    diagnostics.error_if_empty_map("stages", self.stages.is_empty());
     if !self.stages.is_empty() {
       let mut stage_names = HashSet::new();
-      for (index, stage) in self.stages.iter().enumerate() {
-        let pointer = format!("stages.{index}");
+      for stage in &self.stages {
+        let pointer = stage_pointer(&stage.name);
+        if stage.name.trim().is_empty() {
+          diagnostics.push(Diagnostic::error("stages", DiagnosticCode::EmptyStr));
+        }
         diagnostics.extends_with_pointer(&pointer, stage.diagnose(schema));
         if !stage.name.trim().is_empty() && !stage_names.insert(stage.name.as_str()) {
           diagnostics.push(Diagnostic::error(
-            &format!("{pointer}.name"),
+            &pointer,
             DiagnosticCode::DuplicateStageName(stage.name.clone()),
           ));
         }
@@ -189,7 +200,6 @@ impl Diagnose for IssueStageSchema {
       "when" => when,
       "hooks" => hooks,
     );
-    diagnostics.error_if_empty_str("name", &self.name);
     diagnostics.error_if_empty_str("agent", &self.agent);
 
     // Stage's `agent` must reference an entry in the top-level `agents`
@@ -240,6 +250,42 @@ impl Diagnose for IssueStageHooks {
   }
 }
 
+fn deserialize_stage_map<'de, D>(deserializer: D) -> Result<Vec<IssueStageSchema>, D::Error>
+where
+  D: Deserializer<'de>,
+{
+  let stages = IndexMap::<String, IssueStageSchema>::deserialize(deserializer)?;
+  Ok(
+    stages
+      .into_iter()
+      .map(|(name, mut stage)| {
+        stage.name = name;
+        stage
+      })
+      .collect(),
+  )
+}
+
+#[allow(clippy::ptr_arg)]
+fn serialize_stage_map<S>(stages: &Vec<IssueStageSchema>, serializer: S) -> Result<S::Ok, S::Error>
+where
+  S: Serializer,
+{
+  let mut map = serializer.serialize_map(Some(stages.len()))?;
+  for stage in stages {
+    map.serialize_entry(&stage.name, stage)?;
+  }
+  map.end()
+}
+
+fn stage_pointer(stage_name: &str) -> String {
+  if stage_name.trim().is_empty() {
+    "stages".to_string()
+  } else {
+    format!("stages.{stage_name}")
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use crate::config::AgentProfileSchema;
@@ -273,16 +319,9 @@ command: ./scripts/issues-json
       "codex".to_string(),
       AgentProfileSchema::new(AgentRuntime::Codex, "gpt-5.5".to_string()),
     );
-    let stage: IssueStageSchema = serde_yaml::from_str(
-      r#"
-name: plan
-when:
-  state: Todo
-agent: codex
-prompt_file: ''
-"#,
-    )
-    .expect("stage schema parses");
+    let mut stage = IssueStageSchema::new("plan", "Todo");
+    stage.agent = "codex".to_string();
+    stage.prompt_file = PathBuf::new();
 
     let diagnostics = stage.diagnose(&workflow);
 

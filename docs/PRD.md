@@ -90,7 +90,7 @@ when a run stalls, crashes, or restarts.
 - Matching rule:
 
 ```text
-issue.state == issue.stages[].when.state
+issue.state == issue.stages.<stage>.when.state
 ```
 
 - Matching is exact and case-sensitive.

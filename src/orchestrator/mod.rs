@@ -230,7 +230,7 @@ impl Orchestrator {
   /// Match one issue against workflow stages and current capacity.
   ///
   /// Matching is exact string equality. `Workflow::stages` follows YAML
-  /// array order so stage launch order is deterministic. Stage matching
+  /// author order so stage launch order is deterministic. Stage matching
   /// happens before capacity checks so invalid workflow states stay
   /// visible even when the issue concurrency cap is full. Concurrency
   /// and running-key filters happen here, before any background work.

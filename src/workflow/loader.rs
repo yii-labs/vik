@@ -157,7 +157,7 @@ issues:
     idle_sec: 5
 issue:
   stages:
-    - name: plan
+    plan:
       when:
         state: todo
       agent: codex

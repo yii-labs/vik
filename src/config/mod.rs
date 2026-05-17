@@ -96,7 +96,7 @@ issue:
   hooks:
     after_create: echo created
   stages:
-    - name: plan
+    plan:
       when:
         state: todo
       agent: codex
@@ -104,7 +104,7 @@ issue:
       hooks:
         before_run: echo before
         after_run: echo after
-    - name: review
+    review:
       when:
         state: review
       agent: codex
@@ -166,7 +166,7 @@ issue:
         .any(|diag| { diag.pointer == "agents.codex.model" && matches!(diag.code, DiagnosticCode::EmptyStr) })
     );
     assert!(diagnostics.errors.iter().any(|diag| {
-      diag.pointer == "issue.stages.0.agent"
+      diag.pointer == "issue.stages.plan.agent"
         && matches!(&diag.code, DiagnosticCode::UnknownAgent(agent) if agent == "missing")
     }));
     assert!(
@@ -227,7 +227,7 @@ issue:
     extra_issue_hook_field: true
   extra_issue_field: true
   stages:
-    - name: plan
+    plan:
       when:
         state: todo
         extra_when_field: true
@@ -276,13 +276,14 @@ issue:
       diag.pointer == "issue.hooks.extra_issue_hook_field" && matches!(diag.code, DiagnosticCode::UnknownField)
     }));
     assert!(diagnostics.warnings.iter().any(|diag| {
-      diag.pointer == "issue.stages.0.extra_stage_field" && matches!(diag.code, DiagnosticCode::UnknownField)
+      diag.pointer == "issue.stages.plan.extra_stage_field" && matches!(diag.code, DiagnosticCode::UnknownField)
     }));
     assert!(diagnostics.warnings.iter().any(|diag| {
-      diag.pointer == "issue.stages.0.when.extra_when_field" && matches!(diag.code, DiagnosticCode::UnknownField)
+      diag.pointer == "issue.stages.plan.when.extra_when_field" && matches!(diag.code, DiagnosticCode::UnknownField)
     }));
     assert!(diagnostics.warnings.iter().any(|diag| {
-      diag.pointer == "issue.stages.0.hooks.extra_stage_hook_field" && matches!(diag.code, DiagnosticCode::UnknownField)
+      diag.pointer == "issue.stages.plan.hooks.extra_stage_hook_field"
+        && matches!(diag.code, DiagnosticCode::UnknownField)
     }));
   }
 
@@ -305,17 +306,54 @@ issue:
       diagnostics
         .errors
         .iter()
-        .any(|diag| { diag.pointer == "issue.stages.0.name" && matches!(diag.code, DiagnosticCode::EmptyStr) })
+        .any(|diag| { diag.pointer == "issue.stages" && matches!(diag.code, DiagnosticCode::EmptyStr) })
     );
     assert!(diagnostics.errors.iter().any(|diag| {
-      diag.pointer == "issue.stages.2.name"
+      diag.pointer == "issue.stages.plan"
         && matches!(&diag.code, DiagnosticCode::DuplicateStageName(stage_name) if stage_name == "plan")
     }));
   }
 
   #[test]
-  fn map_shaped_issue_stages_are_rejected() {
-    let err = serde_yaml::from_str::<WorkflowSchema>(
+  fn empty_stage_map_key_is_reported_by_diagnostics() {
+    let schema = serde_yaml::from_str::<WorkflowSchema>(
+      r#"
+loop:
+  max_issue_concurrency: 1
+workspace:
+  root: workspace
+agents:
+  codex:
+    runtime: codex
+    model: gpt-5.5
+issues:
+  pull:
+    command: ./scripts/issues-json
+issue:
+  stages:
+    "":
+      when:
+        state: todo
+      agent: codex
+      prompt_file: ./prompts/plan.md
+"#,
+    )
+    .expect("empty stage key still parses for diagnostics");
+
+    let diagnostics = schema.diagnose();
+
+    assert!(diagnostics.has_errors());
+    assert!(
+      diagnostics
+        .errors
+        .iter()
+        .any(|diag| { diag.pointer == "issue.stages" && matches!(diag.code, DiagnosticCode::EmptyStr) })
+    );
+  }
+
+  #[test]
+  fn map_shaped_issue_stages_parse_into_ordered_vec() {
+    let schema = serde_yaml::from_str::<WorkflowSchema>(
       r#"
 loop:
   max_issue_concurrency: 1
@@ -335,11 +373,53 @@ issue:
         state: todo
       agent: codex
       prompt_file: ./prompts/plan.md
+    implement:
+      when:
+        state: todo
+      agent: codex
+      prompt_file: ./prompts/implement.md
 "#,
     )
-    .expect_err("map-shaped issue.stages must not parse");
+    .expect("map-shaped issue.stages must parse");
 
-    assert!(err.to_string().contains("invalid type: map"));
+    assert_eq!(
+      schema.issue.stages.iter().map(|stage| stage.name.as_str()).collect::<Vec<_>>(),
+      ["plan", "implement"]
+    );
+    assert_eq!(schema.issue.stages[0].prompt_file, PathBuf::from("./prompts/plan.md"));
+    assert_eq!(
+      schema.issue.stages[1].prompt_file,
+      PathBuf::from("./prompts/implement.md")
+    );
+  }
+
+  #[test]
+  fn array_shaped_issue_stages_are_rejected() {
+    let err = serde_yaml::from_str::<WorkflowSchema>(
+      r#"
+loop:
+  max_issue_concurrency: 1
+workspace:
+  root: workspace
+agents:
+  codex:
+    runtime: codex
+    model: gpt-5.5
+issues:
+  pull:
+    command: ./scripts/issues-json
+issue:
+  stages:
+    - name: plan
+      when:
+        state: todo
+      agent: codex
+      prompt_file: ./prompts/plan.md
+"#,
+    )
+    .expect_err("array-shaped issue.stages must not parse");
+
+    assert!(err.to_string().contains("invalid type: sequence"));
   }
 
   #[test]

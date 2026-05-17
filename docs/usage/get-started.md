@@ -184,7 +184,7 @@ must match exactly what your pull command returns.
 ```yaml
 issue:
   stages:
-    - name: plan
+    plan:
       when:
         state: todo
       agent: coder
@@ -209,7 +209,7 @@ issue:
     after_create: |
       git clone --depth 1 git@github.com:your-org/your-repo .
   stages:
-    # ... same stage array as before
+    # ... same stage map as before
 ```
 
 Vik skips `after_create` when the issue folder already exists. If setup fails
