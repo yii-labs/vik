@@ -149,9 +149,11 @@ mod tests {
   use std::sync::Arc;
 
   use tokio_util::sync::CancellationToken;
+  use tracing_subscriber::{Registry, layer::SubscriberExt};
 
   use super::*;
   use crate::context::{Issue, IssueRun};
+  use crate::logging::tests::CaptureLayer;
   use crate::orchestrator::event::{OrchestratorEvent, StageEvent, event_channel};
 
   #[tokio::test]
