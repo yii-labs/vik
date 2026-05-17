@@ -83,6 +83,9 @@ when a run stalls, crashes, or restarts.
   - optional `description` or `desc`
 - Extra issue fields are preserved under `issue` in hook and prompt rendering
   context.
+- In stage prompt and hook context, tracker-provided `stage` is preserved at
+  `issue.stage.value` while Vik sets the current stage name at
+  `issue.stage.name`.
 - Duplicate issue ids in one intake batch: first wins.
 
 ## Dispatch

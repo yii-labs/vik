@@ -162,7 +162,9 @@ Required issue fields:
 
 Optional issue fields are preserved under `issue` in the prompt and hook
 context. Avoid extra field names that collide with Vik issue bindings such as
-`id`, `title`, `description`, `state`, or `workdir`.
+`id`, `title`, `description`, `state`, or `workdir`. If a tracker emits
+`stage`, stage prompt and hook contexts keep that tracker value at
+`issue.stage.value` and put the current Vik stage name at `issue.stage.name`.
 
 Duplicate issue ids in one intake result are skipped after the first one.
 
@@ -211,7 +213,9 @@ Hook contexts:
 
 `issue` contains `id`, `title`, `description`, `state`, `workdir`, and optional
 extra issue fields. Stage hook and prompt contexts also contain
-`issue.stage.name` for the current stage. Vik does not add root-level `stage`.
+`issue.stage.name` for the current stage. If the tracker payload also contains
+`stage`, its value moves to `issue.stage.value`. Vik does not add root-level
+`stage`.
 
 Hooks run with current directory set to the issue workspace.
 

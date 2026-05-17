@@ -169,12 +169,13 @@ impl Serialize for IssueStage {
       .get_mut("issue")
       .and_then(serde_json::Value::as_object_mut)
       .ok_or_else(|| serde::ser::Error::custom("issue context must serialize as object"))?;
-    issue.insert(
-      "stage".into(),
-      serde_json::json!({
-        "name": self.stage_name(),
-      }),
-    );
+    let tracker_stage = issue.remove("stage");
+    let mut stage = serde_json::Map::new();
+    stage.insert("name".into(), self.stage_name().into());
+    if let Some(value) = tracker_stage {
+      stage.insert("value".into(), value);
+    }
+    issue.insert("stage".into(), serde_json::Value::Object(stage));
 
     root.serialize(serializer)
   }
@@ -338,6 +339,39 @@ mod tests {
         workflow.workspace().root().display()
       )
     );
+  }
+
+  #[test]
+  fn issue_stage_serialization_preserves_tracker_stage_payload_as_value() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workflow = Arc::new(
+      Workflow::builder()
+        .workflow_path(temp.path().join("workflow.yml"))
+        .workspace_root(temp.path().join("workspace"))
+        .add_stage("plan", "todo", "./plan.md")
+        .build(),
+    );
+    let mut issue = issue_with_extra("ABC-1", "todo");
+    issue.extra_payload.insert(
+      serde_yaml::Value::String("stage".to_string()),
+      serde_yaml::Value::String("tracker-stage".to_string()),
+    );
+    let issue_run = Arc::new(IssueRun::new(Arc::clone(&workflow), issue));
+    let stage = IssueRun::matching_stages(issue_run)
+      .into_iter()
+      .next()
+      .expect("stage matches issue state");
+
+    let context = serde_json::to_value(&stage).expect("issue stage serializes");
+
+    assert_eq!(context["issue"]["stage"]["name"], "plan");
+    assert_eq!(context["issue"]["stage"]["value"], "tracker-stage");
+
+    let rendered = JinjaRenderer::new()
+      .render("{{ issue.stage.name }}|{{ issue.stage.value }}", &stage)
+      .expect("stage context renders");
+
+    assert_eq!(rendered, "plan|tracker-stage");
   }
 
   #[test]
