@@ -11,7 +11,7 @@ pub(crate) mod retention;
 pub mod spans;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::path::Path;
 
@@ -23,7 +23,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
 
 pub use phase::Phase;
-pub use spans::{daemon_span, issue_span, session_span, stage_span};
+pub use spans::{daemon_span, issue_span, stage_span};
 
 pub(crate) const INFO_LOG_PREFIX: &str = "vik.log";
 pub(crate) const ERROR_LOG_PREFIX: &str = "vik-error.log";

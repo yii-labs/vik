@@ -26,6 +26,7 @@ mod running;
 
 use std::sync::Arc;
 
+use chrono::Utc;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
@@ -52,6 +53,54 @@ pub struct Orchestrator {
   running: RunningMap,
   producer: EventProducer,
   consumer: EventConsumer,
+}
+
+#[derive(Debug)]
+struct DispatchDecision {
+  issue_stages: Vec<IssueStage>,
+  skip_reason: Option<DispatchSkipReason>,
+}
+
+impl DispatchDecision {
+  fn run(issue_stages: Vec<IssueStage>) -> Self {
+    Self {
+      issue_stages,
+      skip_reason: None,
+    }
+  }
+
+  fn skip(reason: DispatchSkipReason) -> Self {
+    Self {
+      issue_stages: Vec::new(),
+      skip_reason: Some(reason),
+    }
+  }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DispatchSkipReason {
+  NoMatchingStage,
+  IssueConcurrencyFull,
+  MatchingStagesAlreadyActive,
+}
+
+impl DispatchSkipReason {
+  fn trace(self, issue: &Issue) {
+    match self {
+      Self::NoMatchingStage => {
+        tracing::warn!(
+          issue_state = %issue.state,
+          "no workflow stage matched issue state; skipping issue this cycle",
+        );
+      },
+      Self::IssueConcurrencyFull => {
+        tracing::info!("issue concurrency is full; skipping issue this cycle");
+      },
+      Self::MatchingStagesAlreadyActive => {
+        tracing::info!("matching stages are already active; skipping issue this cycle");
+      },
+    }
+  }
 }
 
 impl Orchestrator {
@@ -127,6 +176,15 @@ impl Orchestrator {
       },
       OrchestratorEvent::Intake(IntakeEvent::Stopped) => true,
       OrchestratorEvent::Stage(StageEvent::IssueReady { issue_stages }) => {
+        if let Some(first) = issue_stages.first() {
+          let stage_names: Vec<&str> = issue_stages.iter().map(|s| s.stage_name()).collect();
+          tracing::info!(
+            phase = %Phase::Dispatch,
+            issue_id = %first.issue().id,
+            stage_names = ?stage_names,
+            "issue ready; launching stages",
+          );
+        }
         for issue_stage in issue_stages {
           self.launcher.launch(issue_stage, shutdown.clone());
         }
@@ -135,7 +193,7 @@ impl Orchestrator {
       OrchestratorEvent::Stage(StageEvent::Started { issue_stage, session }) => {
         let key = issue_stage.key();
         self.running.start(*issue_stage, session);
-        tracing::debug!(phase = %Phase::Dispatch, issue_id = %key.issue_id, stage_name = %key.stage_name, "stage session started");
+        tracing::info!(phase = %Phase::Dispatch, issue_id = %key.issue_id, stage_name = %key.stage_name, "stage session started");
         false
       },
       OrchestratorEvent::Stage(StageEvent::Snapshot { key, snapshot }) => {
@@ -143,6 +201,15 @@ impl Orchestrator {
         false
       },
       OrchestratorEvent::Stage(StageEvent::Terminal { key, snapshot }) => {
+        let duration_ms = (Utc::now() - snapshot.started_at).num_milliseconds().max(0) as u64;
+        tracing::info!(
+          phase = %Phase::Dispatch,
+          issue_id = %key.issue_id,
+          stage_name = %key.stage_name,
+          state = ?snapshot.state,
+          duration_ms,
+          "stage terminal",
+        );
         self.running.finish(&key, snapshot);
         false
       },
@@ -164,24 +231,32 @@ impl Orchestrator {
   ///
   /// Matching is exact string equality. `Workflow::stages` is an
   /// `IndexMap`, so iteration order matches the YAML so stage launch
-  /// order is deterministic. Concurrency and running-key filters happen
-  /// here, before any background work — the central loop is the only
-  /// place these decisions are made.
-  fn should_dispatch(&self, issue_run: Arc<IssueRun>) -> Vec<IssueStage> {
-    let issue = issue_run.issue();
-    if !self.running.can_accept_issue(&issue.id) {
-      tracing::debug!(
-        phase = %Phase::Dispatch,
-        issue_id = %issue.id,
-        "issue concurrency full; skipping issue this cycle",
-      );
-      return Vec::new();
+  /// order is deterministic. Stage matching happens before capacity checks so
+  /// invalid workflow states stay visible even when the issue concurrency cap is
+  /// full. Concurrency and running-key filters happen here, before any
+  /// background work. The central loop is the only place these decisions are
+  /// made.
+  fn should_dispatch(&self, issue_run: Arc<IssueRun>) -> DispatchDecision {
+    let issue_id = issue_run.issue().id.clone();
+    let matching_stages = IssueRun::matching_stages(issue_run);
+    if matching_stages.is_empty() {
+      return DispatchDecision::skip(DispatchSkipReason::NoMatchingStage);
     }
 
-    IssueRun::matching_stages(issue_run)
+    if !self.running.can_accept_issue(&issue_id) {
+      return DispatchDecision::skip(DispatchSkipReason::IssueConcurrencyFull);
+    }
+
+    let issue_stages = matching_stages
       .into_iter()
       .filter(|issue_stage| !self.running.contains_key(&issue_stage.key()))
-      .collect()
+      .collect::<Vec<_>>();
+
+    if issue_stages.is_empty() {
+      return DispatchDecision::skip(DispatchSkipReason::MatchingStagesAlreadyActive);
+    }
+
+    DispatchDecision::run(issue_stages)
   }
 
   /// Reservation closes the race window between dispatch and session
@@ -202,9 +277,15 @@ impl Orchestrator {
     let _span = issue_span(&issue.id).entered();
 
     let issue_run = Arc::new(IssueRun::new(Arc::clone(&self.workflow), issue));
-    let issue_stages = self.reserve_issue_stages(self.should_dispatch(Arc::clone(&issue_run)));
+    let dispatch = self.should_dispatch(Arc::clone(&issue_run));
+    if let Some(reason) = dispatch.skip_reason {
+      reason.trace(issue_run.issue());
+      return;
+    }
+
+    let issue_stages = self.reserve_issue_stages(dispatch.issue_stages);
     if issue_stages.is_empty() {
-      tracing::warn!("issue fetch but no stage matched to run");
+      DispatchSkipReason::MatchingStagesAlreadyActive.trace(issue_run.issue());
       return;
     }
 
@@ -235,9 +316,12 @@ mod tests {
   use std::time::Duration;
 
   use tokio::time::timeout;
+  use tracing::subscriber::with_default;
+  use tracing_subscriber::{Registry, layer::SubscriberExt};
 
   use super::*;
   use crate::context::Issue;
+  use crate::logging::tests::{CaptureLayer, captured_event, captured_message_exists};
   use crate::workflow::Workflow;
 
   #[test]
@@ -249,41 +333,161 @@ mod tests {
       Arc::clone(&orchestrator.workflow),
       issue("ABC-1", "todo"),
     )));
+    assert_eq!(planned.skip_reason, None);
     assert_eq!(
-      planned.iter().map(|issue_stage| issue_stage.stage_name()).collect::<Vec<_>>(),
+      planned
+        .issue_stages
+        .iter()
+        .map(|issue_stage| issue_stage.stage_name())
+        .collect::<Vec<_>>(),
       ["plan", "implement"]
     );
 
-    let reserved = orchestrator.reserve_issue_stages(planned);
+    let reserved = orchestrator.reserve_issue_stages(planned.issue_stages);
     assert_eq!(reserved.len(), 2);
 
-    assert!(
-      orchestrator
-        .should_dispatch(Arc::new(IssueRun::new(
-          Arc::clone(&orchestrator.workflow),
-          issue("ABC-1", "todo"),
-        )))
-        .is_empty(),
+    let same_issue = orchestrator.should_dispatch(Arc::new(IssueRun::new(
+      Arc::clone(&orchestrator.workflow),
+      issue("ABC-1", "todo"),
+    )));
+    assert_eq!(
+      same_issue.skip_reason,
+      Some(DispatchSkipReason::MatchingStagesAlreadyActive),
       "same issue-stage keys are already reserved"
     );
-    assert!(
-      orchestrator
-        .should_dispatch(Arc::new(IssueRun::new(
-          Arc::clone(&orchestrator.workflow),
-          issue("ABC-2", "todo"),
-        )))
-        .is_empty(),
+    assert!(same_issue.issue_stages.is_empty());
+
+    let different_issue = orchestrator.should_dispatch(Arc::new(IssueRun::new(
+      Arc::clone(&orchestrator.workflow),
+      issue("ABC-2", "todo"),
+    )));
+    assert_eq!(
+      different_issue.skip_reason,
+      Some(DispatchSkipReason::IssueConcurrencyFull),
       "different issue is blocked by max_issue_concurrency"
     );
-    assert!(
-      orchestrator
-        .should_dispatch(Arc::new(IssueRun::new(
-          Arc::clone(&orchestrator.workflow),
-          issue("ABC-1", "Todo"),
-        )))
-        .is_empty(),
+    assert!(different_issue.issue_stages.is_empty());
+
+    let different_issue_state_mismatch = orchestrator.should_dispatch(Arc::new(IssueRun::new(
+      Arc::clone(&orchestrator.workflow),
+      issue("ABC-2", "review"),
+    )));
+    assert_eq!(
+      different_issue_state_mismatch.skip_reason,
+      Some(DispatchSkipReason::NoMatchingStage),
+      "no-match issue states stay visible when concurrency is full"
+    );
+    assert!(different_issue_state_mismatch.issue_stages.is_empty());
+
+    let case_mismatch = orchestrator.should_dispatch(Arc::new(IssueRun::new(
+      Arc::clone(&orchestrator.workflow),
+      issue("ABC-1", "Todo"),
+    )));
+    assert_eq!(
+      case_mismatch.skip_reason,
+      Some(DispatchSkipReason::NoMatchingStage),
       "state match is exact and case-sensitive"
     );
+    assert!(case_mismatch.issue_stages.is_empty());
+  }
+
+  #[test]
+  fn dispatch_skip_reason_tracing_separates_no_match_concurrency_and_active_stage() {
+    let (layer, events) = CaptureLayer::new();
+    let subscriber = Registry::default().with(layer);
+
+    with_default(subscriber, || {
+      let mut no_match = Orchestrator::new(workflow_fixture(1, None));
+      no_match.prepare_issue(issue("ABC-3", "review"), CancellationToken::new());
+
+      let mut busy = Orchestrator::new(workflow_fixture(1, None));
+      let planned = busy.should_dispatch(Arc::new(IssueRun::new(
+        Arc::clone(&busy.workflow),
+        issue("ABC-1", "todo"),
+      )));
+      assert_eq!(busy.reserve_issue_stages(planned.issue_stages).len(), 2);
+
+      busy.prepare_issue(issue("ABC-2", "todo"), CancellationToken::new());
+      busy.prepare_issue(issue("ABC-1", "todo"), CancellationToken::new());
+    });
+
+    let events = events.lock().expect("events mutex");
+    assert!(captured_message_exists(
+      &events,
+      "no workflow stage matched issue state; skipping issue this cycle"
+    ));
+    assert!(captured_message_exists(
+      &events,
+      "issue concurrency is full; skipping issue this cycle"
+    ));
+    assert!(captured_message_exists(
+      &events,
+      "matching stages are already active; skipping issue this cycle"
+    ));
+    assert!(!captured_message_exists(
+      &events,
+      "issue fetch but no stage matched to run"
+    ));
+
+    let no_match = captured_event(
+      &events,
+      "no workflow stage matched issue state; skipping issue this cycle",
+    );
+    assert_eq!(no_match["phase"], Phase::Dispatch.to_string());
+    assert_eq!(no_match["issue_id"], "ABC-3");
+    assert_eq!(no_match["issue_state"], "review");
+  }
+
+  #[tokio::test]
+  async fn issue_ready_and_terminal_emit_dispatch_lifecycle_logs() {
+    let (layer, events) = CaptureLayer::new();
+    let subscriber = Registry::default().with(layer);
+
+    with_default(subscriber, || {
+      let mut orchestrator = Orchestrator::new(workflow_fixture(2, None));
+      let shutdown = CancellationToken::new();
+
+      let issue_run = Arc::new(IssueRun::new(
+        Arc::clone(&orchestrator.workflow),
+        issue("ABC-1", "todo"),
+      ));
+      let issue_stages = IssueRun::matching_stages(Arc::clone(&issue_run));
+      let key = issue_stages[0].key();
+      // Reserve the keys so that `Terminal` can release them without
+      // tripping `RunningMap`'s key-exists invariant.
+      orchestrator.reserve_issue_stages(issue_stages.clone());
+
+      orchestrator.handle_event(
+        OrchestratorEvent::Stage(StageEvent::IssueReady {
+          issue_stages: issue_stages.clone(),
+        }),
+        &shutdown,
+      );
+
+      let snapshot = crate::session::SessionSnapshot {
+        state: crate::session::SessionState::Completed,
+        ..Default::default()
+      };
+      orchestrator.handle_event(
+        OrchestratorEvent::Stage(StageEvent::Terminal {
+          key: key.clone(),
+          snapshot,
+        }),
+        &shutdown,
+      );
+    });
+
+    let events = events.lock().expect("events mutex");
+    let ready = captured_event(&events, "issue ready; launching stages");
+    assert_eq!(ready["phase"], Phase::Dispatch.to_string());
+    assert_eq!(ready["issue_id"], "ABC-1");
+    assert_eq!(ready["stage_names"], "[\"plan\", \"implement\"]");
+
+    let terminal = captured_event(&events, "stage terminal");
+    assert_eq!(terminal["phase"], Phase::Dispatch.to_string());
+    assert_eq!(terminal["issue_id"], "ABC-1");
+    assert_eq!(terminal["stage_name"], "plan");
+    assert_eq!(terminal["state"], "Completed");
   }
 
   #[tokio::test]

@@ -9,6 +9,7 @@
 //! consumers — every emitted event must carry exactly one phase value.
 
 use tracing::Span;
+use tracing::field::Empty;
 
 use super::phase::Phase;
 
@@ -20,12 +21,17 @@ pub fn issue_span(issue_id: &str) -> Span {
   tracing::info_span!("issue", phase = Phase::Dispatch.as_str(), issue_id)
 }
 
-pub fn stage_span(stage_name: &str, agent_profile: &str) -> Span {
-  tracing::info_span!("stage", phase = Phase::StageRun.as_str(), stage_name, agent_profile)
-}
-
-pub fn session_span(agent: &str) -> Span {
-  tracing::info_span!("session", agent)
+/// `session_id` is reserved as [`Empty`] so the monitor can fill it via
+/// `Span::record` once `AgentEvent::SessionStarted` lands.
+pub fn stage_span(issue_id: &str, stage_name: &str, agent_profile: &str) -> Span {
+  tracing::info_span!(
+    "stage",
+    phase = Phase::StageRun.as_str(),
+    issue_id,
+    stage_name,
+    agent_profile,
+    session_id = Empty,
+  )
 }
 
 #[cfg(test)]
@@ -48,7 +54,7 @@ mod tests {
 
       tokio::spawn(
         async move {
-          let stage_span = stage_span("plan", "codex");
+          let stage_span = stage_span("ABC-123", "plan", "codex");
           let _entered = stage_span.enter();
           tracing::info!("test session");
 
