@@ -5,7 +5,7 @@
 //! senders, and drain signalling. The top-level orchestrator only passes
 //! issues in and waits for the manager to become empty.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use thiserror::Error;
@@ -13,13 +13,11 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
-use crate::context::{Issue, IssueRun, IssueRunError, IssueStage, IssueStageKey};
+use crate::context::{Issue, IssueRun, IssueStage, IssueStageKey};
 use crate::hooks::HookError;
-use crate::logging::{Phase, issue_span, stage_span};
+use crate::logging::Phase;
 use crate::session::{SessionCommandSender, SessionError, SessionFactory, SessionState, SessionStateReceiver};
 use crate::workflow::Workflow;
-
-const MANAGER_EVENT_BUFFER: usize = 256;
 
 pub(super) struct StageSessionManager {
   workflow: Arc<Workflow>,
@@ -27,25 +25,19 @@ pub(super) struct StageSessionManager {
   sessions: HashMap<IssueStageKey, Option<SessionCommandSender>>,
   stages: HashMap<IssueStageKey, IssueStage>,
   finishing: HashSet<IssueStageKey>,
-  events: mpsc::Receiver<ManagerEvent>,
-  event_tx: mpsc::Sender<ManagerEvent>,
-  pending_events: VecDeque<ManagerEvent>,
+  session_events_channel: (mpsc::Sender<SessionEvent>, mpsc::Receiver<SessionEvent>),
   shutdown: CancellationToken,
 }
 
 impl StageSessionManager {
   pub(super) fn new(workflow: Arc<Workflow>) -> Self {
-    let (event_tx, events) = mpsc::channel(MANAGER_EVENT_BUFFER);
-
     Self {
       factory: SessionFactory::new(Arc::clone(&workflow)),
       workflow,
       sessions: HashMap::new(),
       stages: HashMap::new(),
       finishing: HashSet::new(),
-      events,
-      event_tx,
-      pending_events: VecDeque::new(),
+      session_events_channel: mpsc::channel::<SessionEvent>(8),
       shutdown: CancellationToken::new(),
     }
   }
@@ -54,8 +46,14 @@ impl StageSessionManager {
     self.sessions.is_empty()
   }
 
-  pub(super) async fn try_spawn(&mut self, issue: Issue) {
-    let _span = issue_span(&issue.id).entered();
+  pub(super) fn try_run_issue(&mut self, issue: Issue) {
+    let _span = tracing::info_span!(
+      "issue",
+      phase = %Phase::Dispatch,
+      issue_id = &issue.id,
+      issue_state = &issue.state
+    )
+    .entered();
 
     if self.shutdown.is_cancelled() {
       tracing::info!("stage session manager is shutting down; skipping issue this cycle");
@@ -65,38 +63,36 @@ impl StageSessionManager {
     let issue_run = Arc::new(IssueRun::new(Arc::clone(&self.workflow), issue));
     let dispatch = self.should_dispatch(Arc::clone(&issue_run));
     if let Some(reason) = dispatch.skip_reason {
-      reason.trace(issue_run.issue());
+      reason.trace();
       return;
     }
 
     let issue_stages = self.reserve_issue_stages(dispatch.issue_stages);
     if issue_stages.is_empty() {
-      DispatchSkipReason::MatchingStagesAlreadyActive.trace(issue_run.issue());
+      DispatchSkipReason::MatchingStagesAlreadyActive.trace();
       return;
     }
 
-    let event_tx = self.event_tx.clone();
+    let event_tx = self.session_events_channel.0.clone();
     let shutdown = self.shutdown.clone();
     let keys = issue_stages.iter().map(IssueStage::key).collect::<Vec<_>>();
 
     tokio::spawn(
       async move {
-        let result: Result<(), IssueRunError> = tokio::select! {
+        let result = tokio::select! {
+          biased;
           result = issue_run.prepare() => result,
           _ = shutdown.cancelled() => return,
         };
 
         match result {
-          Ok(()) => Self::send_manager_event(&event_tx, ManagerEvent::IssueReady { issue_stages }).await,
+          Ok(()) => {
+            tracing::debug!("issue prepared successfully");
+            Self::send_session_event(&event_tx, SessionEvent::Prepared { issue_stages }).await;
+          },
           Err(error) => {
-            Self::send_manager_event(
-              &event_tx,
-              ManagerEvent::IssuePrepareFailed {
-                keys,
-                error: error.to_string(),
-              },
-            )
-            .await;
+            tracing::error!(error = %error, "issue preparation failed");
+            Self::send_session_event(&event_tx, SessionEvent::PreparationFailed { keys }).await;
           },
         }
       }
@@ -104,19 +100,13 @@ impl StageSessionManager {
     );
   }
 
-  pub(super) async fn recv(&mut self) -> Option<()> {
-    let event = self.events.recv().await?;
-    self.pending_events.push_back(event);
-    Some(())
-  }
-
-  pub(super) async fn handle_received_event(&mut self) -> Option<StageSessionEvent> {
-    let event = self.pending_events.pop_front()?;
+  pub(super) async fn recv(&mut self) -> Option<SessionManagerEvent> {
+    let event = self.session_events_channel.1.recv().await?;
     let was_empty = self.is_empty();
-    self.handle_event(event).await;
+    self.handle_event(event);
 
     if !was_empty && self.is_empty() {
-      Some(StageSessionEvent::Drained)
+      Some(SessionManagerEvent::Drained)
     } else {
       None
     }
@@ -130,81 +120,53 @@ impl StageSessionManager {
       .iter()
       .filter_map(|(key, commands)| commands.as_ref().map(|commands| (key, commands)))
     {
-      if let Some(issue_stage) = self.stages.get(key) {
-        let span = stage_span(
-          &issue_stage.issue().id,
-          issue_stage.stage_name(),
-          &issue_stage.stage().agent,
-        );
-        if let Err(error) = commands.cancel().instrument(span).await {
-          tracing::debug!(error = %error, "session cancel command failed");
-        }
+      if let Err(error) = commands.cancel().in_current_span().await {
+        tracing::error!(issue_id = %key.issue_id, stage = %key.stage_name, error = %error, "failed to send cancel command to session");
       }
     }
   }
 
-  async fn handle_event(&mut self, event: ManagerEvent) {
+  fn handle_event(&mut self, event: SessionEvent) {
     match event {
-      ManagerEvent::IssueReady { issue_stages } => {
+      SessionEvent::Prepared { issue_stages } => {
         self.launch_issue_stages(issue_stages);
       },
-      ManagerEvent::IssuePrepareFailed { keys, error } => {
+      SessionEvent::PreparationFailed { keys } => {
         for key in keys {
-          self.sessions.remove(&key);
-          self.stages.remove(&key);
-          self.finishing.remove(&key);
-        }
-        tracing::error!(error = %error, "Failed to prepare for issue");
-      },
-      ManagerEvent::SessionStarted { key, commands } => {
-        if let Some(session) = self.sessions.get_mut(&key) {
-          *session = Some(commands);
-          tracing::info!(
-            phase = %Phase::Dispatch,
-            issue_id = %key.issue_id,
-            stage_name = %key.stage_name,
-            "stage session started",
-          );
+          self.drain_key_state(&key);
         }
       },
-      ManagerEvent::SessionState { key, state } => {
+      SessionEvent::Started { key, commands } => {
+        self.save_stage_session(key, commands);
+      },
+      SessionEvent::StateUpdated { key, state } => {
         if state.is_terminated() {
           self.finish_stage(key, state);
         }
       },
-      ManagerEvent::SessionClosed { key } => {
-        self.finish_stage(key, SessionState::Failed);
-      },
-      ManagerEvent::StageFinished { key } => {
-        self.sessions.remove(&key);
-        self.stages.remove(&key);
-        self.finishing.remove(&key);
-      },
-      ManagerEvent::StageFailed { key, error } => {
-        self.sessions.remove(&key);
-        self.stages.remove(&key);
-        self.finishing.remove(&key);
-        tracing::error!(
-          phase = %Phase::StageRun,
-          issue_id = %key.issue_id,
-          stage_name = %key.stage_name,
-          error = %error,
-          "stage launch failed",
-        );
+      SessionEvent::Finished { key } => {
+        self.drain_key_state(&key);
       },
     }
   }
 
-  fn launch_issue_stages(&self, issue_stages: Vec<IssueStage>) {
-    if let Some(first) = issue_stages.first() {
-      let stage_names: Vec<&str> = issue_stages.iter().map(|s| s.stage_name()).collect();
-      tracing::info!(
-        phase = %Phase::Dispatch,
-        issue_id = %first.issue().id,
-        stage_names = ?stage_names,
-        "issue ready; launching stages",
-      );
+  fn save_stage_session(&mut self, key: IssueStageKey, commands: SessionCommandSender) {
+    if let Some(slot) = self.sessions.get_mut(&key) {
+      *slot = Some(commands);
     }
+  }
+
+  fn launch_issue_stages(&self, issue_stages: Vec<IssueStage>) {
+    let Some(first) = issue_stages.first() else {
+      return;
+    };
+    let stage_names: Vec<&str> = issue_stages.iter().map(|s| s.stage_name()).collect();
+    tracing::info!(
+      phase = %Phase::Dispatch,
+      issue_id = %first.issue().id,
+      stage_names = ?stage_names,
+      "issue ready; launching stages",
+    );
 
     for issue_stage in issue_stages {
       self.launch_issue_stage(issue_stage);
@@ -212,85 +174,85 @@ impl StageSessionManager {
   }
 
   fn launch_issue_stage(&self, issue_stage: IssueStage) {
-    let span = stage_span(
-      &issue_stage.issue().id,
-      issue_stage.stage_name(),
-      &issue_stage.stage().agent,
-    );
+    let _span = tracing::info_span!(
+      "stage",
+      phase = %Phase::StageRun,
+      issue_id = %issue_stage.issue().id,
+      stage_name = %issue_stage.stage().name,
+      agent_profile = %issue_stage.stage().agent,
+    )
+    .entered();
+
     let workflow = Arc::clone(&self.workflow);
     let factory = self.factory.clone();
-    let event_tx = self.event_tx.clone();
+    let event_tx = self.session_events_channel.0.clone();
     let shutdown = self.shutdown.clone();
+
+    let key = issue_stage.key();
+    if shutdown.is_cancelled() {
+      return;
+    }
+
+    tracing::debug!("launching issue stage");
 
     tokio::spawn(
       async move {
-        let key = issue_stage.key();
-        if shutdown.is_cancelled() {
-          return;
-        }
-
-        tracing::info!("stage launching");
-
         if let Err(error) = Self::before_run(&workflow, &issue_stage).await {
-          Self::send_manager_event(
-            &event_tx,
-            ManagerEvent::StageFailed {
-              key,
-              error: error.to_string(),
-            },
-          )
-          .await;
+          tracing::error!(error = %error, "issue stage before_run hook failed");
+          Self::send_session_event(&event_tx, SessionEvent::Finished { key }).await;
           return;
         }
 
         let (commands, states) = match factory.spawn_stage(issue_stage.clone(), shutdown.clone()) {
           Ok(session) => session,
           Err(error) => {
-            Self::send_manager_event(
-              &event_tx,
-              ManagerEvent::StageFailed {
-                key,
-                error: error.to_string(),
-              },
-            )
-            .await;
+            tracing::error!(error = %error, "session spawn failed");
+            Self::send_session_event(&event_tx, SessionEvent::Finished { key }).await;
             return;
           },
         };
 
-        Self::send_manager_event(
+        Self::send_session_event(
           &event_tx,
-          ManagerEvent::SessionStarted {
+          SessionEvent::Started {
             key: key.clone(),
             commands,
           },
         )
         .await;
 
-        tokio::spawn(Self::watch_session_state_receiver(key, states, event_tx).in_current_span());
+        Self::proxy_session_state(key, states, event_tx).in_current_span().await;
       }
-      .instrument(span),
+      .in_current_span(),
     );
   }
 
   fn finish_stage(&mut self, key: IssueStageKey, state: SessionState) {
-    let Some(issue_stage) = self.stages.get(&key).cloned() else {
-      return;
-    };
-
     if !self.finishing.insert(key.clone()) {
       return;
     }
 
+    let Some(issue_stage) = self.stages.get(&key).cloned() else {
+      self.finishing.remove(&key);
+      return;
+    };
+
     let workflow = Arc::clone(&self.workflow);
-    let event_tx = self.event_tx.clone();
+    let event_tx = self.session_events_channel.0.clone();
+    let span = tracing::info_span!(
+      "stage",
+      phase = %Phase::StageRun,
+      issue_id = %issue_stage.issue().id,
+      stage_name = %issue_stage.stage().name,
+      agent_profile = %issue_stage.stage().agent,
+    );
 
     tokio::spawn(
       async move {
-        Self::after_run_and_log(workflow, issue_stage, state).await;
-        Self::send_manager_event(&event_tx, ManagerEvent::StageFinished { key }).await;
+        Self::after_run(workflow, issue_stage, state).await;
+        Self::send_session_event(&event_tx, SessionEvent::Finished { key }).await;
       }
-      .in_current_span(),
+      .instrument(span),
     );
   }
 
@@ -333,6 +295,12 @@ impl StageSessionManager {
       .collect()
   }
 
+  fn drain_key_state(&mut self, key: &IssueStageKey) {
+    self.sessions.remove(key);
+    self.stages.remove(key);
+    self.finishing.remove(key);
+  }
+
   fn can_accept_issue(&self, issue_id: &str) -> bool {
     self.contains_issue(issue_id)
       || self.running_issue_count() < self.workflow.schema().loop_.max_issue_concurrency as usize
@@ -360,36 +328,24 @@ impl StageSessionManager {
     Ok(())
   }
 
-  async fn after_run_and_log(workflow: Arc<Workflow>, issue_stage: IssueStage, state: SessionState) {
-    let span = stage_span(
-      &issue_stage.issue().id,
-      issue_stage.stage_name(),
-      &issue_stage.stage().agent,
-    );
-
-    async move {
-      if !matches!(state, SessionState::Cancelled)
-        && let Err(error) = workflow
-          .hooks()
-          .after_issue_stage_run(&issue_stage, &issue_stage.stage().hooks.after_run)
-          .await
-      {
-        tracing::error!(
-          error = %error,
-          "issue stage after_run hook failed",
-        );
-      }
-
-      tracing::info!("stage session exited");
+  async fn after_run(workflow: Arc<Workflow>, issue_stage: IssueStage, state: SessionState) {
+    if !matches!(state, SessionState::Cancelled)
+      && let Err(error) = workflow
+        .hooks()
+        .after_issue_stage_run(&issue_stage, &issue_stage.stage().hooks.after_run)
+        .await
+    {
+      tracing::error!(
+        error = %error,
+        "issue stage after_run hook failed",
+      );
     }
-    .instrument(span)
-    .await;
   }
 
-  async fn watch_session_state_receiver(
+  async fn proxy_session_state(
     key: IssueStageKey,
     mut states: SessionStateReceiver,
-    event_tx: mpsc::Sender<ManagerEvent>,
+    event_tx: mpsc::Sender<SessionEvent>,
   ) {
     let mut terminal = false;
 
@@ -398,61 +354,61 @@ impl StageSessionManager {
         terminal = true;
       }
 
-      Self::send_manager_event(
+      Self::send_session_event(
         &event_tx,
-        ManagerEvent::SessionState {
+        SessionEvent::StateUpdated {
           key: key.clone(),
           state,
         },
       )
       .await;
-
-      if terminal {
-        return;
-      }
     }
 
-    if !terminal {
-      Self::send_manager_event(&event_tx, ManagerEvent::SessionClosed { key }).await;
+    if terminal {
+      return;
     }
+
+    tracing::error!("session state channel closed before terminal state; treating session as failed");
+    Self::send_session_event(
+      &event_tx,
+      SessionEvent::StateUpdated {
+        key,
+        state: SessionState::Failed,
+      },
+    )
+    .await
   }
 
-  async fn send_manager_event(sender: &mpsc::Sender<ManagerEvent>, event: ManagerEvent) {
+  async fn send_session_event(sender: &mpsc::Sender<SessionEvent>, event: SessionEvent) {
     if sender.send(event).await.is_err() {
-      tracing::debug!(phase = %Phase::Dispatch, "stage session manager event receiver dropped");
+      tracing::debug!("stage session manager event receiver dropped");
     }
   }
 }
 
-pub(super) enum StageSessionEvent {
+/// Events emitted by the stage-session manager to signal important state changes to the orchestrator.
+pub(super) enum SessionManagerEvent {
   Drained,
 }
 
-enum ManagerEvent {
-  IssueReady {
+/// Events emitted internally by stage sessions to signal state changes to the manager.
+enum SessionEvent {
+  Prepared {
     issue_stages: Vec<IssueStage>,
   },
-  IssuePrepareFailed {
+  PreparationFailed {
     keys: Vec<IssueStageKey>,
-    error: String,
   },
-  SessionStarted {
+  Started {
     key: IssueStageKey,
     commands: SessionCommandSender,
   },
-  SessionState {
+  StateUpdated {
     key: IssueStageKey,
     state: SessionState,
   },
-  SessionClosed {
+  Finished {
     key: IssueStageKey,
-  },
-  StageFinished {
-    key: IssueStageKey,
-  },
-  StageFailed {
-    key: IssueStageKey,
-    error: String,
   },
 }
 
@@ -486,29 +442,16 @@ enum DispatchSkipReason {
 }
 
 impl DispatchSkipReason {
-  fn trace(self, issue: &Issue) {
+  fn trace(self) {
     match self {
       Self::NoMatchingStage => {
-        tracing::warn!(
-          phase = %Phase::Dispatch,
-          issue_id = %issue.id,
-          issue_state = %issue.state,
-          "no workflow stage matched issue state; skipping issue this cycle",
-        );
+        tracing::warn!("no workflow stage matched issue state; skipping issue this cycle",);
       },
       Self::IssueConcurrencyFull => {
-        tracing::info!(
-          phase = %Phase::Dispatch,
-          issue_id = %issue.id,
-          "issue concurrency is full; skipping issue this cycle",
-        );
+        tracing::info!("issue concurrency is full; skipping issue this cycle",);
       },
       Self::MatchingStagesAlreadyActive => {
-        tracing::info!(
-          phase = %Phase::Dispatch,
-          issue_id = %issue.id,
-          "matching stages are already active; skipping issue this cycle",
-        );
+        tracing::info!("matching stages are already active; skipping issue this cycle",);
       },
     }
   }
@@ -524,10 +467,6 @@ enum StageLaunchError {
 
 #[cfg(test)]
 mod tests {
-  use std::fs;
-  use std::time::Duration;
-
-  use tokio::time::timeout;
   use tracing_subscriber::{Registry, layer::SubscriberExt};
 
   use super::*;
@@ -589,35 +528,6 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn try_spawn_runs_issue_setup_before_session_launch() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let root = temp.path().join("workspace");
-    let workflow_path = temp.path().join("workflow.yml");
-    let workflow = Arc::new(workflow_fixture_with_path(
-      10,
-      Some("echo ok >> after_create.log"),
-      &root,
-      workflow_path,
-    ));
-    let mut manager = StageSessionManager::new(Arc::clone(&workflow));
-
-    manager.try_spawn(issue("ABC-1", "todo")).await;
-
-    timeout(Duration::from_secs(2), recv_until_drained(&mut manager))
-      .await
-      .expect("manager drains")
-      .expect("drained event");
-
-    let issue_workdir = workflow.workspace().issue_workdir("ABC-1");
-    assert_eq!(
-      fs::read_to_string(issue_workdir.join("after_create.log"))
-        .expect("after_create hook wrote log")
-        .trim(),
-      "ok"
-    );
-  }
-
-  #[tokio::test]
   async fn dispatch_skip_reason_tracing_separates_no_match_concurrency_and_active_stage() {
     let (layer, events) = CaptureLayer::new();
     let subscriber = Registry::default().with(layer);
@@ -625,15 +535,15 @@ mod tests {
     let _default = tracing::subscriber::set_default(subscriber);
     let workflow = Arc::new(workflow_fixture(1, None));
     let mut no_match = StageSessionManager::new(Arc::clone(&workflow));
-    no_match.try_spawn(issue("ABC-3", "review")).await;
+    no_match.try_run_issue(issue("ABC-3", "review"));
 
     let workflow = Arc::new(workflow_fixture(1, None));
     let mut busy = StageSessionManager::new(Arc::clone(&workflow));
     let planned = busy.should_dispatch(Arc::new(IssueRun::new(Arc::clone(&workflow), issue("ABC-1", "todo"))));
     assert_eq!(busy.reserve_issue_stages(planned.issue_stages).len(), 2);
 
-    busy.try_spawn(issue("ABC-2", "todo")).await;
-    busy.try_spawn(issue("ABC-1", "todo")).await;
+    busy.try_run_issue(issue("ABC-2", "todo"));
+    busy.try_run_issue(issue("ABC-1", "todo"));
 
     let events = events.lock().expect("events mutex");
     assert!(captured_message_exists(
@@ -672,26 +582,6 @@ mod tests {
     builder.build()
   }
 
-  fn workflow_fixture_with_path(
-    max_issue_concurrency: u32,
-    after_create: Option<&str>,
-    root: &std::path::Path,
-    workflow_path: std::path::PathBuf,
-  ) -> Workflow {
-    let mut builder = Workflow::builder()
-      .max_issue_concurrency(max_issue_concurrency)
-      .add_stage("plan", "todo", "./plan.md")
-      .add_stage("implement", "todo", "./implement.md")
-      .workspace_root(root)
-      .workflow_path(workflow_path);
-
-    if let Some(after_create) = after_create {
-      builder = builder.after_issue_workdir_create_hook(after_create);
-    }
-
-    builder.build()
-  }
-
   fn issue(id: &str, state: &str) -> Issue {
     Issue {
       id: id.to_string(),
@@ -699,15 +589,6 @@ mod tests {
       description: String::new(),
       state: state.to_string(),
       extra_payload: serde_yaml::Mapping::new(),
-    }
-  }
-
-  async fn recv_until_drained(manager: &mut StageSessionManager) -> Option<StageSessionEvent> {
-    loop {
-      manager.recv().await?;
-      if let Some(event) = manager.handle_received_event().await {
-        return Some(event);
-      }
     }
   }
 }

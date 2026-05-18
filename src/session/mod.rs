@@ -30,6 +30,7 @@ use tracing::Instrument;
 use crate::agent::{AgentAdapter, AgentCommand, AgentStdin, get_adapter};
 use crate::config::{AgentProfileSchema, IssueStagePromptSource};
 use crate::context::IssueStage;
+use crate::logging::Phase;
 use crate::shell::{Child, CommandExecError, CommandExt};
 use crate::template::{PromptRenderer, TemplateError};
 
@@ -131,6 +132,16 @@ impl Session {
     profile: AgentProfileSchema,
     shutdown: CancellationToken,
   ) -> (SessionCommandSender, SessionStateReceiver) {
+    let _span = tracing::info_span!(
+      "session",
+      phase = %Phase::StageRun,
+      issue_id = %stage.issue().id,
+      stage = %stage.stage().name,
+      agent = %stage.stage().agent,
+      session_id = tracing::field::Empty,
+    )
+    .entered();
+
     let (command_tx, command_rx) = mpsc::channel(SESSION_COMMAND_BUFFER);
     let (state_tx, state_rx) = mpsc::channel(SESSION_STATE_BUFFER);
     let agent = get_adapter(profile.runtime);
@@ -166,7 +177,7 @@ impl Session {
         return;
       },
       Err(error) => {
-        tracing::error!(error = %error, "session start failed");
+        tracing::error!(error = %error, "start failed");
         self.set_state(SessionState::Failed).await;
         self.log_final_snapshot();
         return;
@@ -179,15 +190,18 @@ impl Session {
 
   async fn prepare_and_spawn(&mut self) -> Result<bool, SessionError> {
     self.set_state(SessionState::Preparing).await;
-    tracing::info!("session preparing");
+    tracing::info!("preparing");
 
     if let Some(parent) = self.stage.log_file().parent() {
       fs::create_dir_all(parent).await?;
     }
 
     self.writer = Some(JsonlWriter::open(self.stage.log_file())?);
+    tracing::debug!(session_log = %self.stage.log_file().display(), "log opened");
 
     let prompt = Self::render_prompt(self.stage.clone()).await?;
+    tracing::debug!("prompt rendered");
+
     let agent_command = self.agent.build_command(&self.profile, prompt);
     if self.shutdown.is_cancelled() {
       self.set_state(SessionState::Cancelled).await;
@@ -204,7 +218,7 @@ impl Session {
     }
 
     self.set_state(SessionState::Running).await;
-    tracing::info!("session running");
+    tracing::info!("running...");
 
     Ok(true)
   }
@@ -537,10 +551,7 @@ mod tests {
   use crate::agent::{AgentAdapter, AgentCommand};
   use crate::config::{AgentProfileSchema, AgentRuntime};
   use crate::context::{Issue, IssueRun};
-  use crate::logging::{
-    stage_span,
-    tests::{CaptureLayer, captured_event, captured_message_exists},
-  };
+  use crate::logging::tests::{CaptureLayer, captured_event, captured_message_exists};
   use crate::workflow::Workflow;
 
   struct NoopAdapter;
@@ -720,48 +731,6 @@ mod tests {
     let events = events.lock().expect("events mutex");
     let event = captured_event(&events, "agent session id observed");
     assert_eq!(event["session_id"], "sess-123");
-  }
-
-  #[tokio::test]
-  async fn session_started_records_current_stage_span_once() {
-    let (layer, events) = CaptureLayer::new();
-    let subscriber = Registry::default().with(layer);
-
-    let _default = tracing::subscriber::set_default(subscriber);
-    let span = stage_span("86", "implement", "codex");
-    let _entered = span.enter();
-    let (mut task, _states) = session_task();
-
-    task
-      .apply_event(AgentEvent::SessionStarted {
-        session_id: "019e35bf-2163-7c32-af3c-7728a92c94f7".into(),
-      })
-      .await;
-    task
-      .apply_event(AgentEvent::SessionStarted {
-        session_id: "019e35bf-2163-7c32-af3c-7728a92c94f7".into(),
-      })
-      .await;
-    tracing::info!("stage finished");
-
-    assert_eq!(
-      task.snapshot.agent_session_id.as_deref(),
-      Some("019e35bf-2163-7c32-af3c-7728a92c94f7")
-    );
-
-    let events = events.lock().expect("events mutex");
-    let observed_session_logs = events
-      .iter()
-      .filter(|event| event["message"] == "agent session id observed")
-      .collect::<Vec<_>>();
-    assert_eq!(observed_session_logs.len(), 1);
-    assert_eq!(
-      observed_session_logs[0]["session_id"],
-      "019e35bf-2163-7c32-af3c-7728a92c94f7"
-    );
-
-    let stage_finished = captured_event(&events, "stage finished");
-    assert_eq!(stage_finished["session_id"], "019e35bf-2163-7c32-af3c-7728a92c94f7");
   }
 
   #[tokio::test]

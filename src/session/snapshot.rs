@@ -4,7 +4,7 @@
 //! a one-time clone through the session command channel; normal progress
 //! uses [`SessionState`] only.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Display};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -18,6 +18,21 @@ pub enum SessionState {
   Completed,
   Failed,
   Cancelled,
+}
+
+impl Display for SessionState {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let s = match self {
+      SessionState::UnStarted => "unstarted",
+      SessionState::Preparing => "preparing",
+      SessionState::Running => "running",
+      SessionState::Completed => "completed",
+      SessionState::Failed => "failed",
+      SessionState::Cancelled => "cancelled",
+    };
+
+    write!(f, "{s}")
+  }
 }
 
 impl SessionState {
