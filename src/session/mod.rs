@@ -27,7 +27,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
-use crate::agent::{AgentAdapter, AgentCommand, AgentStdin};
+use crate::agent::{AgentAdapter, AgentCommand, AgentStdin, get_adapter};
 use crate::config::AgentProfileSchema;
 use crate::context::IssueStage;
 use crate::shell::{Child, CommandExecError, CommandExt};
@@ -113,7 +113,7 @@ enum SessionCommand {
   },
 }
 
-struct SessionTask {
+pub struct Session {
   stage: IssueStage,
   profile: AgentProfileSchema,
   agent: Box<dyn AgentAdapter>,
@@ -125,15 +125,15 @@ struct SessionTask {
   child: Option<Child>,
 }
 
-impl SessionTask {
+impl Session {
   fn spawn(
     stage: IssueStage,
     profile: AgentProfileSchema,
-    agent: Box<dyn AgentAdapter>,
     shutdown: CancellationToken,
   ) -> (SessionCommandSender, SessionStateReceiver) {
     let (command_tx, command_rx) = mpsc::channel(SESSION_COMMAND_BUFFER);
     let (state_tx, state_rx) = mpsc::channel(SESSION_STATE_BUFFER);
+    let agent = get_adapter(profile.runtime);
 
     let task = Self {
       stage,
@@ -553,14 +553,14 @@ mod tests {
     }
   }
 
-  fn session_task() -> (SessionTask, mpsc::Receiver<SessionState>) {
+  fn session_task() -> (Session, mpsc::Receiver<SessionState>) {
     let (command_tx, command_rx) = mpsc::channel(8);
     drop(command_tx);
     let (state_tx, state_rx) = mpsc::channel(8);
     let stage = issue_stage("ABC-1", "plan", "todo");
 
     (
-      SessionTask {
+      Session {
         stage,
         profile: AgentProfileSchema::new(AgentRuntime::Codex, "gpt-5.5".to_string()),
         agent: Box::new(NoopAdapter),

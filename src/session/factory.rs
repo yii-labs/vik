@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
-use super::{SessionCommandSender, SessionError, SessionStateReceiver, SessionTask};
-use crate::agent::get_adapter;
+use super::{Session, SessionCommandSender, SessionError, SessionStateReceiver};
 use crate::{context::IssueStage, workflow::Workflow};
 use tokio_util::sync::CancellationToken;
 
@@ -33,11 +32,6 @@ impl SessionFactory {
       },
     };
 
-    Ok(SessionTask::spawn(
-      issue_stage,
-      profile.clone(),
-      get_adapter(profile.runtime),
-      shutdown,
-    ))
+    Ok(Session::spawn(issue_stage, profile.clone(), shutdown))
   }
 }
