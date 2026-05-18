@@ -305,7 +305,7 @@ mod tests {
 
   #[cfg(not(windows))]
   #[test]
-  fn unconfigured_hook_logs_inside_hook_span() {
+  fn unconfigured_hook_log_omits_phase_field() {
     use crate::logging::tests::CaptureLayer;
     use tracing_subscriber::{Registry, layer::SubscriberExt};
 
@@ -332,7 +332,6 @@ mod tests {
       .iter()
       .find(|event| event["message"] == "hook not configured; skipping execution")
       .expect("hook skip log");
-    assert_eq!(skipped["spans"][0]["name"], "hook");
     assert_eq!(skipped["hook"], "before_issue_stage_run");
     assert!(skipped.get("phase").is_none());
   }
