@@ -123,15 +123,15 @@ impl StageSessionManager {
 
   async fn handle_event(&mut self, event: SessionEvent) {
     match event {
-      SessionEvent::SessionStarted { key, commands } => {
+      SessionEvent::Started { key, commands } => {
         self.save_stage_session(key, commands);
       },
-      SessionEvent::SessionStateUpdated { key, state } => {
+      SessionEvent::StateUpdated { key, state } => {
         if state.is_terminated() {
           self.finish_stage(key, state).await;
         }
       },
-      SessionEvent::SessionFinished { key } => {
+      SessionEvent::Finished { key } => {
         self.drain_key_state(&key);
       },
     }
@@ -180,7 +180,7 @@ impl StageSessionManager {
       async move {
         if let Err(error) = Self::before_run(&workflow, &issue_stage).await {
           tracing::error!(error = %error, "issue stage before_run hook failed");
-          Self::send_session_event(&event_tx, SessionEvent::SessionFinished { key }).await;
+          Self::send_session_event(&event_tx, SessionEvent::Finished { key }).await;
           return;
         }
 
@@ -188,14 +188,14 @@ impl StageSessionManager {
           Ok(session) => session,
           Err(error) => {
             tracing::error!(error = %error, "session spawn failed");
-            Self::send_session_event(&event_tx, SessionEvent::SessionFinished { key }).await;
+            Self::send_session_event(&event_tx, SessionEvent::Finished { key }).await;
             return;
           },
         };
 
         Self::send_session_event(
           &event_tx,
-          SessionEvent::SessionStarted {
+          SessionEvent::Started {
             key: key.clone(),
             commands,
           },
@@ -317,7 +317,7 @@ impl StageSessionManager {
 
       Self::send_session_event(
         &event_tx,
-        SessionEvent::SessionStateUpdated {
+        SessionEvent::StateUpdated {
           key: key.clone(),
           state,
         },
@@ -326,13 +326,13 @@ impl StageSessionManager {
     }
 
     if terminal {
-      Self::send_session_event(&event_tx, SessionEvent::SessionFinished { key }).await;
+      Self::send_session_event(&event_tx, SessionEvent::Finished { key }).await;
       return;
     }
 
     // unreachable: the sender part of `SessionStateReceiver` is owned by [`StageSessionManager`], and is only dropped when the `SessionExited` event is sent.
     // But to make sure the state got released correctly, we fake it.
-    Self::send_session_event(&event_tx, SessionEvent::SessionFinished { key }).await
+    Self::send_session_event(&event_tx, SessionEvent::Finished { key }).await
   }
 
   async fn send_session_event(sender: &mpsc::Sender<SessionEvent>, event: SessionEvent) {
@@ -349,15 +349,15 @@ pub(super) enum SessionManagerEvent {
 
 /// Events emitted internally by stage sessions to signal state changes to the manager.
 enum SessionEvent {
-  SessionStarted {
+  Started {
     key: IssueStageKey,
     commands: SessionCommandSender,
   },
-  SessionStateUpdated {
+  StateUpdated {
     key: IssueStageKey,
     state: SessionState,
   },
-  SessionFinished {
+  Finished {
     key: IssueStageKey,
   },
 }
