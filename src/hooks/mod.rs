@@ -311,22 +311,20 @@ mod tests {
 
     let (layer, events) = CaptureLayer::new();
     let subscriber = Registry::default().with(layer);
-    let dispatch = tracing::Dispatch::new(subscriber);
+    let _default = tracing::subscriber::set_default(subscriber);
 
-    tracing::dispatcher::with_default(&dispatch, || {
-      let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("runtime");
-      runtime.block_on(async {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let hook = None;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+      .enable_all()
+      .build()
+      .expect("runtime");
+    runtime.block_on(async {
+      let temp = tempfile::tempdir().expect("tempdir");
+      let hook = None;
 
-        HookRunner::new()
-          .schedule_inner(HookKind::BeforeIssueStageRun, temp.path(), &hook, serde_json::json!({}))
-          .await
-          .expect("configured hook runs");
-      });
+      HookRunner::new()
+        .schedule_inner(HookKind::BeforeIssueStageRun, temp.path(), &hook, serde_json::json!({}))
+        .await
+        .expect("configured hook runs");
     });
 
     let events = events.lock().expect("events mutex");
