@@ -23,10 +23,7 @@ impl WorkflowTemplate {
   pub(crate) fn render_workflow(self, tracker: TrackerTemplate) -> String {
     self
       .workflow
-      .replace(
-        "__PULL_COMMAND__",
-        &indent_block(&tracker.render_script(self.stages), 6),
-      )
+      .replace("__PULL_COMMAND__", &tracker.pull_command())
       .replace("__IDLE_SEC__", &tracker.idle_sec().to_string())
       .replace("__STAGES__", &self.render_stages())
   }
@@ -51,16 +48,6 @@ impl WorkflowTemplate {
       })
       .collect()
   }
-}
-
-fn indent_block(contents: &str, spaces: usize) -> String {
-  let indent = " ".repeat(spaces);
-  contents
-    .trim_end()
-    .lines()
-    .map(|line| format!("{indent}{line}"))
-    .collect::<Vec<_>>()
-    .join("\n")
 }
 
 #[derive(Clone, Copy)]
@@ -120,6 +107,10 @@ impl TrackerTemplate {
 
   pub(crate) fn script_name(self) -> &'static str {
     self.script_name
+  }
+
+  fn pull_command(self) -> String {
+    format!("sh ./scripts/{}", self.script_name)
   }
 
   fn idle_sec(self) -> u64 {

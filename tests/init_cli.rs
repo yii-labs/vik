@@ -74,10 +74,10 @@ fn init_generates_symphony_github_setup_and_doctor_accepts_it() {
       "missing prompt for {stage}",
     );
   }
-  assert!(workflow_yaml.contains("command: |"));
-  assert!(workflow_yaml.contains("gh issue list --label \"vik\""));
-  assert!(workflow_yaml.contains("label:plan,rework,work,review,merge -label:blocked"));
+  assert!(workflow_yaml.contains("command: sh ./scripts/github-issues-json"));
+  assert!(!workflow_yaml.contains("label:plan,rework,work,review,merge -label:blocked"));
   assert!(!workflow_yaml.contains("command: ./scripts/github-issues-json"));
+  assert!(!workflow_yaml.contains("gh issue list --label \"vik\""));
   assert!(!workflow_yaml.contains("label:plan,work,rework,review,merge -label:blocked"));
 
   let script = temp.path().join("scripts").join("github-issues-json");
@@ -121,8 +121,8 @@ fn init_generates_simple_linear_setup_and_doctor_accepts_it() {
   assert!(workflow_yaml.contains("    work:"), "got: {workflow_yaml}");
   assert!(workflow_yaml.contains("    review:"), "got: {workflow_yaml}");
   assert!(!workflow_yaml.contains("    plan:"), "got: {workflow_yaml}");
-  assert!(workflow_yaml.contains("command: |"));
-  assert!(workflow_yaml.contains("curl -sS https://api.linear.app/graphql"));
+  assert!(workflow_yaml.contains("command: sh ./scripts/linear-issues-json"));
+  assert!(!workflow_yaml.contains("curl -sS https://api.linear.app/graphql"));
   assert!(!workflow_yaml.contains("command: ./scripts/linear-issues-json"));
 
   let script = temp.path().join("scripts").join("linear-issues-json");
@@ -170,7 +170,7 @@ fn init_prompts_for_missing_choices() {
   session.expect(Eof).expect("vik init exits");
 
   let workflow_yaml = std::fs::read_to_string(&workflow).expect("read workflow");
-  assert!(workflow_yaml.contains("curl -sS https://api.linear.app/graphql"));
+  assert!(workflow_yaml.contains("command: sh ./scripts/linear-issues-json"));
   assert!(workflow_yaml.contains("    work:"), "got: {workflow_yaml}");
   assert!(workflow_yaml.contains("    review:"), "got: {workflow_yaml}");
   assert!(!workflow_yaml.contains("    plan:"), "got: {workflow_yaml}");
@@ -214,7 +214,7 @@ fn init_force_overwrites_existing_generated_files() {
 
   let workflow_yaml = std::fs::read_to_string(&workflow).expect("read workflow");
   let prompt_body = std::fs::read_to_string(&prompt).expect("read prompt");
-  assert!(workflow_yaml.contains("gh issue list --label \"vik\""));
+  assert!(workflow_yaml.contains("command: sh ./scripts/github-issues-json"));
   assert!(prompt_body.contains("# work Stage"));
   assert!(!workflow_yaml.contains("old workflow"));
   assert!(!prompt_body.contains("old prompt"));

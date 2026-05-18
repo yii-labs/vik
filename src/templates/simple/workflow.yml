@@ -12,8 +12,7 @@ agents:
 
 issues:
   pull:
-    command: |
-__PULL_COMMAND__
+    command: __PULL_COMMAND__
     idle_sec: __IDLE_SEC__
 
 issue:
