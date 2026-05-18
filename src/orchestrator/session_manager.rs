@@ -26,6 +26,7 @@ pub(super) struct StageSessionManager {
   factory: SessionFactory,
   sessions: HashMap<IssueStageKey, Option<SessionCommandSender>>,
   stages: HashMap<IssueStageKey, IssueStage>,
+  finishing: HashSet<IssueStageKey>,
   events: mpsc::Receiver<ManagerEvent>,
   event_tx: mpsc::Sender<ManagerEvent>,
   pending_events: VecDeque<ManagerEvent>,
@@ -41,6 +42,7 @@ impl StageSessionManager {
       workflow,
       sessions: HashMap::new(),
       stages: HashMap::new(),
+      finishing: HashSet::new(),
       events,
       event_tx,
       pending_events: VecDeque::new(),
@@ -150,6 +152,7 @@ impl StageSessionManager {
         for key in keys {
           self.sessions.remove(&key);
           self.stages.remove(&key);
+          self.finishing.remove(&key);
         }
         tracing::error!(error = %error, "Failed to prepare for issue");
       },
@@ -166,15 +169,21 @@ impl StageSessionManager {
       },
       ManagerEvent::SessionState { key, state } => {
         if state.is_terminated() {
-          self.finish_stage(&key, state).await;
+          self.finish_stage(key, state);
         }
       },
       ManagerEvent::SessionClosed { key } => {
-        self.finish_stage(&key, SessionState::Failed).await;
+        self.finish_stage(key, SessionState::Failed);
+      },
+      ManagerEvent::StageFinished { key } => {
+        self.sessions.remove(&key);
+        self.stages.remove(&key);
+        self.finishing.remove(&key);
       },
       ManagerEvent::StageFailed { key, error } => {
         self.sessions.remove(&key);
         self.stages.remove(&key);
+        self.finishing.remove(&key);
         tracing::error!(
           phase = %Phase::StageRun,
           issue_id = %key.issue_id,
@@ -264,36 +273,25 @@ impl StageSessionManager {
     );
   }
 
-  async fn finish_stage(&mut self, key: &IssueStageKey, state: SessionState) {
-    let Some(issue_stage) = self.stages.get(key).cloned() else {
+  fn finish_stage(&mut self, key: IssueStageKey, state: SessionState) {
+    let Some(issue_stage) = self.stages.get(&key).cloned() else {
       return;
     };
-    let workflow = Arc::clone(&self.workflow);
-    let span = stage_span(
-      &issue_stage.issue().id,
-      issue_stage.stage_name(),
-      &issue_stage.stage().agent,
-    );
 
-    async move {
-      if !matches!(state, SessionState::Cancelled)
-        && let Err(error) = workflow
-          .hooks()
-          .after_issue_stage_run(&issue_stage, &issue_stage.stage().hooks.after_run)
-          .await
-      {
-        tracing::error!(
-          error = %error,
-          "issue stage after_run hook failed",
-        );
-      }
-
-      tracing::info!("stage session exited");
+    if !self.finishing.insert(key.clone()) {
+      return;
     }
-    .instrument(span)
-    .await;
-    self.sessions.remove(key);
-    self.stages.remove(key);
+
+    let workflow = Arc::clone(&self.workflow);
+    let event_tx = self.event_tx.clone();
+
+    tokio::spawn(
+      async move {
+        Self::after_run_and_log(workflow, issue_stage, state).await;
+        Self::send_manager_event(&event_tx, ManagerEvent::StageFinished { key }).await;
+      }
+      .in_current_span(),
+    );
   }
 
   fn should_dispatch(&self, issue_run: Arc<IssueRun>) -> DispatchDecision {
@@ -362,6 +360,32 @@ impl StageSessionManager {
     Ok(())
   }
 
+  async fn after_run_and_log(workflow: Arc<Workflow>, issue_stage: IssueStage, state: SessionState) {
+    let span = stage_span(
+      &issue_stage.issue().id,
+      issue_stage.stage_name(),
+      &issue_stage.stage().agent,
+    );
+
+    async move {
+      if !matches!(state, SessionState::Cancelled)
+        && let Err(error) = workflow
+          .hooks()
+          .after_issue_stage_run(&issue_stage, &issue_stage.stage().hooks.after_run)
+          .await
+      {
+        tracing::error!(
+          error = %error,
+          "issue stage after_run hook failed",
+        );
+      }
+
+      tracing::info!("stage session exited");
+    }
+    .instrument(span)
+    .await;
+  }
+
   async fn watch_session_state_receiver(
     key: IssueStageKey,
     mut states: SessionStateReceiver,
@@ -421,6 +445,9 @@ enum ManagerEvent {
     state: SessionState,
   },
   SessionClosed {
+    key: IssueStageKey,
+  },
+  StageFinished {
     key: IssueStageKey,
   },
   StageFailed {
