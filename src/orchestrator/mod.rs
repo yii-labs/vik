@@ -101,7 +101,7 @@ impl Orchestrator {
         false
       },
       OrchestratorEvent::Intake(IntakeEvent::Failed(error)) => {
-        tracing::info_span!("intake").in_scope(|| {
+        tracing::error_span!("intake").in_scope(|| {
           tracing::error!(error = %error, "intake cycle failed");
         });
         false

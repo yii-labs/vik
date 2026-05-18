@@ -40,7 +40,7 @@ pub fn install(shutdown: CancellationToken) -> Result<(), SignalError> {
         shutdown_clone.cancel();
       }
     }
-    .instrument(tracing::info_span!("daemon")),
+    .instrument(tracing::error_span!("daemon")),
   );
   Ok(())
 }

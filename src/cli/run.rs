@@ -97,7 +97,7 @@ fn run_inner(workflow: Workflow, args: &RunArgs) -> anyhow::Result<()> {
   let _guard = init_logging(&workflow, !args.detached)?;
 
   if let Some((stale_pid, stale_path)) = stale_state_note {
-    tracing::info_span!("daemon").in_scope(|| {
+    tracing::error_span!("daemon").in_scope(|| {
       tracing::warn!(
         stale_pid = stale_pid as u64,
         state_file = %stale_path.display(),
@@ -116,7 +116,7 @@ fn run_inner(workflow: Workflow, args: &RunArgs) -> anyhow::Result<()> {
     let shutdown = signals.token();
 
     {
-      let _span = tracing::info_span!("daemon").entered();
+      let _span = tracing::error_span!("daemon").entered();
 
       tracing::info!(
           workflow_path = %workflow.workflow_path().display(),
@@ -141,7 +141,7 @@ fn run_inner(workflow: Workflow, args: &RunArgs) -> anyhow::Result<()> {
     // a leftover state file just turns into a stale pid record that
     // the next `vik run -d` already knows how to recover from.
     if let Err(err) = State::remove(&state_path) {
-      tracing::info_span!("daemon").in_scope(|| {
+      tracing::error_span!("daemon").in_scope(|| {
         tracing::warn!(
           path = %state_path.display(),
           error = %err,
@@ -182,7 +182,7 @@ async fn drive_runtime(
 }
 
 fn trace_http_enabled(addr: SocketAddr) {
-  tracing::info_span!("server").in_scope(|| {
+  tracing::error_span!("server").in_scope(|| {
     tracing::info!(
       bind_address = %addr,
       "HTTP API enabled",
@@ -191,7 +191,7 @@ fn trace_http_enabled(addr: SocketAddr) {
 }
 
 fn trace_http_disabled() {
-  tracing::info_span!("server").in_scope(|| {
+  tracing::error_span!("server").in_scope(|| {
     tracing::info!("HTTP API disabled (no --port)");
   });
 }
@@ -238,7 +238,7 @@ fn write_state_file(
   state
     .write(state_path)
     .with_context(|| format!("write daemon state file to {}", state_path.display()))?;
-  tracing::info_span!("daemon").in_scope(|| {
+  tracing::error_span!("daemon").in_scope(|| {
     tracing::info!(
       state_file = %state_path.display(),
       pid = state.pid,

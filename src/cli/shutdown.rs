@@ -33,7 +33,7 @@ where
           return output;
       }
       _ = shutdown.cancelled() => {
-        tracing::info_span!("daemon").in_scope(|| {
+        tracing::error_span!("daemon").in_scope(|| {
           tracing::info!(
               grace_ms = GRACE.as_millis() as u64,
               "shutdown token tripped; entering graceful shutdown",
@@ -49,7 +49,7 @@ where
     // future safely from here, but the warn tells the operator the
     // graceful budget was exceeded.
     Err(_timeout) => {
-      tracing::info_span!("daemon").in_scope(|| {
+      tracing::error_span!("daemon").in_scope(|| {
         tracing::warn!(
           grace_ms = GRACE.as_millis() as u64,
           "graceful shutdown deadline expired; waiting for runtime to finish",
