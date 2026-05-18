@@ -8,6 +8,7 @@
 //! the writer budget for no operational gain.
 pub mod phase;
 pub(crate) mod retention;
+mod stdout;
 
 #[cfg(test)]
 pub(crate) mod tests;
@@ -17,7 +18,9 @@ use std::path::Path;
 use thiserror::Error;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling;
+use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
 
@@ -69,22 +72,11 @@ pub fn init(log_dir: &Path, enable_stdout: bool) -> Result<LoggingGuard, Logging
   let error_appender = rolling::daily(log_dir, ERROR_LOG_PREFIX);
   let (error_writer, error_guard) = tracing_appender::non_blocking(error_appender);
 
-  let default_filter_builder = || {
-    EnvFilter::builder()
-      .with_default_directive("info".parse().unwrap())
-      .from_env_lossy()
-  };
-
   // Skip the stdout layer entirely (rather than `with_writer(/dev/null)`)
   // when disabled — otherwise we pay full serialization cost per event
   // for a layer nothing reads.
   let stdout_layer = if enable_stdout {
-    Some(
-      tracing_subscriber::fmt::layer()
-        .compact()
-        .with_writer(std::io::stdout)
-        .with_filter(default_filter_builder()),
-    )
+    Some(stdout_layer(std::io::stdout))
   } else {
     None
   };
@@ -96,7 +88,7 @@ pub fn init(log_dir: &Path, enable_stdout: bool) -> Result<LoggingGuard, Logging
     .flatten_event(true)
     .with_ansi(false)
     .with_writer(info_writer)
-    .with_filter(default_filter_builder());
+    .with_filter(default_filter());
 
   let error_file_layer = tracing_subscriber::fmt::layer()
     .json()
@@ -133,6 +125,20 @@ pub fn init(log_dir: &Path, enable_stdout: bool) -> Result<LoggingGuard, Logging
   })
 }
 
+fn stdout_layer<S, W>(writer: W) -> impl Layer<S> + Send + Sync + 'static
+where
+  S: tracing::Subscriber + for<'lookup> LookupSpan<'lookup>,
+  W: for<'writer> MakeWriter<'writer> + Send + Sync + 'static,
+{
+  stdout::layer(writer).with_filter(default_filter())
+}
+
+fn default_filter() -> EnvFilter {
+  EnvFilter::builder()
+    .with_default_directive("info".parse().unwrap())
+    .from_env_lossy()
+}
+
 fn ensure_log_dir(log_dir: &Path) -> Result<(), LoggingError> {
   match std::fs::metadata(log_dir) {
     Ok(meta) if meta.is_dir() => Ok(()),
@@ -154,6 +160,12 @@ fn ensure_log_dir(log_dir: &Path) -> Result<(), LoggingError> {
 
 #[cfg(test)]
 mod value_tests {
+  use std::io::{self, Write};
+  use std::sync::{Arc, Mutex};
+
+  use tracing_subscriber::{Registry, layer::SubscriberExt};
+
+  use super::stdout_layer;
   use super::{ERROR_LOG_PREFIX, INFO_LOG_PREFIX, Phase, RETENTION_DAYS, phase};
 
   #[test]
@@ -164,5 +176,77 @@ mod value_tests {
 
     let reexported_phase: Phase = phase::Phase::Daemon;
     assert_eq!(reexported_phase.to_string(), "daemon");
+  }
+
+  #[test]
+  fn stdout_formatter_overwrites_duplicate_span_fields() {
+    let writer = BufferWriter::default();
+    let subscriber = Registry::default().with(stdout_layer(writer.clone()));
+
+    tracing::subscriber::with_default(subscriber, || {
+      let _parent = tracing::info_span!("parent", field_a = 1).entered();
+      let _child = tracing::info_span!("child", field_a = 2).entered();
+
+      tracing::info!("info");
+    });
+
+    let output = writer.output();
+    assert_eq!(output.matches("field_a=").count(), 1, "{output}");
+    assert!(output.contains("field_a=2"), "{output}");
+    assert!(!output.contains("field_a=1"), "{output}");
+  }
+
+  #[test]
+  fn stdout_formatter_event_fields_overwrite_span_fields() {
+    let writer = BufferWriter::default();
+    let subscriber = Registry::default().with(stdout_layer(writer.clone()));
+
+    tracing::subscriber::with_default(subscriber, || {
+      let _span = tracing::info_span!("span", field_a = 1).entered();
+
+      tracing::info!(field_a = 3, "info");
+    });
+
+    let output = writer.output();
+    assert_eq!(output.matches("field_a=").count(), 1, "{output}");
+    assert!(output.contains("field_a=3"), "{output}");
+    assert!(!output.contains("field_a=1"), "{output}");
+  }
+
+  #[derive(Clone, Default)]
+  struct BufferWriter {
+    buffer: Arc<Mutex<Vec<u8>>>,
+  }
+
+  impl BufferWriter {
+    fn output(&self) -> String {
+      let bytes = self.buffer.lock().expect("buffer mutex").clone();
+      String::from_utf8(bytes).expect("stdout is UTF-8")
+    }
+  }
+
+  struct BufferGuard {
+    buffer: Arc<Mutex<Vec<u8>>>,
+  }
+
+  impl Write for BufferGuard {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+      self.buffer.lock().expect("buffer mutex").extend_from_slice(buf);
+      Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+      Ok(())
+    }
+  }
+
+  impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for BufferWriter {
+    type Writer = BufferGuard;
+
+    fn make_writer(&'writer self) -> Self::Writer {
+      BufferGuard {
+        buffer: Arc::clone(&self.buffer),
+      }
+    }
   }
 }
