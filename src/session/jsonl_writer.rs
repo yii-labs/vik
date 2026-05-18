@@ -1,4 +1,4 @@
-//! Append-only JSONL writer for decoded `AgentEvent`s.
+//! Append-only JSONL writer for `AgentEvent`s.
 //!
 //! Wraps `tracing_appender::non_blocking` so writes never block the
 //! session task: events are queued, a worker thread flushes to disk,

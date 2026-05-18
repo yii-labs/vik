@@ -211,6 +211,11 @@ watchdog config in workflow schema.
 - `build_command(&self, profile, prompt) -> AgentCommand`
 - `map_event(&self, value) -> Vec<AgentEvent>`
 
+Adapters keep provider-specific parsing local. Valid provider lines that do not
+map to a semantic event become `AgentEvent::Unknown` with the full parsed
+provider JSON in `raw`. Tool calls and subagent/delegation events are retained
+as provider-neutral observation records.
+
 `get_adapter(runtime)` returns a stateless adapter:
 
 - `CodexAdapter`
@@ -299,7 +304,7 @@ Runtime artifacts:
 | `<root>/service/state.json`                                | daemon   | pid and lifecycle state   |
 | `<root>/logs/vik.log.YYYY-MM-DD`                           | logging  | INFO+ log events          |
 | `<root>/logs/vik-error.log.YYYY-MM-DD`                     | logging  | ERROR-only log events     |
-| `<root>/sessions/<issue_id>/<stage_name>-<uuid-v7>.jsonl`  | session  | decoded AgentEvent stream |
+| `<root>/sessions/<issue_id>/<stage_name>-<uuid-v7>.jsonl`  | session  | AgentEvent stream with retained provider evidence |
 | `<root>/issues/<issue_id>/`                                | operator | issue workspace           |
 
 ## Daemon
