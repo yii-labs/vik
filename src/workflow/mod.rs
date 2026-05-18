@@ -52,8 +52,8 @@ impl Workflow {
     &self.schema.agents
   }
 
-  pub fn stages(&self) -> indexmap::map::Values<'_, String, issue::IssueStageSchema> {
-    self.schema.issue.stages.values()
+  pub fn stages(&self) -> std::slice::Iter<'_, issue::IssueStageSchema> {
+    self.schema.issue.stages.iter()
   }
 
   pub fn hooks(&self) -> &HookRunner {
