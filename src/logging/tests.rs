@@ -66,7 +66,6 @@ where
   }
 
   fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
-    dbg!(event);
     let mut merged: HashMap<String, serde_json::Value> = HashMap::new();
 
     // Outer-to-inner walk: inner span fields overwrite outer ones,

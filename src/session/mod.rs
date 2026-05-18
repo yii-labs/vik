@@ -131,7 +131,14 @@ impl Session {
     profile: AgentProfileSchema,
     shutdown: CancellationToken,
   ) -> (SessionCommandSender, SessionStateReceiver) {
-    let _span = tracing::info_span!("session", stage = stage.stage().name, agent = stage.stage().agent).entered();
+    let _span = tracing::info_span!(
+      "session",
+      issue_id = %stage.issue().id,
+      stage = %stage.stage().name,
+      agent = %stage.stage().agent,
+      session_id = tracing::field::Empty,
+    )
+    .entered();
 
     let (command_tx, command_rx) = mpsc::channel(SESSION_COMMAND_BUFFER);
     let (state_tx, state_rx) = mpsc::channel(SESSION_STATE_BUFFER);

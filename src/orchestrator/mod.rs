@@ -68,7 +68,7 @@ impl Orchestrator {
         event = consumer.recv(), if !intake_closed => {
           match event {
             Some(event) => {
-              if self.handle_event(event).await {
+              if self.handle_event(event) {
                 intake_stopped = true;
               }
             }
@@ -95,10 +95,10 @@ impl Orchestrator {
 
   /// Returns `true` when intake has stopped. The caller still waits for
   /// `StageSessionManager` to drain before exiting.
-  async fn handle_event(&mut self, event: OrchestratorEvent) -> bool {
+  fn handle_event(&mut self, event: OrchestratorEvent) -> bool {
     match event {
       OrchestratorEvent::Intake(IntakeEvent::Issue(issue)) => {
-        self.sessions.try_run_issue(issue).await;
+        self.sessions.try_run_issue(issue);
         false
       },
       OrchestratorEvent::Intake(IntakeEvent::Failed(error)) => {
