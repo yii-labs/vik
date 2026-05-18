@@ -5,8 +5,6 @@
 //! line — so adding a runtime is "two pure functions" rather than a
 //! fresh subprocess scaffold. Spawning, stdin wiring, and event
 //! streaming all live in [`crate::session`].
-use std::sync::Arc;
-
 mod adapters;
 mod response;
 
@@ -14,9 +12,9 @@ use crate::config::AgentRuntime;
 pub use adapters::*;
 pub use response::*;
 
-pub fn get_adapter(runtime: AgentRuntime) -> Arc<dyn AgentAdapter> {
+pub fn get_adapter(runtime: AgentRuntime) -> Box<dyn AgentAdapter> {
   match runtime {
-    AgentRuntime::Codex => Arc::new(CodexAdapter),
-    AgentRuntime::ClaudeCode => Arc::new(ClaudeCodeAdapter),
+    AgentRuntime::Codex => Box::new(CodexAdapter),
+    AgentRuntime::ClaudeCode => Box::new(ClaudeCodeAdapter),
   }
 }

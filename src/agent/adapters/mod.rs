@@ -43,7 +43,7 @@ pub enum AgentStdin {
 /// `Vec` from `map_event` drops the line; returning multiple events
 /// fans one line out (e.g. Claude's `result` line yields both
 /// `TokenUsage` and `Completed`).
-pub trait AgentAdapter: Send + Sync {
+pub trait AgentAdapter: Send {
   fn build_command(&self, profile: &AgentProfileSchema, prompt: String) -> AgentCommand;
 
   /// Unknown shapes return `vec![]`; new provider event types must not

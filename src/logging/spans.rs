@@ -21,8 +21,8 @@ pub fn issue_span(issue_id: &str) -> Span {
   tracing::info_span!("issue", phase = Phase::Dispatch.as_str(), issue_id)
 }
 
-/// `session_id` is reserved as [`Empty`] so the monitor can fill it via
-/// `Span::record` once `AgentEvent::SessionStarted` lands.
+/// `session_id` is reserved as [`Empty`] so the session task can fill it
+/// via `Span::record` once `AgentEvent::SessionStarted` lands.
 pub fn stage_span(issue_id: &str, stage_name: &str, agent_profile: &str) -> Span {
   tracing::info_span!(
     "stage",
