@@ -305,7 +305,7 @@ mod tests {
 
   #[cfg(not(windows))]
   #[test]
-  fn configured_hook_logs_inside_hook_span() {
+  fn unconfigured_hook_logs_inside_hook_span() {
     use crate::logging::tests::CaptureLayer;
     use tracing_subscriber::{Registry, layer::SubscriberExt};
 
@@ -320,7 +320,7 @@ mod tests {
         .expect("runtime");
       runtime.block_on(async {
         let temp = tempfile::tempdir().expect("tempdir");
-        let hook = Some("true".to_string());
+        let hook = None;
 
         HookRunner::new()
           .schedule_inner(HookKind::BeforeIssueStageRun, temp.path(), &hook, serde_json::json!({}))
@@ -330,13 +330,13 @@ mod tests {
     });
 
     let events = events.lock().expect("events mutex");
-    let completed = events
+    let skipped = events
       .iter()
-      .find(|event| event["message"] == "hook completed")
-      .expect("hook completion log");
-    assert_eq!(completed["spans"][0]["name"], "hook");
-    assert_eq!(completed["hook"], "before_issue_stage_run");
-    assert!(completed.get("phase").is_none());
+      .find(|event| event["message"] == "hook not configured; skipping execution")
+      .expect("hook skip log");
+    assert_eq!(skipped["spans"][0]["name"], "hook");
+    assert_eq!(skipped["hook"], "before_issue_stage_run");
+    assert!(skipped.get("phase").is_none());
   }
 
   #[cfg(not(windows))]
