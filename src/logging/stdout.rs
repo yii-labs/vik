@@ -14,6 +14,9 @@ pub(super) fn layer<W>(writer: W) -> StdoutLayer<W> {
   StdoutLayer { writer }
 }
 
+// `fmt::layer().event_format(...)` sees span fields only after `FormatFields`
+// has flattened them into `FormattedFields<String>`. Store structured fields in
+// span extensions so duplicate keys can be overwritten without parsing logs.
 pub(super) struct StdoutLayer<W> {
   writer: W,
 }

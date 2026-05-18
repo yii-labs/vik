@@ -165,7 +165,7 @@ mod value_tests {
 
   use tracing_subscriber::{Registry, layer::SubscriberExt};
 
-  use super::stdout_layer;
+  use super::stdout;
   use super::{ERROR_LOG_PREFIX, INFO_LOG_PREFIX, Phase, RETENTION_DAYS, phase};
 
   #[test]
@@ -181,7 +181,7 @@ mod value_tests {
   #[test]
   fn stdout_formatter_overwrites_duplicate_span_fields() {
     let writer = BufferWriter::default();
-    let subscriber = Registry::default().with(stdout_layer(writer.clone()));
+    let subscriber = Registry::default().with(stdout::layer(writer.clone()));
 
     tracing::subscriber::with_default(subscriber, || {
       let _parent = tracing::info_span!("parent", field_a = 1).entered();
@@ -199,7 +199,7 @@ mod value_tests {
   #[test]
   fn stdout_formatter_event_fields_overwrite_span_fields() {
     let writer = BufferWriter::default();
-    let subscriber = Registry::default().with(stdout_layer(writer.clone()));
+    let subscriber = Registry::default().with(stdout::layer(writer.clone()));
 
     tracing::subscriber::with_default(subscriber, || {
       let _span = tracing::info_span!("span", field_a = 1).entered();
@@ -211,6 +211,24 @@ mod value_tests {
     assert_eq!(output.matches("field_a=").count(), 1, "{output}");
     assert!(output.contains("field_a=3"), "{output}");
     assert!(!output.contains("field_a=1"), "{output}");
+  }
+
+  #[test]
+  fn stdout_formatter_uses_recorded_span_fields() {
+    let writer = BufferWriter::default();
+    let subscriber = Registry::default().with(stdout::layer(writer.clone()));
+
+    tracing::subscriber::with_default(subscriber, || {
+      let span = tracing::info_span!("span", session_id = tracing::field::Empty);
+      let _entered = span.enter();
+
+      span.record("session_id", "abc123");
+      tracing::info!("info");
+    });
+
+    let output = writer.output();
+    assert_eq!(output.matches("session_id=").count(), 1, "{output}");
+    assert!(output.contains("session_id=\"abc123\""), "{output}");
   }
 
   #[derive(Clone, Default)]
