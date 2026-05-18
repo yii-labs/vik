@@ -49,6 +49,7 @@ impl Orchestrator {
     let intake = IntakeLoop::new(Arc::clone(&self.workflow), producer);
     let intake_handle = intake.start(shutdown.clone());
     let mut intake_stopped = false;
+    let mut intake_closed = false;
 
     loop {
       if intake_stopped && self.sessions.is_empty() {
@@ -64,15 +65,22 @@ impl Orchestrator {
           return Ok(());
         }
 
-        event = consumer.recv() => {
+        event = consumer.recv(), if !intake_closed => {
           match event {
             Some(event) => {
               if self.handle_event(event).await {
                 intake_stopped = true;
               }
             }
-            None if intake_stopped || self.sessions.is_empty() => return Ok(()),
-            None => return Err(OrchestratorError::EventChannelClosed),
+            None => {
+              intake_closed = true;
+              if self.sessions.is_empty() {
+                return Ok(());
+              }
+              if !intake_stopped {
+                return Err(OrchestratorError::EventChannelClosed);
+              }
+            },
           }
         }
 
