@@ -159,28 +159,25 @@ impl SessionTask {
   }
 
   async fn run(mut self) {
-    let shutdown = self.shutdown.clone();
-    let result = tokio::select! {
-      result = self.prepare_and_spawn() => result,
-      _ = shutdown.cancelled() => {
-        self.set_state(SessionState::Cancelled).await;
+    match self.prepare_and_spawn().await {
+      Ok(true) => {},
+      Ok(false) => {
+        self.log_final_snapshot();
+        return;
+      },
+      Err(error) => {
+        tracing::error!(error = %error, "session start failed");
+        self.set_state(SessionState::Failed).await;
         self.log_final_snapshot();
         return;
       },
     };
 
-    if let Err(error) = result {
-      tracing::error!(error = %error, "session start failed");
-      self.set_state(SessionState::Failed).await;
-      self.log_final_snapshot();
-      return;
-    }
-
     self.run_started_child().await;
     self.log_final_snapshot();
   }
 
-  async fn prepare_and_spawn(&mut self) -> Result<(), SessionError> {
+  async fn prepare_and_spawn(&mut self) -> Result<bool, SessionError> {
     self.set_state(SessionState::Preparing).await;
     tracing::info!("session preparing");
 
@@ -192,11 +189,24 @@ impl SessionTask {
 
     let prompt = render_prompt(self.stage.clone()).await?;
     let agent_command = self.agent.build_command(&self.profile, prompt);
+    if self.shutdown.is_cancelled() {
+      self.set_state(SessionState::Cancelled).await;
+      return Ok(false);
+    }
+
     self.spawn_child(agent_command).await?;
+    if self.snapshot.state.is_terminated() {
+      return Ok(false);
+    }
+    if self.shutdown.is_cancelled() {
+      self.cancel_with_child(None).await;
+      return Ok(false);
+    }
+
     self.set_state(SessionState::Running).await;
     tracing::info!("session running");
 
-    Ok(())
+    Ok(true)
   }
 
   async fn spawn_child(&mut self, agent_command: AgentCommand) -> Result<(), SessionError> {
@@ -221,21 +231,28 @@ impl SessionTask {
       .timeout(/* TODO: we need timeout here */ Duration::from_hours(1))
       .spawn()?;
 
-    if let AgentStdin::Pipe(input) = agent_command.stdin
-      && let Some(mut stdin) = child.stdin.take()
-    {
-      stdin
-        .write_all(input.as_bytes())
-        .await
-        .map_err(|err| SessionError::AgentSpawn(CommandExecError::Spawn(err)))?;
-    }
-
     child
       .stdout
       .as_ref()
       .ok_or_else(|| std::io::Error::other("Stdout was not bound to spawned agent process"))?;
 
+    let stdin = child.stdin.take();
     self.child = Some(child);
+
+    if let AgentStdin::Pipe(input) = agent_command.stdin
+      && let Some(mut stdin) = stdin
+    {
+      let shutdown = self.shutdown.clone();
+      tokio::select! {
+        result = stdin.write_all(input.as_bytes()) => {
+          result.map_err(|err| SessionError::AgentSpawn(CommandExecError::Spawn(err)))?;
+        },
+        _ = shutdown.cancelled() => {
+          self.cancel_with_child(None).await;
+        },
+      }
+    }
+
     Ok(())
   }
 
