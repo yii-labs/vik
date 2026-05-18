@@ -101,10 +101,39 @@ impl Orchestrator {
         false
       },
       OrchestratorEvent::Intake(IntakeEvent::Failed(error)) => {
-        tracing::error!(error = %error, "intake cycle failed");
+        tracing::info_span!("intake").in_scope(|| {
+          tracing::error!(error = %error, "intake cycle failed");
+        });
         false
       },
       OrchestratorEvent::Intake(IntakeEvent::Stopped) => true,
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use tracing_subscriber::{Registry, layer::SubscriberExt};
+
+  use super::*;
+  use crate::logging::tests::{CaptureLayer, captured_event};
+
+  #[test]
+  fn intake_failure_logs_inside_intake_span() {
+    let (layer, events) = CaptureLayer::new();
+    let subscriber = Registry::default().with(layer);
+    let _default = tracing::subscriber::set_default(subscriber);
+
+    let mut orchestrator = Orchestrator::new(Workflow::builder().workspace_root("workspace").build());
+
+    let stopped = orchestrator.handle_event(OrchestratorEvent::Intake(IntakeEvent::Failed(
+      "pull failed".to_string(),
+    )));
+
+    assert!(!stopped);
+    let events = events.lock().expect("events mutex");
+    let event = captured_event(&events, "intake cycle failed");
+    assert_eq!(event["spans"][0]["name"], "intake");
+    assert!(event.get("phase").is_none());
   }
 }

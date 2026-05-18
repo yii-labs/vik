@@ -154,11 +154,12 @@ impl StageSessionManager {
       return;
     };
     let stage_names: Vec<&str> = issue_stages.iter().map(|s| s.stage_name()).collect();
-    tracing::info!(
-      issue_id = %first.issue().id,
-      stage_names = ?stage_names,
-      "issue ready; launching stages",
-    );
+    tracing::info_span!("issue", issue_id = %first.issue().id, issue_state = %first.issue().state).in_scope(|| {
+      tracing::info!(
+        stage_names = ?stage_names,
+        "issue ready; launching stages",
+      );
+    });
 
     for issue_stage in issue_stages {
       self.launch_issue_stage(issue_stage);
@@ -560,6 +561,27 @@ mod tests {
     assert_eq!(no_match["spans"][0]["name"], "issue");
     assert_eq!(no_match["issue_id"], "ABC-3");
     assert_eq!(no_match["issue_state"], "review");
+  }
+
+  #[tokio::test]
+  async fn prepared_dispatch_logs_inside_issue_span() {
+    let (layer, events) = CaptureLayer::new();
+    let subscriber = Registry::default().with(layer);
+
+    let _default = tracing::subscriber::set_default(subscriber);
+    let workflow = Arc::new(workflow_fixture(1, None));
+    let manager = StageSessionManager::new(Arc::clone(&workflow));
+    let issue_run = Arc::new(IssueRun::new(Arc::clone(&workflow), issue("ABC-1", "todo")));
+    let issue_stages = IssueRun::matching_stages(issue_run);
+
+    manager.launch_issue_stages(issue_stages);
+
+    let events = events.lock().expect("events mutex");
+    let event = captured_event(&events, "issue ready; launching stages");
+    assert!(event.get("phase").is_none());
+    assert_eq!(event["spans"][0]["name"], "issue");
+    assert_eq!(event["issue_id"], "ABC-1");
+    assert_eq!(event["issue_state"], "todo");
   }
 
   fn workflow_fixture(max_issue_concurrency: u32, after_create: Option<&str>) -> Workflow {

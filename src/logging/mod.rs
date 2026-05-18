@@ -116,11 +116,13 @@ pub fn init(log_dir: &Path, enable_stdout: bool) -> Result<LoggingGuard, Logging
   // Retention failures must not block startup — disk pressure is
   // operator-visible through the warning + filesystem.
   if let Err(err) = retention::prune_old_logs(log_dir, RETENTION_DAYS) {
-    tracing::warn!(
+    tracing::info_span!("daemon").in_scope(|| {
+      tracing::warn!(
         log_dir = %log_dir.display(),
         error = %err,
         "log retention scan failed; leaving old files in place",
-    );
+      );
+    });
   }
 
   Ok(LoggingGuard {

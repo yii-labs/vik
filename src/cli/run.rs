@@ -97,11 +97,13 @@ fn run_inner(workflow: Workflow, args: &RunArgs) -> anyhow::Result<()> {
   let _guard = init_logging(&workflow, !args.detached)?;
 
   if let Some((stale_pid, stale_path)) = stale_state_note {
-    tracing::warn!(
+    tracing::info_span!("daemon").in_scope(|| {
+      tracing::warn!(
         stale_pid = stale_pid as u64,
         state_file = %stale_path.display(),
         "found stale daemon state file on startup; overwriting",
-    );
+      );
+    });
   }
 
   let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -139,11 +141,13 @@ fn run_inner(workflow: Workflow, args: &RunArgs) -> anyhow::Result<()> {
     // a leftover state file just turns into a stale pid record that
     // the next `vik run -d` already knows how to recover from.
     if let Err(err) = State::remove(&state_path) {
-      tracing::warn!(
+      tracing::info_span!("daemon").in_scope(|| {
+        tracing::warn!(
           path = %state_path.display(),
           error = %err,
           "failed to remove daemon state file on shutdown",
-      );
+        );
+      });
     }
 
     exit_result
@@ -167,17 +171,29 @@ async fn drive_runtime(
 
   match bind_address {
     Some(addr) => {
-      tracing::info!(
-          bind_address = %addr,
-          "HTTP API enabled",
-      );
+      trace_http_enabled(addr);
       todo!("vik run with --port is not implemented yet");
     },
     None => {
-      tracing::info!("HTTP API disabled (no --port)");
+      trace_http_disabled();
       super::shutdown::graceful(shutdown, orch_future).await
     },
   }
+}
+
+fn trace_http_enabled(addr: SocketAddr) {
+  tracing::info_span!("server").in_scope(|| {
+    tracing::info!(
+      bind_address = %addr,
+      "HTTP API enabled",
+    );
+  });
+}
+
+fn trace_http_disabled() {
+  tracing::info_span!("server").in_scope(|| {
+    tracing::info!("HTTP API disabled (no --port)");
+  });
 }
 
 fn resolve_bind_address(args: &RunArgs) -> anyhow::Result<Option<SocketAddr>> {
@@ -222,12 +238,14 @@ fn write_state_file(
   state
     .write(state_path)
     .with_context(|| format!("write daemon state file to {}", state_path.display()))?;
-  tracing::info!(
+  tracing::info_span!("daemon").in_scope(|| {
+    tracing::info!(
       state_file = %state_path.display(),
       pid = state.pid,
       port = state.port as u64,
       "daemon state file written",
-  );
+    );
+  });
   Ok(())
 }
 
@@ -249,6 +267,8 @@ fn format_command(workflow: &Workflow, args: &RunArgs) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::logging::tests::{CaptureLayer, captured_event};
+  use tracing_subscriber::{Registry, layer::SubscriberExt};
 
   #[test]
   fn format_command_records_detached_http_args_and_workflow_path() {
@@ -289,5 +309,48 @@ mod tests {
     let addr = resolve_bind_address(&args).expect("bind address is unused");
 
     assert_eq!(addr, None);
+  }
+
+  #[test]
+  fn write_state_file_logs_inside_daemon_span() {
+    let (layer, events) = CaptureLayer::new();
+    let subscriber = Registry::default().with(layer);
+    let _default = tracing::subscriber::set_default(subscriber);
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workflow = Workflow::builder()
+      .workflow_path(temp.path().join("workflow.yml"))
+      .workspace_root(temp.path())
+      .build();
+    let args = RunArgs {
+      port: None,
+      bind_address: "127.0.0.1".to_string(),
+      detached: false,
+    };
+    let state_path = temp.path().join("state.json");
+
+    write_state_file(&workflow, &args, None, &state_path).expect("state file written");
+
+    let events = events.lock().expect("events mutex");
+    let event = captured_event(&events, "daemon state file written");
+    assert_eq!(event["spans"][0]["name"], "daemon");
+    assert!(event.get("phase").is_none());
+  }
+
+  #[test]
+  fn http_status_logs_inside_server_span() {
+    let (layer, events) = CaptureLayer::new();
+    let subscriber = Registry::default().with(layer);
+    let _default = tracing::subscriber::set_default(subscriber);
+
+    trace_http_enabled("127.0.0.1:9000".parse().expect("socket address"));
+    trace_http_disabled();
+
+    let events = events.lock().expect("events mutex");
+    let enabled = captured_event(&events, "HTTP API enabled");
+    let disabled = captured_event(&events, "HTTP API disabled (no --port)");
+    assert_eq!(enabled["spans"][0]["name"], "server");
+    assert_eq!(disabled["spans"][0]["name"], "server");
+    assert!(events.iter().all(|event| event.get("phase").is_none()));
   }
 }

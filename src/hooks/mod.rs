@@ -25,7 +25,6 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use thiserror::Error;
 use tokio::process::Command;
-use tracing::Instrument;
 
 use crate::context::{IssueRun, IssueStage};
 use crate::shell::{CommandExecError, CommandExt};
@@ -148,7 +147,7 @@ impl HookRunner {
     context: Context,
   ) -> Result<(), HookError> {
     let hook_name = kind.as_str();
-    let _span = tracing::info_span!(
+    let span = tracing::info_span!(
       "hook",
       hook = %hook_name,
     );
@@ -156,14 +155,16 @@ impl HookRunner {
     let command = match hook {
       Some(body) => body,
       None => {
-        tracing::debug!("hook not configured; skipping execution");
+        span.in_scope(|| {
+          tracing::debug!("hook not configured; skipping execution");
+        });
         return Ok(());
       },
     };
 
     let command = self.render_hook_command(kind, command, context)?;
 
-    self.run_command(kind, cwd, command).in_current_span().await
+    self.run_command(kind, cwd, command, &span).await
   }
 
   fn render_hook_command<Context: Serialize>(
@@ -178,15 +179,25 @@ impl HookRunner {
     })
   }
 
-  async fn run_command(&self, kind: HookKind, cwd: &Path, command: String) -> Result<(), HookError> {
+  async fn run_command(
+    &self,
+    kind: HookKind,
+    cwd: &Path,
+    command: String,
+    span: &tracing::Span,
+  ) -> Result<(), HookError> {
     let started = Instant::now();
-    tracing::debug!(cwd = %cwd.display(), "hook shell starting");
+    span.in_scope(|| {
+      tracing::debug!(cwd = %cwd.display(), "hook shell starting");
+    });
 
     let output = match shell_command(&command).current_dir(cwd).timeout(self.timeout).output().await {
       Ok(output) => output,
       Err(source) => {
         let duration = started.elapsed().as_millis();
-        tracing::error!(duration, error = %source, "hook shell exec errored");
+        span.in_scope(|| {
+          tracing::error!(duration, error = %source, "hook shell exec errored");
+        });
         return Err(HookError::Exec {
           hook: kind.as_str(),
           source,
@@ -197,7 +208,9 @@ impl HookRunner {
     let duration = started.elapsed().as_millis();
 
     if output.status.success() {
-      tracing::info!(duration, "hook completed");
+      span.in_scope(|| {
+        tracing::info!(duration, "hook completed");
+      });
       return Ok(());
     }
 
@@ -208,7 +221,9 @@ impl HookRunner {
       code,
       stderr_tail,
     };
-    tracing::error!(duration, error = %error, "hook exited non-zero");
+    span.in_scope(|| {
+      tracing::error!(duration, error = %error, "hook exited non-zero");
+    });
     Err(error)
   }
 }
@@ -286,6 +301,42 @@ mod tests {
 
     let output = std::fs::read_to_string(temp.path().join("hook-output.txt")).expect("hook output");
     assert_eq!(output.lines().next(), Some("ISS-7:plan"));
+  }
+
+  #[cfg(not(windows))]
+  #[test]
+  fn configured_hook_logs_inside_hook_span() {
+    use crate::logging::tests::CaptureLayer;
+    use tracing_subscriber::{Registry, layer::SubscriberExt};
+
+    let (layer, events) = CaptureLayer::new();
+    let subscriber = Registry::default().with(layer);
+    let dispatch = tracing::Dispatch::new(subscriber);
+
+    tracing::dispatcher::with_default(&dispatch, || {
+      let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+      runtime.block_on(async {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let hook = Some("true".to_string());
+
+        HookRunner::new()
+          .schedule_inner(HookKind::BeforeIssueStageRun, temp.path(), &hook, serde_json::json!({}))
+          .await
+          .expect("configured hook runs");
+      });
+    });
+
+    let events = events.lock().expect("events mutex");
+    let completed = events
+      .iter()
+      .find(|event| event["message"] == "hook completed")
+      .expect("hook completion log");
+    assert_eq!(completed["spans"][0]["name"], "hook");
+    assert_eq!(completed["hook"], "before_issue_stage_run");
+    assert!(completed.get("phase").is_none());
   }
 
   #[cfg(not(windows))]

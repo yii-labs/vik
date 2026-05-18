@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
 use super::SignalError;
 
@@ -22,21 +23,24 @@ pub fn install(shutdown: CancellationToken) -> Result<(), SignalError> {
   let forced = Arc::new(AtomicBool::new(false));
   let shutdown_clone = shutdown.clone();
   let forced_clone = Arc::clone(&forced);
-  tokio::spawn(async move {
-    loop {
-      if tokio::signal::ctrl_c().await.is_err() {
-        break;
+  tokio::spawn(
+    async move {
+      loop {
+        if tokio::signal::ctrl_c().await.is_err() {
+          break;
+        }
+        if forced_clone.swap(true, Ordering::SeqCst) {
+          tracing::error!(signal = "ctrl_c", "second shutdown signal; aborting");
+          std::process::exit(130);
+        }
+        tracing::info!(
+          signal = "ctrl_c",
+          "shutdown signal received; requesting graceful shutdown",
+        );
+        shutdown_clone.cancel();
       }
-      if forced_clone.swap(true, Ordering::SeqCst) {
-        tracing::error!(signal = "ctrl_c", "second shutdown signal; aborting");
-        std::process::exit(130);
-      }
-      tracing::info!(
-        signal = "ctrl_c",
-        "shutdown signal received; requesting graceful shutdown",
-      );
-      shutdown_clone.cancel();
     }
-  });
+    .instrument(tracing::info_span!("daemon")),
+  );
   Ok(())
 }
