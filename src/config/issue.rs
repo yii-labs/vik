@@ -53,10 +53,10 @@ pub struct IssueHandlingSchema {
   #[serde(default)]
   pub hooks: IssueHooks,
 
-  /// Authored YAML stays a name-keyed map. Runtime storage is a flat ordered
-  /// list whose stage names are copied from the map keys.
+  /// Authored YAML stays a name-keyed map. Runtime storage keeps that ordered
+  /// map and duplicates each map key into the stage value.
   #[serde(deserialize_with = "deserialize_stages")]
-  pub stages: Vec<IssueStageSchema>,
+  pub stages: indexmap::IndexMap<String, IssueStageSchema>,
 
   #[serde(flatten)]
   unknown_fields: serde_yaml::Mapping,
@@ -167,9 +167,9 @@ impl Diagnose for IssueHandlingSchema {
 
     diagnostics.error_if_empty_map("stages", self.stages.is_empty());
     if !self.stages.is_empty() {
-      self.stages.iter().for_each(|stage| {
-        diagnostics.error_if_empty_str("stages", &stage.name);
-        diagnostics.extends_with_pointer(&stage_pointer(&stage.name), stage.diagnose(schema));
+      self.stages.iter().for_each(|(name, stage)| {
+        diagnostics.error_if_empty_str("stages", name);
+        diagnostics.extends_with_pointer(&stage_pointer(name), stage.diagnose(schema));
       });
     }
 
@@ -180,17 +180,14 @@ impl Diagnose for IssueHandlingSchema {
   }
 }
 
-fn deserialize_stages<'de, D>(deserializer: D) -> Result<Vec<IssueStageSchema>, D::Error>
+fn deserialize_stages<'de, D>(deserializer: D) -> Result<indexmap::IndexMap<String, IssueStageSchema>, D::Error>
 where
   D: serde::Deserializer<'de>,
 {
-  let stages = indexmap::IndexMap::<String, IssueStageSchema>::deserialize(deserializer)?
-    .into_iter()
-    .map(|(name, mut stage)| {
-      stage.name = name;
-      stage
-    })
-    .collect();
+  let mut stages = indexmap::IndexMap::<String, IssueStageSchema>::deserialize(deserializer)?;
+  stages.iter_mut().for_each(|(name, stage)| {
+    stage.name = name.clone();
+  });
 
   Ok(stages)
 }
@@ -324,7 +321,7 @@ prompt_file: ''
   }
 
   #[test]
-  fn issue_stages_deserialize_map_into_ordered_stage_entries() {
+  fn issue_stages_deserialize_map_into_named_indexmap_entries() {
     let issue: IssueHandlingSchema = serde_yaml::from_str(
       r#"
 stages:
@@ -343,8 +340,13 @@ stages:
     .expect("issue schema parses");
 
     assert_eq!(
-      issue.stages.iter().map(|stage| stage.name.as_str()).collect::<Vec<_>>(),
+      issue.stages.keys().map(String::as_str).collect::<Vec<_>>(),
       ["plan", "implement"]
+    );
+    assert_eq!(issue.stages.get("plan").expect("plan stage").name, "plan");
+    assert_eq!(
+      issue.stages.get("implement").expect("implement stage").name,
+      "implement"
     );
   }
 
@@ -425,10 +427,7 @@ stages:
 
     let diagnostics = issue.diagnose(&workflow_with_agent());
 
-    assert_eq!(
-      issue.stages.iter().find(|stage| stage.name == "plan").expect("plan stage").name,
-      "plan"
-    );
+    assert_eq!(issue.stages.get("plan").expect("plan stage").name, "plan");
     assert!(
       diagnostics
         .warnings

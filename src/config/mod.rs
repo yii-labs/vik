@@ -121,16 +121,16 @@ issue:
     assert_eq!(schema.issues.pull.command, "./scripts/issues-json");
     assert_eq!(schema.issues.pull.idle_sec, 5);
     assert_eq!(
-      schema.issue.stages.iter().map(|stage| stage.name.as_str()).collect::<Vec<_>>(),
+      schema
+        .issue
+        .stages
+        .values()
+        .map(|stage| stage.name.as_str())
+        .collect::<Vec<_>>(),
       ["plan", "implement"]
     );
     assert_eq!(schema.issue.hooks.after_create.as_deref(), Some("echo created"));
-    let plan = schema
-      .issue
-      .stages
-      .iter()
-      .find(|stage| stage.name == "plan")
-      .expect("plan stage");
+    let plan = schema.issue.stages.get("plan").expect("plan stage");
     assert_eq!(plan.hooks.before_run.as_deref(), Some("echo before"));
     assert_eq!(plan.hooks.after_run.as_deref(), Some("echo after"));
   }
@@ -151,7 +151,7 @@ issue:
 
     let mut stage = IssueStageSchema::new("").with_name("plan");
     stage.agent = "missing".to_string();
-    schema.issue.stages.push(stage);
+    schema.issue.stages.insert("plan".to_string(), stage);
 
     let diagnostics = schema.diagnose();
 

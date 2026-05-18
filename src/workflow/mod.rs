@@ -52,8 +52,8 @@ impl Workflow {
     &self.schema.agents
   }
 
-  pub fn stages(&self) -> std::slice::Iter<'_, issue::IssueStageSchema> {
-    self.schema.issue.stages.iter()
+  pub fn stages(&self) -> impl ExactSizeIterator<Item = &issue::IssueStageSchema> + '_ {
+    self.schema.issue.stages.values()
   }
 
   pub fn hooks(&self) -> &HookRunner {

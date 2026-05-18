@@ -62,11 +62,10 @@ impl WorkflowBuilder {
     prompt_file: impl Into<PathBuf>,
   ) -> Self {
     let name = name.into();
-    self
-      .schema
-      .issue
-      .stages
-      .push(IssueStageSchema::new(state).with_name(name).with_prompt_file(prompt_file));
+    let stage = IssueStageSchema::new(state)
+      .with_name(name.clone())
+      .with_prompt_file(prompt_file);
+    self.schema.issue.stages.insert(name, stage);
     self
   }
 
@@ -117,7 +116,7 @@ mod tests {
         .schema()
         .issue
         .stages
-        .iter()
+        .values()
         .map(|stage| stage.name.as_str())
         .collect::<Vec<_>>(),
       ["implement"]

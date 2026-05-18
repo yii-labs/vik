@@ -193,7 +193,7 @@ issue:
         .schema
         .issue
         .stages
-        .iter()
+        .values()
         .map(|stage| stage.name.as_str())
         .collect::<Vec<_>>(),
       ["plan"]
