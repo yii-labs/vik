@@ -30,6 +30,7 @@ use tracing::Instrument;
 use crate::agent::{AgentAdapter, AgentCommand, AgentStdin, get_adapter};
 use crate::config::AgentProfileSchema;
 use crate::context::IssueStage;
+use crate::logging::Phase;
 use crate::shell::{Child, CommandExecError, CommandExt};
 use crate::template::{PromptRenderer, TemplateError};
 
@@ -133,6 +134,7 @@ impl Session {
   ) -> (SessionCommandSender, SessionStateReceiver) {
     let _span = tracing::info_span!(
       "session",
+      phase = %Phase::StageRun,
       issue_id = %stage.issue().id,
       stage = %stage.stage().name,
       agent = %stage.stage().agent,
