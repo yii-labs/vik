@@ -264,8 +264,9 @@ impl SessionTask {
         command = self.commands.recv(), if !commands_closed => {
           match command {
             Some(command) => {
+              let should_break = matches!(command, SessionCommand::Cancel);
               self.handle_command(command).await;
-              if self.snapshot.state.is_terminated() {
+              if should_break {
                 break;
               }
             },
@@ -275,6 +276,10 @@ impl SessionTask {
         line = lines.next_line() => {
           match line {
             Ok(Some(line)) => {
+              if self.snapshot.state.is_terminated() {
+                continue;
+              }
+
               let events = match serde_json::from_str(&line) {
                 Ok(value) => self.agent.map_event(value),
                 Err(err) => vec![AgentEvent::Error {
@@ -287,10 +292,6 @@ impl SessionTask {
                 if self.snapshot.state.is_terminated() {
                   break;
                 }
-              }
-
-              if self.snapshot.state.is_terminated() {
-                break;
               }
             },
             Ok(None) => break,
