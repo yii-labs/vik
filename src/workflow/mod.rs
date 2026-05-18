@@ -3,7 +3,7 @@
 //! Where `WorkflowSchema` is parsed-only YAML, [`Workflow`] adds the
 //! pieces that need a resolved file path: a [`Workspace`] anchored at
 //! `workspace.root`, a [`HookRunner`] bound to this workflow, and helpers
-//! that resolve other paths (prompt files, intake commands) relative to
+//! that resolve workflow-relative paths (prompt files, intake commands) to
 //! the workflow file directory.
 //!
 //! The split lets `vik doctor` validate raw YAML through

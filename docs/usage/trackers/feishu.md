@@ -2,7 +2,7 @@
 
 Vik does not talk to Feishu or Lark on its own. Listing records,
 reading detail, writing comments, and moving state are all commands
-you put in `issues.pull.command` or in stage prompt files.
+you put in `issues.pull.command` or in stage prompt sources.
 
 This guide uses [lark-cli](https://github.com/larksuite/cli) and a
 Feishu Base table as the issue source. It assumes you have read
@@ -168,7 +168,7 @@ the fields a stage needs.
 
 ## Managing state from prompts
 
-Vik never updates Feishu. Your prompt files must tell the agent how
+Vik never updates Feishu. Your prompt sources must tell the agent how
 to move Base records between states.
 
 Move a record to `review`:

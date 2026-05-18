@@ -69,6 +69,18 @@ impl WorkflowBuilder {
     self
   }
 
+  pub fn add_inline_stage(
+    mut self,
+    name: impl Into<String>,
+    state: impl Into<String>,
+    prompt: impl Into<String>,
+  ) -> Self {
+    let name = name.into();
+    let stage = IssueStageSchema::new(state).with_name(name.clone()).with_inline_prompt(prompt);
+    self.schema.issue.stages.insert(name, stage);
+    self
+  }
+
   pub fn build(self) -> Workflow {
     Workflow::from_schema_unchecked(self.workflow_path, self.schema)
       .expect("Test workflow builder must build successfully")
@@ -127,6 +139,24 @@ mod tests {
         .path()
         .join("workflows")
         .join(workflow_path.to_string_lossy().replace('/', "-"))
+    );
+  }
+
+  #[test]
+  fn workflow_builder_inline_stage_uses_map_key_as_stage_name() {
+    let workflow = Workflow::builder()
+      .add_inline_stage("plan", "todo", "plan on {{ issue.id }}")
+      .build();
+
+    assert_eq!(
+      workflow
+        .schema()
+        .issue
+        .stages
+        .values()
+        .map(|stage| stage.name.as_str())
+        .collect::<Vec<_>>(),
+      ["plan"]
     );
   }
 

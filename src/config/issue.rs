@@ -8,7 +8,9 @@
 
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
+use indexmap::IndexMap;
+use serde::de;
+use serde::{Deserialize, Deserializer, Serialize};
 
 use super::WorkflowSchema;
 use super::diagnose::*;
@@ -56,7 +58,7 @@ pub struct IssueHandlingSchema {
   /// Authored YAML stays a name-keyed map. Runtime storage keeps that ordered
   /// map and duplicates each map key into the stage value.
   #[serde(deserialize_with = "deserialize_stages")]
-  pub stages: indexmap::IndexMap<String, IssueStageSchema>,
+  pub stages: IndexMap<String, IssueStageSchema>,
 
   #[serde(flatten)]
   unknown_fields: serde_yaml::Mapping,
@@ -82,12 +84,50 @@ pub struct IssueStageSchema {
   pub name: String,
   pub when: IssueStageMatch,
   pub agent: String,
-  pub prompt_file: PathBuf,
+  #[serde(flatten, deserialize_with = "deserialize_prompt_source")]
+  pub prompt_source: IssueStagePromptSource,
   #[serde(default)]
   pub hooks: IssueStageHooks,
 
   #[serde(flatten)]
   unknown_fields: serde_yaml::Mapping,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueStagePromptSource {
+  #[serde(rename = "prompt_file")]
+  File(PathBuf),
+  #[serde(rename = "prompt")]
+  Inline(String),
+}
+
+#[derive(Deserialize)]
+struct IssueStagePromptSourceInput {
+  #[serde(default)]
+  prompt_file: Option<PathBuf>,
+  #[serde(default)]
+  prompt: Option<String>,
+}
+
+fn deserialize_prompt_source<'de, D>(deserializer: D) -> Result<IssueStagePromptSource, D::Error>
+where
+  D: Deserializer<'de>,
+{
+  let input = IssueStagePromptSourceInput::deserialize(deserializer)?;
+  match (input.prompt_file, input.prompt) {
+    (Some(prompt_file), None) => Ok(IssueStagePromptSource::File(prompt_file)),
+    (None, Some(prompt)) => Ok(IssueStagePromptSource::Inline(prompt)),
+    (Some(_), Some(_)) | (None, None) => Err(de::Error::custom(
+      "issue stage must define exactly one of `prompt_file` or `prompt`",
+    )),
+  }
+}
+
+impl Default for IssueStagePromptSource {
+  fn default() -> Self {
+    Self::File(PathBuf::new())
+  }
 }
 
 #[cfg(test)]
@@ -100,7 +140,7 @@ impl IssueStageSchema {
         unknown_fields: Default::default(),
       },
       agent: String::new(),
-      prompt_file: PathBuf::new(),
+      prompt_source: IssueStagePromptSource::default(),
       hooks: IssueStageHooks::default(),
       unknown_fields: Default::default(),
     }
@@ -112,7 +152,12 @@ impl IssueStageSchema {
   }
 
   pub fn with_prompt_file(mut self, prompt_file: impl Into<PathBuf>) -> Self {
-    self.prompt_file = prompt_file.into();
+    self.prompt_source = IssueStagePromptSource::File(prompt_file.into());
+    self
+  }
+
+  pub fn with_inline_prompt(mut self, prompt: impl Into<String>) -> Self {
+    self.prompt_source = IssueStagePromptSource::Inline(prompt.into());
     self
   }
 }
@@ -180,11 +225,11 @@ impl Diagnose for IssueHandlingSchema {
   }
 }
 
-fn deserialize_stages<'de, D>(deserializer: D) -> Result<indexmap::IndexMap<String, IssueStageSchema>, D::Error>
+fn deserialize_stages<'de, D>(deserializer: D) -> Result<IndexMap<String, IssueStageSchema>, D::Error>
 where
   D: serde::Deserializer<'de>,
 {
-  let mut stages = indexmap::IndexMap::<String, IssueStageSchema>::deserialize(deserializer)?;
+  let mut stages = IndexMap::<String, IssueStageSchema>::deserialize(deserializer)?;
   stages.iter_mut().for_each(|(name, stage)| {
     stage.name = name.clone();
   });
@@ -223,8 +268,21 @@ impl Diagnose for IssueStageSchema {
       ));
     }
 
-    diagnostics.error_if_empty_path("prompt_file", &self.prompt_file);
+    diagnostics.extends_with_pointer("", self.prompt_source.diagnose(schema));
     diagnostics.warn_unknown_fields(&self.unknown_fields);
+
+    diagnostics
+  }
+}
+
+impl Diagnose for IssueStagePromptSource {
+  fn diagnose(&self, _: &WorkflowSchema) -> Diagnostics {
+    let mut diagnostics = Diagnostics::new();
+
+    match self {
+      IssueStagePromptSource::File(prompt_file) => diagnostics.error_if_empty_path("prompt_file", prompt_file),
+      IssueStagePromptSource::Inline(prompt) => diagnostics.error_if_empty_str("prompt", prompt),
+    }
 
     diagnostics
   }
@@ -433,6 +491,100 @@ stages:
         .warnings
         .iter()
         .any(|diag| { diag.pointer == "stages.plan.name" && matches!(diag.code, DiagnosticCode::UnknownField) })
+    );
+  }
+
+  #[test]
+  fn issue_stage_prompt_source_accepts_prompt_file() {
+    let stage: IssueStageSchema = serde_yaml::from_str(
+      r#"
+when:
+  state: Todo
+agent: codex
+prompt_file: ./prompts/plan.md
+"#,
+    )
+    .expect("stage schema parses");
+
+    let IssueStagePromptSource::File(path) = stage.prompt_source else {
+      panic!("expected file prompt source");
+    };
+
+    assert_eq!(path, PathBuf::from("./prompts/plan.md"));
+  }
+
+  #[test]
+  fn issue_stage_prompt_source_accepts_inline_prompt() {
+    let stage: IssueStageSchema = serde_yaml::from_str(
+      r#"
+when:
+  state: Todo
+agent: codex
+prompt: |
+  plan on {{ issue.id }}
+"#,
+    )
+    .expect("stage schema parses");
+
+    let diagnostics = stage.diagnose(&workflow_with_agent());
+
+    assert!(!diagnostics.has_errors(), "{diagnostics}");
+    assert!(!diagnostics.has_warnings(), "{diagnostics}");
+  }
+
+  #[test]
+  fn issue_stage_prompt_source_rejects_both_sources() {
+    let err = serde_yaml::from_str::<IssueStageSchema>(
+      r#"
+when:
+  state: Todo
+agent: codex
+prompt_file: ./prompts/plan.md
+prompt: inline
+"#,
+    )
+    .expect_err("both prompt sources must fail");
+
+    assert!(err.to_string().contains("prompt_file"));
+    assert!(err.to_string().contains("prompt"));
+  }
+
+  #[test]
+  fn issue_stage_prompt_source_rejects_missing_source() {
+    let err = serde_yaml::from_str::<IssueStageSchema>(
+      r#"
+when:
+  state: Todo
+agent: codex
+"#,
+    )
+    .expect_err("missing prompt source must fail");
+
+    assert!(err.to_string().contains("prompt_file"));
+    assert!(err.to_string().contains("prompt"));
+  }
+
+  #[test]
+  fn issue_stage_prompt_source_preserves_unknown_field_warning() {
+    let stage: IssueStageSchema = serde_yaml::from_str(
+      r#"
+when:
+  state: Todo
+agent: codex
+prompt: inline
+extra_stage_field: true
+"#,
+    )
+    .expect("stage schema parses");
+
+    let diagnostics = stage.diagnose(&workflow_with_agent());
+
+    assert!(!diagnostics.has_errors(), "{diagnostics}");
+    assert!(
+      diagnostics
+        .warnings
+        .iter()
+        .any(|diag| { diag.pointer == "extra_stage_field" && matches!(diag.code, DiagnosticCode::UnknownField) })
     );
   }
 
