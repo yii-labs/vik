@@ -6,7 +6,6 @@
 //! 7 days, enforced eagerly at [`init`] instead of on each write — log
 //! emission is hot-path and scanning the directory there would dominate
 //! the writer budget for no operational gain.
-pub mod phase;
 pub(crate) mod retention;
 
 #[cfg(test)]
@@ -20,8 +19,6 @@ use tracing_appender::rolling;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
-
-pub use phase::Phase;
 
 pub(crate) const INFO_LOG_PREFIX: &str = "vik.log";
 pub(crate) const ERROR_LOG_PREFIX: &str = "vik-error.log";
@@ -120,7 +117,6 @@ pub fn init(log_dir: &Path, enable_stdout: bool) -> Result<LoggingGuard, Logging
   // operator-visible through the warning + filesystem.
   if let Err(err) = retention::prune_old_logs(log_dir, RETENTION_DAYS) {
     tracing::warn!(
-        phase = %Phase::Daemon,
         log_dir = %log_dir.display(),
         error = %err,
         "log retention scan failed; leaving old files in place",
@@ -154,15 +150,12 @@ fn ensure_log_dir(log_dir: &Path) -> Result<(), LoggingError> {
 
 #[cfg(test)]
 mod value_tests {
-  use super::{ERROR_LOG_PREFIX, INFO_LOG_PREFIX, Phase, RETENTION_DAYS, phase};
+  use super::{ERROR_LOG_PREFIX, INFO_LOG_PREFIX, RETENTION_DAYS};
 
   #[test]
   fn logging_module_values_match_operational_contract() {
     assert_eq!(INFO_LOG_PREFIX, "vik.log");
     assert_eq!(ERROR_LOG_PREFIX, "vik-error.log");
     assert_eq!(RETENTION_DAYS, 7);
-
-    let reexported_phase: Phase = phase::Phase::Daemon;
-    assert_eq!(reexported_phase.to_string(), "daemon");
   }
 }

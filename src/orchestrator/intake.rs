@@ -19,7 +19,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use crate::context::Issues;
-use crate::logging::Phase;
 use crate::shell::{CommandExecError, CommandExt};
 use crate::workflow::Workflow;
 
@@ -40,7 +39,7 @@ impl IntakeLoop {
   }
 
   pub(super) fn start(self, shutdown: CancellationToken) -> JoinHandle<()> {
-    let span = tracing::info_span!("intake", phase = Phase::Intake.as_str());
+    let span = tracing::info_span!("intake");
     tokio::spawn(async move { self.run(shutdown).await }.instrument(span))
   }
 
@@ -88,7 +87,6 @@ impl IntakeLoop {
         self.producer.intake_issue(issue).await;
       } else {
         tracing::warn!(
-          phase = %Phase::Intake,
           issue_id = %issue.id,
           "duplicate issue id from intake; keeping first issue",
         );

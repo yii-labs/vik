@@ -28,7 +28,6 @@ use tokio::process::Command;
 use tracing::Instrument;
 
 use crate::context::{IssueRun, IssueStage};
-use crate::logging::Phase;
 use crate::shell::{CommandExecError, CommandExt};
 use crate::template::{JinjaRenderer, TemplateError};
 
@@ -151,7 +150,6 @@ impl HookRunner {
     let hook_name = kind.as_str();
     let _span = tracing::info_span!(
       "hook",
-      phase = %Phase::Hook,
       hook = %hook_name,
     );
 

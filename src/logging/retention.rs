@@ -15,7 +15,6 @@ use std::path::Path;
 
 use chrono::{Duration, NaiveDate, Utc};
 
-use super::phase::Phase;
 use super::{ERROR_LOG_PREFIX, INFO_LOG_PREFIX};
 
 /// Per-file removal failures are logged and skipped — startup must
@@ -46,7 +45,6 @@ pub(crate) fn prune_with_cutoff(log_dir: &Path, cutoff: NaiveDate) -> std::io::R
       && let Err(err) = std::fs::remove_file(&path)
     {
       tracing::warn!(
-          phase = %Phase::Daemon,
           log_file = %path.display(),
           error = %err,
           "failed to remove stale log file",

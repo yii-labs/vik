@@ -6,8 +6,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio_util::sync::CancellationToken;
 
-use crate::logging::Phase;
-
 use super::SignalError;
 
 pub fn send_sigterm(_pid: u32) -> std::io::Result<()> {
@@ -30,17 +28,12 @@ pub fn install(shutdown: CancellationToken) -> Result<(), SignalError> {
         break;
       }
       if forced_clone.swap(true, Ordering::SeqCst) {
-        tracing::error!(
-            phase = %Phase::Daemon,
-            signal = "ctrl_c",
-            "second shutdown signal; aborting",
-        );
+        tracing::error!(signal = "ctrl_c", "second shutdown signal; aborting");
         std::process::exit(130);
       }
       tracing::info!(
-          phase = %Phase::Daemon,
-          signal = "ctrl_c",
-          "shutdown signal received; requesting graceful shutdown",
+        signal = "ctrl_c",
+        "shutdown signal received; requesting graceful shutdown",
       );
       shutdown_clone.cancel();
     }

@@ -18,7 +18,7 @@ use tokio_util::sync::CancellationToken;
 use crate::daemon;
 use crate::daemon::signals;
 use crate::daemon::state::State;
-use crate::logging::{self, LoggingGuard, Phase};
+use crate::logging::{self, LoggingGuard};
 use crate::orchestrator::Orchestrator;
 use crate::workflow::Workflow;
 
@@ -98,7 +98,6 @@ fn run_inner(workflow: Workflow, args: &RunArgs) -> anyhow::Result<()> {
 
   if let Some((stale_pid, stale_path)) = stale_state_note {
     tracing::warn!(
-        phase = %Phase::Daemon,
         stale_pid = stale_pid as u64,
         state_file = %stale_path.display(),
         "found stale daemon state file on startup; overwriting",
@@ -115,7 +114,7 @@ fn run_inner(workflow: Workflow, args: &RunArgs) -> anyhow::Result<()> {
     let shutdown = signals.token();
 
     {
-      let _span = tracing::info_span!("daemon", phase = %Phase::Daemon).entered();
+      let _span = tracing::info_span!("daemon").entered();
 
       tracing::info!(
           workflow_path = %workflow.workflow_path().display(),
@@ -141,7 +140,6 @@ fn run_inner(workflow: Workflow, args: &RunArgs) -> anyhow::Result<()> {
     // the next `vik run -d` already knows how to recover from.
     if let Err(err) = State::remove(&state_path) {
       tracing::warn!(
-          phase = %Phase::Daemon,
           path = %state_path.display(),
           error = %err,
           "failed to remove daemon state file on shutdown",
@@ -170,17 +168,13 @@ async fn drive_runtime(
   match bind_address {
     Some(addr) => {
       tracing::info!(
-          phase = %Phase::Server,
           bind_address = %addr,
           "HTTP API enabled",
       );
       todo!("vik run with --port is not implemented yet");
     },
     None => {
-      tracing::info!(
-          phase = %Phase::Server,
-          "HTTP API disabled (no --port)",
-      );
+      tracing::info!("HTTP API disabled (no --port)");
       super::shutdown::graceful(shutdown, orch_future).await
     },
   }
@@ -229,7 +223,6 @@ fn write_state_file(
     .write(state_path)
     .with_context(|| format!("write daemon state file to {}", state_path.display()))?;
   tracing::info!(
-      phase = %Phase::Daemon,
       state_file = %state_path.display(),
       pid = state.pid,
       port = state.port as u64,

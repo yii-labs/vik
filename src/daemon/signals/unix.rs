@@ -6,8 +6,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio_util::sync::CancellationToken;
 
-use crate::logging::Phase;
-
 use super::SignalError;
 
 /// ESRCH ("pid already gone") collapses to success — there is nothing
@@ -51,10 +49,7 @@ pub fn install(shutdown: CancellationToken) -> Result<(), SignalError> {
   let mut hup = signal(SignalKind::hangup()).map_err(SignalError::Install)?;
   tokio::spawn(async move {
     while hup.recv().await.is_some() {
-      tracing::info!(
-          phase = %Phase::Daemon,
-          "SIGHUP received; ignoring (no reload configured)",
-      );
+      tracing::info!("SIGHUP received; ignoring (no reload configured)");
     }
   });
 
@@ -75,18 +70,10 @@ fn install_stream(
       if forced.swap(true, Ordering::SeqCst) {
         // Exit code 130 is the conventional "terminated by Ctrl-C"
         // status that most Unix shells expect.
-        tracing::error!(
-            phase = %Phase::Daemon,
-            signal = label,
-            "second shutdown signal; aborting",
-        );
+        tracing::error!(signal = label, "second shutdown signal; aborting");
         std::process::exit(130);
       }
-      tracing::info!(
-          phase = %Phase::Daemon,
-          signal = label,
-          "shutdown signal received; requesting graceful shutdown",
-      );
+      tracing::info!(signal = label, "shutdown signal received; requesting graceful shutdown");
       shutdown.cancel();
     }
   });

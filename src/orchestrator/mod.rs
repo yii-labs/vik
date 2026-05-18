@@ -13,7 +13,6 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
-use crate::logging::Phase;
 use crate::workflow::Workflow;
 
 use self::event::{IntakeEvent, OrchestratorEvent, event_channel};
@@ -102,7 +101,7 @@ impl Orchestrator {
         false
       },
       OrchestratorEvent::Intake(IntakeEvent::Failed(error)) => {
-        tracing::error!(phase = %Phase::Intake, error = %error, "intake cycle failed");
+        tracing::error!(error = %error, "intake cycle failed");
         false
       },
       OrchestratorEvent::Intake(IntakeEvent::Stopped) => true,

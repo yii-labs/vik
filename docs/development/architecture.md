@@ -25,7 +25,7 @@ src/
 |-- config/          workflow.yml serde types and diagnostics
 |-- workflow/        runtime supervisor built from loaded schema
 |-- workspace/       workflow-scoped workspace path layout
-|-- logging/         tracing subscriber, phases, spans, retention
+|-- logging/         tracing subscriber, spans, retention
 |-- shell/           CommandExt wrapper for timeout and cancellation
 |-- template/        MiniJinja renderer plus prompt command expansion
 |-- agent/           AgentAdapter trait, Codex and Claude Code adapters

@@ -8,8 +8,6 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::logging::Phase;
-
 /// Wall-clock budget for the graceful half of shutdown.
 pub const GRACE: Duration = Duration::from_secs(30);
 
@@ -36,7 +34,6 @@ where
       }
       _ = shutdown.cancelled() => {
           tracing::info!(
-              phase = %Phase::Daemon,
               grace_ms = GRACE.as_millis() as u64,
               "shutdown token tripped; entering graceful shutdown",
           );
@@ -51,9 +48,8 @@ where
     // graceful budget was exceeded.
     Err(_timeout) => {
       tracing::warn!(
-          phase = %Phase::Daemon,
-          grace_ms = GRACE.as_millis() as u64,
-          "graceful shutdown deadline expired; waiting for runtime to finish",
+        grace_ms = GRACE.as_millis() as u64,
+        "graceful shutdown deadline expired; waiting for runtime to finish",
       );
       pinned.await
     },
