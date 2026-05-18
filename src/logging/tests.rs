@@ -66,18 +66,25 @@ where
   }
 
   fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
+    dbg!(event);
     let mut merged: HashMap<String, serde_json::Value> = HashMap::new();
 
     // Outer-to-inner walk: inner span fields overwrite outer ones,
     // matching tracing-subscriber's JSON layer.
+    let mut span_values = Vec::new();
+
     if let Some(scope) = ctx.event_scope(event) {
       let spans: Vec<_> = scope.from_root().collect();
       for span in spans {
+        let mut span_payload = serde_json::Map::new();
+        span_payload.insert("name".to_string(), json!(span.metadata().name()));
         if let Some(fields) = span.extensions().get::<SpanFields>() {
           for (k, v) in &fields.0 {
             merged.insert(k.clone(), v.clone());
+            span_payload.insert(k.clone(), v.clone());
           }
         }
+        span_values.push(serde_json::Value::Object(span_payload));
       }
     }
 
@@ -90,6 +97,9 @@ where
     let level = event.metadata().level().to_string().to_lowercase();
     merged.insert("level".to_string(), json!(level));
     merged.insert("target".to_string(), json!(event.metadata().target()));
+    if !span_values.is_empty() {
+      merged.insert("spans".to_string(), serde_json::Value::Array(span_values));
+    }
 
     let payload = serde_json::Value::Object(merged.into_iter().collect());
     self.buffer.lock().expect("buffer mutex").push(payload);
