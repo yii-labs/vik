@@ -30,7 +30,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use crate::agent::{AgentAdapter, AgentCommand, AgentStdin, get_adapter};
-use crate::config::AgentProfileSchema;
+use crate::config::{AgentProfileSchema, IssueStagePromptSource};
 use crate::context::IssueStage;
 use crate::logging::Phase;
 use crate::shell::{Child, CommandExecError, CommandExt};
@@ -65,6 +65,7 @@ pub enum SessionCommandError {
   SnapshotReplyDropped,
 }
 
+#[derive(Debug)]
 pub struct SessionCommandSender {
   sender: mpsc::Sender<SessionCommand>,
 }
@@ -137,9 +138,6 @@ impl Session {
     let _span = tracing::info_span!(
       "session",
       phase = %Phase::StageRun,
-      issue_id = %stage.issue().id,
-      stage = %stage.stage().name,
-      agent = %stage.stage().agent,
       session_id = tracing::field::Empty,
     )
     .entered();
@@ -528,20 +526,26 @@ impl Session {
 
   async fn render_prompt(stage: IssueStage) -> Result<String, SessionError> {
     let renderer = PromptRenderer::new();
-    let prompt_file = stage
-      .workflow()
-      .resolve_path(&stage.stage().prompt_file)
-      .ok_or_else(|| SessionError::PromptPath(stage.stage().prompt_file.clone()))?;
+    let template = match &stage.stage().prompt_source {
+      IssueStagePromptSource::File(prompt_file) => {
+        let prompt_file = stage
+          .workflow()
+          .resolve_path(prompt_file)
+          .ok_or_else(|| SessionError::PromptPath(prompt_file.clone()))?;
 
-    let mut file = File::open(&prompt_file)
-      .await
-      .map_err(|err| SessionError::TemplateRender(TemplateError::Io(err)))?;
+        let mut file = File::open(&prompt_file)
+          .await
+          .map_err(|err| SessionError::TemplateRender(TemplateError::Io(err)))?;
 
-    let mut template = String::new();
-    file
-      .read_to_string(&mut template)
-      .await
-      .map_err(|err| SessionError::TemplateRender(TemplateError::Io(err)))?;
+        let mut template = String::new();
+        file
+          .read_to_string(&mut template)
+          .await
+          .map_err(|err| SessionError::TemplateRender(TemplateError::Io(err)))?;
+        template
+      },
+      IssueStagePromptSource::Inline(prompt) => prompt.clone(),
+    };
 
     Ok(renderer.render(&template, &stage).await?)
   }
@@ -601,6 +605,53 @@ mod tests {
       },
       state_rx,
     )
+  }
+
+  fn matching_stage(workflow: Workflow, issue_id: &str) -> IssueStage {
+    let workflow = Arc::new(workflow);
+    let issue_run = Arc::new(IssueRun::new(Arc::clone(&workflow), issue(issue_id, "todo")));
+    IssueRun::matching_stages(Arc::clone(&issue_run))
+      .into_iter()
+      .next()
+      .expect("stage matches issue state")
+  }
+
+  #[tokio::test]
+  async fn inline_prompt_renders_issue_variables_and_prompt_commands() {
+    let prompt_command = "printf command";
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workflow = Workflow::builder()
+      .workflow_path(temp.path().join("workflow.yml"))
+      .workspace_root(temp.path().join("workspace"))
+      .add_inline_stage(
+        "plan",
+        "todo",
+        format!("plan {{{{ issue.id }}}} !`exec({prompt_command})`"),
+      )
+      .build();
+    let stage = matching_stage(workflow, "ABC-1");
+
+    let prompt = Session::render_prompt(stage).await.expect("prompt renders");
+
+    assert_eq!(prompt, "plan ABC-1 command");
+  }
+
+  #[tokio::test]
+  async fn prompt_file_renders_from_workflow_relative_path() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let prompts_dir = temp.path().join("prompts");
+    std::fs::create_dir(&prompts_dir).expect("prompts dir");
+    std::fs::write(prompts_dir.join("plan.md"), "file {{ issue.id }}").expect("prompt file");
+    let workflow = Workflow::builder()
+      .workflow_path(temp.path().join("workflow.yml"))
+      .workspace_root(temp.path().join("workspace"))
+      .add_stage("plan", "todo", "./prompts/plan.md")
+      .build();
+    let stage = matching_stage(workflow, "ABC-1");
+
+    let prompt = Session::render_prompt(stage).await.expect("prompt renders");
+
+    assert_eq!(prompt, "file ABC-1");
   }
 
   #[tokio::test]

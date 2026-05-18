@@ -4,7 +4,7 @@ Vik does not talk to GitHub on its own. Everything that touches the
 tracker — listing issues, reading details, leaving comments, moving
 state — is something _you_ tell Vik to do, either through the
 `issues.pull.command` shell snippet or through commands written into
-your stage prompt files.
+your stage prompt sources.
 
 This guide shows the patterns we use in practice with the GitHub CLI
 (`gh`) and `jq`. It assumes you have read [Get Started](../get-started.md)
@@ -190,7 +190,7 @@ gh api repos/owner/name/pulls/<pr-number>/comments
 
 ## Managing state from prompts
 
-Vik never updates GitHub. Your prompt files must include the exact
+Vik never updates GitHub. Your prompt sources must include the exact
 commands the agent should run when it wants to move the issue
 forward. Pick the same convention you used in the pull command.
 

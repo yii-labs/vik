@@ -179,8 +179,9 @@ Session spawn:
 1. `SessionFactory` resolves the agent profile and adapter.
 2. It returns `SessionCommandSender` plus `SessionStateReceiver` and spawns the task.
 3. The session task emits `Preparing`.
-4. Resolve the stage prompt path through `IssueStage.workflow().resolve_path`.
-5. Read the prompt file.
+4. Resolve the stage prompt source. For `prompt_file`, resolve the path through
+   `IssueStage.workflow().resolve_path` and read the file. For `prompt`, use
+   the inline text directly.
 6. Render MiniJinja with serialized `IssueStage` context.
 7. Expand prompt commands with ``!`exec(command)` ``.
 8. Build provider command.

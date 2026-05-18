@@ -108,7 +108,7 @@ impl StageSessionManager {
     if !was_empty && self.is_empty() {
       Some(SessionManagerEvent::Drained)
     } else {
-      None
+      Some(SessionManagerEvent::Active)
     }
   }
 
@@ -178,8 +178,8 @@ impl StageSessionManager {
       "stage",
       phase = %Phase::StageRun,
       issue_id = %issue_stage.issue().id,
-      stage_name = %issue_stage.stage().name,
-      agent_profile = %issue_stage.stage().agent,
+      stage = %issue_stage.stage().name,
+      agent = %issue_stage.stage().agent,
     )
     .entered();
 
@@ -243,8 +243,8 @@ impl StageSessionManager {
       "stage",
       phase = %Phase::StageRun,
       issue_id = %issue_stage.issue().id,
-      stage_name = %issue_stage.stage().name,
-      agent_profile = %issue_stage.stage().agent,
+      stage = %issue_stage.stage().name,
+      agent = %issue_stage.stage().agent,
     );
 
     tokio::spawn(
@@ -387,11 +387,14 @@ impl StageSessionManager {
 }
 
 /// Events emitted by the stage-session manager to signal important state changes to the orchestrator.
+#[derive(Debug)]
 pub(super) enum SessionManagerEvent {
+  Active,
   Drained,
 }
 
 /// Events emitted internally by stage sessions to signal state changes to the manager.
+#[derive(Debug)]
 enum SessionEvent {
   Prepared {
     issue_stages: Vec<IssueStage>,
