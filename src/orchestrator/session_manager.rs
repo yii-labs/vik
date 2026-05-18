@@ -157,8 +157,13 @@ impl StageSessionManager {
   }
 
   fn launch_issue_stages(&self, issue_stages: Vec<IssueStage>) {
+    let Some(first) = issue_stages.first() else {
+      return;
+    };
     let stage_names: Vec<&str> = issue_stages.iter().map(|s| s.stage_name()).collect();
     tracing::info!(
+      phase = %Phase::Dispatch,
+      issue_id = %first.issue().id,
       stage_names = ?stage_names,
       "issue ready; launching stages",
     );
@@ -174,7 +179,7 @@ impl StageSessionManager {
       phase = %Phase::StageRun,
       issue_id = %issue_stage.issue().id,
       stage_name = %issue_stage.stage().name,
-      stage_profile = %issue_stage.stage().agent,
+      agent_profile = %issue_stage.stage().agent,
     )
     .entered();
 
@@ -239,7 +244,7 @@ impl StageSessionManager {
       phase = %Phase::StageRun,
       issue_id = %issue_stage.issue().id,
       stage_name = %issue_stage.stage().name,
-      stage_profile = %issue_stage.stage().agent,
+      agent_profile = %issue_stage.stage().agent,
     );
 
     tokio::spawn(
