@@ -63,6 +63,7 @@ pub enum SessionCommandError {
   SnapshotReplyDropped,
 }
 
+#[derive(Debug)]
 pub struct SessionCommandSender {
   sender: mpsc::Sender<SessionCommand>,
 }
