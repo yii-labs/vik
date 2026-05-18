@@ -9,9 +9,9 @@ Vik is one Rust binary crate. CLI startup loads `workflow.yml` into
 root, installs logging, writes daemon state, and runs the event-driven
 orchestrator.
 
-The orchestrator owns running-stage state. Intake, issue setup, stage launch,
-session monitoring, and hook execution run in background tasks and report back
-through typed channels.
+The orchestrator owns intake, shutdown, and drain. `StageSessionManager` owns
+running-stage state, issue setup, stage launch, session command senders, and
+hook execution behind its own typed channel.
 
 There is no `src/server/` module today. HTTP API docs describe planned work, not
 current runtime behavior.
@@ -29,9 +29,9 @@ src/
 |-- shell/           CommandExt wrapper for timeout and cancellation
 |-- template/        MiniJinja renderer plus prompt command expansion
 |-- agent/           AgentAdapter trait, Codex and Claude Code adapters
-|-- session/         session spawn, event stream, snapshots, JSONL writer
+|-- session/         session command/state channels, snapshots, JSONL writer
 |-- hooks/           after_create, before_run, after_run shell hooks
-|-- orchestrator/    intake loop, dispatch, running map, launch, monitor
+|-- orchestrator/    intake loop and stage-session manager
 |-- daemon/          detach, signals, lifecycle, state file
 |-- context/         issue intake data and issue-run runtime context
 `-- utils/           shared path helpers
@@ -128,37 +128,38 @@ sequenceDiagram
 
 ## Orchestrator Runtime
 
-`Orchestrator::run` starts one `IntakeLoop` task and then selects over:
+`Orchestrator::run` starts one `IntakeLoop` task and one
+`StageSessionManager`, then selects over:
 
 - shutdown token
 - orchestrator event channel
-
-Main loop owns `RunningMap`. It reserves stage keys before async setup starts.
-Reserved stages have no `Session` yet. The concurrency cap counts distinct
-issue ids, not stage count. Other tasks send events:
+- stage-session manager drain
 
 - `IntakeEvent::Issue`
 - `IntakeEvent::Failed`
 - `IntakeEvent::Stopped`
-- `StageEvent::IssueReady`
-- `StageEvent::Started`
-- `StageEvent::Snapshot`
-- `StageEvent::Terminal`
-- `StageEvent::Failed`
+
+`StageSessionManager` owns stage matching and session state. It reserves stage
+keys before async setup starts. Reserved stages have no session command sender
+yet. The concurrency cap counts distinct issue ids, not stage count.
 
 Dispatch flow:
 
 1. Intake emits an issue.
-2. Orchestrator wraps it in `IssueRun` and matches stages by exact `state`.
-3. Orchestrator reserves `(issue_id, stage_name)`.
-4. Issue setup task ensures
+2. Orchestrator passes the issue to `StageSessionManager::try_spawn`.
+3. The manager wraps it in `IssueRun`, matches stages by exact `state`, and
+   reserves `(issue_id, stage_name)`.
+4. The manager's issue setup task ensures
    `<workflow-workspace-root>/issues/<issue_id>/` exists.
 5. If setup created the issue workspace, it runs `after_create`; existing
    issue workspaces skip `after_create`.
-6. Launcher task runs `before_run`.
-7. Launcher spawns a `Session` with the runtime `IssueStage`.
-8. Monitor task sends snapshots and terminal event.
-9. Launcher runs `after_run` after terminal state, except cancellation.
+6. The manager runs `before_run`.
+7. The manager asks `SessionFactory` to create session command/state channels
+   for the runtime `IssueStage`.
+8. The session task emits `SessionState` changes while it owns the child
+   process and `SessionSnapshot`.
+9. The manager runs `after_run` after terminal state, except cancellation, then
+   removes the stage. When the last stage exits, the manager emits `Drained`.
 
 ## Intake
 
@@ -170,21 +171,28 @@ The sleep between intake cycles is `issues.pull.idle_sec`.
 ## Session
 
 `SessionFactory` holds `Arc<Workflow>` and resolves the agent profile for each
-runtime `IssueStage`. Each spawned `Session` holds the `IssueStage` it is
-executing.
+runtime `IssueStage`. It creates a session command sender and state receiver,
+then spawns a session task.
 
 Session spawn:
 
-1. Resolve the stage prompt path through `IssueStage.workflow().resolve_path`.
-2. Read the prompt file.
-3. Render MiniJinja with serialized `IssueStage` context.
-4. Expand prompt commands with ``!`exec(command)` ``.
-5. Pick adapter with `agent::get_adapter(profile.runtime)`.
-6. Build provider command.
-7. Spawn the child process.
-8. Stream stdout lines into adapter event mapping.
-9. Write `AgentEvent` JSONL.
-10. Update `SessionSnapshot` from semantic events.
+1. `SessionFactory` resolves the agent profile and adapter.
+2. It returns `SessionCommandSender` plus `SessionStateReceiver` and spawns the task.
+3. The session task emits `Preparing`.
+4. Resolve the stage prompt path through `IssueStage.workflow().resolve_path`.
+5. Read the prompt file.
+6. Render MiniJinja with serialized `IssueStage` context.
+7. Expand prompt commands with ``!`exec(command)` ``.
+8. Build provider command.
+9. Spawn the child process and emit `Running`.
+10. Select over session commands and provider stdout lines.
+11. Write decoded `AgentEvent` JSONL and update the task-owned
+    `SessionSnapshot`.
+12. On terminal state, log the final snapshot summary and close the state
+    channel.
+
+`SessionCommandSender` supports `cancel()` and one-time `snapshot()` requests.
+`SessionStateReceiver` emits only state changes. It does not emit `UnStarted`.
 
 Session logs live at:
 
@@ -240,12 +248,12 @@ The `issue` object contains:
 - `workdir`
 - extra issue payload fields from the pull command
 
-`IssueStage` keeps stage name, stage schema, and log path for Rust callers. Its
-current `Serialize` implementation delegates to `IssueRun`.
+`IssueStage` keeps stage schema and log path for Rust callers. Its `Serialize`
+implementation extends `IssueRun` context with `issue.stage`.
 
-`JinjaRenderer` also adds process env under `env`. Bindings like `stage.name`,
-`workspace.root`, `workflow`, `loop`, `profile`, `cwd`, and root-level issue
-fields like `id` are not produced by current code.
+`JinjaRenderer` also adds process env under `env`. Bindings like root-level
+`stage`, `workspace.root`, `workflow`, `loop`, `profile`, `cwd`, and root-level
+issue fields like `id` are not produced by current code.
 
 ## Hooks
 
@@ -320,7 +328,7 @@ trips.
 | new Vik-owned path              | `src/workspace/mod.rs`                           |
 | new agent provider              | `src/agent/adapters/<provider>/` and `get_adapter` |
 | new prompt or hook binding      | `src/context/run.rs` serialization or renderer call site |
-| new hook trigger point          | `src/hooks/` plus orchestrator or launcher call site |
+| new hook trigger point          | `src/hooks/` plus `StageSessionManager` call site |
 | HTTP API implementation         | new server module plus CLI `drive_runtime`       |
 
 ## Related Documents

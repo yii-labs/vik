@@ -61,19 +61,12 @@ fn map_events(value: &Value) -> Vec<AgentEvent> {
   };
 
   match event {
-    CurrentEvent::ThreadStarted { thread_id } => thread_id
-      .map(|session_id| vec![AgentEvent::SessionStarted { session_id }])
-      .unwrap_or_else(|| vec![unknown_event(value)]),
+    CurrentEvent::ThreadStarted { thread_id } => vec![AgentEvent::SessionStarted { session_id: thread_id }],
     CurrentEvent::ItemStarted { item } => map_current_item(value, item, ToolCallPhase::Request),
     CurrentEvent::ItemCompleted { item } => map_current_item(value, item, ToolCallPhase::Result),
     CurrentEvent::TurnCompleted { usage } => map_current_turn_completed(usage),
-    CurrentEvent::TurnFailed { error } => vec![AgentEvent::Error {
-      detail: error.and_then(|error| error.message).unwrap_or_default(),
-    }],
-    CurrentEvent::LegacyCollabAgentToolCall(event) => map_collab_agent_tool_call(value, event),
-    CurrentEvent::Error { message } => vec![AgentEvent::Error {
-      detail: message.unwrap_or_default(),
-    }],
+    CurrentEvent::TurnFailed { error } => vec![AgentEvent::Error { detail: error.message }],
+    CurrentEvent::Error { message } => vec![AgentEvent::Error { detail: message }],
     CurrentEvent::TurnStarted | CurrentEvent::ItemUpdated | CurrentEvent::Unknown => {
       tracing::debug!(
         runtime = "codex",
@@ -85,34 +78,18 @@ fn map_events(value: &Value) -> Vec<AgentEvent> {
   }
 }
 
-fn map_collab_agent_tool_call(value: &Value, event: events::LegacyCollabAgentToolCall) -> Vec<AgentEvent> {
-  vec![AgentEvent::Subagent {
-    call_id: event.id,
-    action: event.tool.unwrap_or_else(|| "unknown".into()),
-    status: event.status,
-    target_ids: event.receiver_thread_ids.unwrap_or_default(),
-    raw: value.clone(),
-  }]
-}
-
-fn map_current_item(value: &Value, item: Option<ThreadItem>, phase: ToolCallPhase) -> Vec<AgentEvent> {
-  let Some(item) = item else {
-    return vec![unknown_event(value)];
-  };
-
-  let Some(item_type) = item.kind.as_deref() else {
-    return vec![unknown_event(value)];
-  };
+fn map_current_item(value: &Value, item: ThreadItem, phase: ToolCallPhase) -> Vec<AgentEvent> {
+  let item_type = item.kind.clone();
   let Some(raw_item) = value.get("item").cloned() else {
     return vec![unknown_event(value)];
   };
 
-  match item_type {
+  match item_type.as_str() {
     "agent_message" if phase == ToolCallPhase::Result => vec![AgentEvent::Message {
       text: item.text.unwrap_or_default(),
     }],
     "command_execution" => vec![AgentEvent::ToolCall {
-      call_id: item.id,
+      call_id: Some(item.id),
       name: Some(item_type.to_string()),
       phase,
       input: (phase == ToolCallPhase::Request).then_some(raw_item.clone()),
@@ -120,7 +97,7 @@ fn map_current_item(value: &Value, item: Option<ThreadItem>, phase: ToolCallPhas
       raw: value.clone(),
     }],
     "mcp_tool_call" => vec![AgentEvent::ToolCall {
-      call_id: item.id,
+      call_id: Some(item.id),
       name: item.tool,
       phase,
       input: (phase == ToolCallPhase::Request).then(|| item.arguments.clone()).flatten(),
@@ -128,10 +105,10 @@ fn map_current_item(value: &Value, item: Option<ThreadItem>, phase: ToolCallPhas
       raw: value.clone(),
     }],
     "collab_tool_call" => vec![AgentEvent::Subagent {
-      call_id: item.id,
+      call_id: Some(item.id),
       action: item.tool.unwrap_or_else(|| "unknown".into()),
       status: item.status,
-      target_ids: item.receiver_thread_ids.unwrap_or_default(),
+      target_ids: item.receiver_thread_ids,
       raw: value.clone(),
     }],
     _ => vec![unknown_event(value)],
@@ -140,17 +117,15 @@ fn map_current_item(value: &Value, item: Option<ThreadItem>, phase: ToolCallPhas
 
 /// `turn.completed` carries both the per-turn usage and the stream
 /// terminator — fan out into two events so the session sees both.
-fn map_current_turn_completed(usage: Option<events::TokenUsage>) -> Vec<AgentEvent> {
-  let mut events = Vec::new();
-  if let Some(usage) = usage {
-    events.push(AgentEvent::TokenUsage {
-      input: usage.input_tokens.unwrap_or(0),
-      output: usage.output_tokens.unwrap_or(0),
-      cache_read: usage.cached_input_tokens.unwrap_or(0),
-    });
-  }
-  events.push(AgentEvent::Completed);
-  events
+fn map_current_turn_completed(usage: events::TokenUsage) -> Vec<AgentEvent> {
+  vec![
+    AgentEvent::TokenUsage {
+      input: usage.input_tokens,
+      output: usage.output_tokens,
+      cache_read: usage.cached_input_tokens,
+    },
+    AgentEvent::Completed,
+  ]
 }
 
 /// `pub(super)` so the in-module tests below can drive it directly
@@ -176,13 +151,10 @@ pub(super) fn map_value(value: &Value) -> Option<AgentEvent> {
       // already represents the cumulative count, so we don't need to
       // accumulate per-turn deltas ourselves.
       let totals = info.usage();
-      let input = totals.input_tokens.unwrap_or(0);
-      let output = totals.output_tokens.unwrap_or(0);
-      let cache_read = totals.cached_input_tokens.unwrap_or(0);
       Some(AgentEvent::TokenUsage {
-        input,
-        output,
-        cache_read,
+        input: totals.input_tokens,
+        output: totals.output_tokens,
+        cache_read: totals.cached_input_tokens,
       })
     },
     "rate_limit_warning" | "rate_limit_reset" => {
@@ -518,15 +490,12 @@ mod tests {
   }
 
   #[test]
-  fn collab_agent_tool_call_maps_to_subagent_event() {
+  fn collab_agent_tool_call_retains_unknown_raw_event() {
     let line = r#"{"type":"collabAgentToolCall","id":"call_1","tool":"spawnAgent","status":"completed","senderThreadId":"thread-1","receiverThreadIds":["thread-2"],"agentsStates":{},"model":"gpt-5.5","reasoningEffort":"medium","prompt":"scan docs"}"#;
     assert_eq!(
       parse_events(line),
-      vec![AgentEvent::Subagent {
-        call_id: Some("call_1".into()),
-        action: "spawnAgent".into(),
-        status: Some("completed".into()),
-        target_ids: vec!["thread-2".into()],
+      vec![AgentEvent::Unknown {
+        event_type: Some("collabAgentToolCall".into()),
         raw: json!({
           "type": "collabAgentToolCall",
           "id": "call_1",

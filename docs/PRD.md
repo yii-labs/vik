@@ -82,6 +82,7 @@ when a run stalls, crashes, or restarts.
   - optional `description` or `desc`
 - Extra issue fields are preserved under `issue` in hook and prompt rendering
   context.
+- In stage prompt and hook context, `issue.stage` is Vik-owned stage name.
 - Duplicate issue ids in one intake batch: first wins.
 
 ## Dispatch
@@ -138,7 +139,7 @@ today.
 - writes events to JSONL, including retained tool-call, subagent, and unknown
   provider evidence
 - tracks `SessionState`, last message, token usage, and rate-limit observations
-- exposes cancellation through the child process wrapper
+- exposes state changes and cancellation through session channels
 
 Session files:
 
@@ -189,10 +190,11 @@ Agent subprocess cwd is the issue workspace.
 - stdout is injected as text.
 - one trailing newline is trimmed.
 - non-zero exit fails rendering.
-- Prompt context is the same context used by hooks.
+- Stage prompt context is the same context used by stage hooks.
+- Stage prompt and hook context expose the stage name as `issue.stage`.
 - Prompt context can read `env.<VAR>` from the Vik process environment.
-- Current code does not expose `stage`, `workflow`, `loop`, or `profile`
-  template objects.
+- Current code does not expose root-level `stage`, `workflow`, `loop`, or
+  `profile` template objects.
 
 ## CLI Surface
 

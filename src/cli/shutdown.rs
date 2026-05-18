@@ -20,7 +20,7 @@ pub const GRACE: Duration = Duration::from_secs(30);
 /// logging guard belong to the caller.
 pub async fn graceful<F>(shutdown: CancellationToken, join_future: F) -> F::Output
 where
-  F: std::future::Future + Send,
+  F: std::future::Future,
 {
   // `Box::pin` so we can re-await the same future across the two
   // select arms below without moving it.

@@ -61,14 +61,15 @@ pub(super) fn map_value(value: &Value) -> Vec<AgentEvent> {
       // Only the `init` subtype reports session_id; other system
       // subtypes (config dumps, hook outputs) carry data we do not
       // surface as events.
-      if event.subtype.as_deref() != Some("init") {
+      if event.subtype != "init" {
         return vec![unknown_event(value)];
       }
-      event
-        .session_id
-        .filter(|session_id| !session_id.is_empty())
-        .map(|session_id| vec![AgentEvent::SessionStarted { session_id }])
-        .unwrap_or_else(|| vec![unknown_event(value)])
+      if event.session_id.is_empty() {
+        return vec![unknown_event(value)];
+      }
+      vec![AgentEvent::SessionStarted {
+        session_id: event.session_id,
+      }]
     },
     ClaudeEvent::Assistant(event) => {
       let mut events = Vec::new();
@@ -93,15 +94,12 @@ pub(super) fn map_value(value: &Value) -> Vec<AgentEvent> {
     ClaudeEvent::Result(event) => {
       let mut out = Vec::new();
       if let Some(usage) = event.usage {
-        let input = usage.input_tokens.unwrap_or(0);
-        let output = usage.output_tokens.unwrap_or(0);
-        // Note the field-name divergence from Codex: Claude reports
-        // `cache_read_input_tokens`, Codex reports `cached_input_tokens`.
-        let cache_read = usage.cache_read_input_tokens.unwrap_or(0);
         out.push(AgentEvent::TokenUsage {
-          input,
-          output,
-          cache_read,
+          input: usage.input_tokens,
+          output: usage.output_tokens,
+          // Note the field-name divergence from Codex: Claude reports
+          // `cache_read_input_tokens`, Codex reports `cached_input_tokens`.
+          cache_read: usage.cache_read_input_tokens,
         });
       }
       out.push(AgentEvent::Completed);
@@ -124,7 +122,7 @@ pub(super) fn map_value(value: &Value) -> Vec<AgentEvent> {
 fn extract_assistant_text(event: &MessageEvent) -> String {
   let mut buf = String::new();
   for block in content_blocks(event) {
-    if let ContentBlock::Text { text: Some(text) } = block {
+    if let ContentBlock::Text { text } = block {
       if !buf.is_empty() {
         buf.push('\n');
       }
@@ -138,18 +136,18 @@ fn extract_tool_uses(value: &Value, event: &MessageEvent) -> Vec<AgentEvent> {
   content_blocks(event)
     .iter()
     .filter_map(|block| match block {
-      ContentBlock::ToolUse { id, name, .. } if is_subagent_tool(name.as_deref()) => Some(AgentEvent::Subagent {
-        call_id: id.clone(),
-        action: name.clone().unwrap_or_else(|| "unknown".into()),
+      ContentBlock::ToolUse { id, name, .. } if is_subagent_tool(name) => Some(AgentEvent::Subagent {
+        call_id: Some(id.clone()),
+        action: name.clone(),
         status: None,
         target_ids: Vec::new(),
         raw: value.clone(),
       }),
       ContentBlock::ToolUse { id, name, input } => Some(AgentEvent::ToolCall {
-        call_id: id.clone(),
-        name: name.clone(),
+        call_id: Some(id.clone()),
+        name: Some(name.clone()),
         phase: ToolCallPhase::Request,
-        input: input.clone(),
+        input: Some(input.clone()),
         output: None,
         raw: value.clone(),
       }),
@@ -165,11 +163,11 @@ fn extract_tool_results(value: &Value, event: &MessageEvent) -> Vec<AgentEvent> 
       ContentBlock::ToolResult {
         tool_use_id, content, ..
       } => Some(AgentEvent::ToolCall {
-        call_id: tool_use_id.clone(),
+        call_id: Some(tool_use_id.clone()),
         name: None,
         phase: ToolCallPhase::Result,
         input: None,
-        output: content.clone(),
+        output: Some(content.clone()),
         raw: value.clone(),
       }),
       _ => None,
@@ -185,11 +183,11 @@ fn unknown_event(value: &Value) -> AgentEvent {
 }
 
 fn content_blocks(event: &MessageEvent) -> &[ContentBlock] {
-  event.message.as_ref().map(|message| message.content.blocks()).unwrap_or(&[])
+  event.message.content.blocks()
 }
 
-fn is_subagent_tool(name: Option<&str>) -> bool {
-  matches!(name, Some("Agent" | "Task"))
+fn is_subagent_tool(name: &str) -> bool {
+  matches!(name, "Agent" | "Task")
 }
 
 fn event_type(value: &Value) -> Option<&str> {

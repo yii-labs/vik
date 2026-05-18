@@ -1,15 +1,15 @@
 //! Plain value types for an immutable session view.
 //!
-//! [`SessionSnapshot`] is the only shape leaving the session: it is
-//! cloned out from under the internal mutex so handlers never serialize
-//! while holding a lock. Pure data, no live references.
+//! [`SessionSnapshot`] is owned by the session task. Callers can request
+//! a one-time clone through the session command channel; normal progress
+//! uses [`SessionState`] only.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Display};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SessionState {
   #[default]
   UnStarted,
@@ -18,14 +18,28 @@ pub enum SessionState {
   Completed,
   Failed,
   Cancelled,
-  Stalled,
+}
+
+impl Display for SessionState {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let s = match self {
+      SessionState::UnStarted => "unstarted",
+      SessionState::Preparing => "preparing",
+      SessionState::Running => "running",
+      SessionState::Completed => "completed",
+      SessionState::Failed => "failed",
+      SessionState::Cancelled => "cancelled",
+    };
+
+    write!(f, "{s}")
+  }
 }
 
 impl SessionState {
   pub fn is_terminated(self) -> bool {
     matches!(
       self,
-      SessionState::Completed | SessionState::Failed | SessionState::Cancelled | SessionState::Stalled
+      SessionState::Completed | SessionState::Failed | SessionState::Cancelled
     )
   }
 }
@@ -72,12 +86,7 @@ mod tests {
       assert!(!state.is_terminated());
     }
 
-    for state in [
-      SessionState::Completed,
-      SessionState::Failed,
-      SessionState::Cancelled,
-      SessionState::Stalled,
-    ] {
+    for state in [SessionState::Completed, SessionState::Failed, SessionState::Cancelled] {
       assert!(state.is_terminated());
     }
   }

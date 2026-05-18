@@ -114,8 +114,16 @@ fn run_inner(workflow: Workflow, args: &RunArgs) -> anyhow::Result<()> {
     let signals = daemon::install_shutdown_handler().map_err(|err| anyhow!("install shutdown handler: {err:#}"))?;
     let shutdown = signals.token();
 
-    emit_startup_event(&workflow);
+    {
+      let _span = tracing::info_span!("daemon", phase = %Phase::Daemon).entered();
 
+      tracing::info!(
+          workflow_path = %workflow.workflow_path().display(),
+          workspace_root = %workflow.workspace().root().display(),
+          stage_count = workflow.stages().len() as u64,
+          "starting vik",
+      );
+    }
     // State file goes down before the orchestrator spins up so
     // lifecycle commands can already address us. Foreground runs
     // also write it — the operator may have started a foreground
@@ -193,18 +201,6 @@ fn init_logging(workflow: &Workflow, enable_stdout: bool) -> anyhow::Result<Logg
   let log_dir = workflow.workspace().logs_dir();
   logging::init(log_dir, enable_stdout)
     .with_context(|| format!("install logging subscriber writing to {}", log_dir.display()))
-}
-
-fn emit_startup_event(workflow: &Workflow) {
-  let daemon = logging::daemon_span();
-  let _daemon_enter = daemon.enter();
-  tracing::info!(
-      phase = %Phase::Daemon,
-      workflow_path = %workflow.workflow_path().display(),
-      workspace_root = %workflow.workspace().root().display(),
-      stage_count = workflow.stages().len() as u64,
-      "starting vik",
-  );
 }
 
 /// `command` is captured verbatim so an operator looking at a stale

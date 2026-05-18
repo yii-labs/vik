@@ -44,7 +44,7 @@ pub enum AgentStdin {
 /// `TokenUsage` and `Completed`). Valid provider lines that do not map
 /// to a semantic event should emit `AgentEvent::Unknown` instead of
 /// disappearing.
-pub trait AgentAdapter: Send + Sync {
+pub trait AgentAdapter: Send {
   fn build_command(&self, profile: &AgentProfileSchema, prompt: String) -> AgentCommand;
 
   /// New provider event types must not crash the stream.

@@ -2,15 +2,11 @@ use serde::Deserialize;
 use serde_json::Value;
 
 #[derive(Debug, Deserialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub(super) enum ClaudeEvent {
-  #[serde(rename = "system")]
   System(SystemEvent),
-  #[serde(rename = "assistant")]
   Assistant(MessageEvent),
-  #[serde(rename = "user")]
   User(MessageEvent),
-  #[serde(rename = "result")]
   Result(ResultEvent),
   #[serde(other)]
   Unknown,
@@ -18,13 +14,13 @@ pub(super) enum ClaudeEvent {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct SystemEvent {
-  pub subtype: Option<String>,
-  pub session_id: Option<String>,
+  pub subtype: String,
+  pub session_id: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub(super) struct MessageEvent {
-  pub message: Option<ClaudeMessage>,
+  pub message: ClaudeMessage,
 }
 
 #[derive(Debug, Deserialize)]
@@ -57,20 +53,19 @@ impl MessageContent {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub(super) enum ContentBlock {
-  #[serde(rename = "text")]
-  Text { text: Option<String> },
-  #[serde(rename = "tool_use")]
-  ToolUse {
-    id: Option<String>,
-    name: Option<String>,
-    input: Option<Value>,
+  Text {
+    text: String,
   },
-  #[serde(rename = "tool_result")]
+  ToolUse {
+    id: String,
+    name: String,
+    input: Value,
+  },
   ToolResult {
-    tool_use_id: Option<String>,
-    content: Option<Value>,
+    tool_use_id: String,
+    content: Value,
     #[allow(dead_code)]
     is_error: Option<bool>,
   },
@@ -85,9 +80,12 @@ pub(super) struct ResultEvent {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct TokenUsage {
-  pub input_tokens: Option<u64>,
-  pub output_tokens: Option<u64>,
-  pub cache_read_input_tokens: Option<u64>,
+  #[serde(default)]
+  pub input_tokens: u64,
+  #[serde(default)]
+  pub output_tokens: u64,
+  #[serde(default)]
+  pub cache_read_input_tokens: u64,
 }
 
 pub(super) fn parse(value: &Value) -> Option<ClaudeEvent> {
