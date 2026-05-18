@@ -1,6 +1,3 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
 : "${LINEAR_API_KEY:?LINEAR_API_KEY is required}"
 TEAM_KEY="${LINEAR_TEAM_KEY:-ENG}"
 

@@ -7,14 +7,13 @@ mod trackers;
 
 #[derive(Clone, Copy)]
 pub(crate) struct WorkflowTemplate {
-  name: &'static str,
   workflow: &'static str,
   stages: &'static [StageTemplate],
 }
 
 impl WorkflowTemplate {
-  pub(super) const fn new(name: &'static str, workflow: &'static str, stages: &'static [StageTemplate]) -> Self {
-    Self { name, workflow, stages }
+  pub(super) const fn new(workflow: &'static str, stages: &'static [StageTemplate]) -> Self {
+    Self { workflow, stages }
   }
 
   pub(crate) fn stages(self) -> &'static [StageTemplate] {
@@ -24,7 +23,10 @@ impl WorkflowTemplate {
   pub(crate) fn render_workflow(self, tracker: TrackerTemplate) -> String {
     self
       .workflow
-      .replace("__SCRIPT_NAME__", tracker.script_name())
+      .replace(
+        "__PULL_COMMAND__",
+        &indent_block(&tracker.render_script(self.stages), 6),
+      )
       .replace("__IDLE_SEC__", &tracker.idle_sec().to_string())
       .replace("__STAGES__", &self.render_stages())
   }
@@ -32,7 +34,6 @@ impl WorkflowTemplate {
   pub(crate) fn render_prompt(self, stage: StageTemplate, tracker: TrackerTemplate) -> String {
     stage
       .prompt
-      .replace("__TEMPLATE_NAME__", self.name)
       .replace("__TRACKER_READ__", tracker.read())
       .replace("__TRACKER_OPERATIONS__", tracker.operations())
   }
@@ -50,6 +51,16 @@ impl WorkflowTemplate {
       })
       .collect()
   }
+}
+
+fn indent_block(contents: &str, spaces: usize) -> String {
+  let indent = " ".repeat(spaces);
+  contents
+    .trim_end()
+    .lines()
+    .map(|line| format!("{indent}{line}"))
+    .collect::<Vec<_>>()
+    .join("\n")
 }
 
 #[derive(Clone, Copy)]

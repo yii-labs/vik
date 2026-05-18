@@ -74,17 +74,22 @@ fn init_generates_symphony_github_setup_and_doctor_accepts_it() {
       "missing prompt for {stage}",
     );
   }
-  assert!(workflow_yaml.contains("command: ./scripts/github-issues-json"));
+  assert!(workflow_yaml.contains("command: |"));
+  assert!(workflow_yaml.contains("gh issue list --label \"vik\""));
+  assert!(workflow_yaml.contains("label:plan,rework,work,review,merge -label:blocked"));
+  assert!(!workflow_yaml.contains("command: ./scripts/github-issues-json"));
+  assert!(!workflow_yaml.contains("label:plan,work,rework,review,merge -label:blocked"));
 
   let script = temp.path().join("scripts").join("github-issues-json");
   let script_body = std::fs::read_to_string(&script).expect("read script");
+  assert!(script_body.starts_with("gh issue list"));
   assert!(script_body.contains("gh issue list"));
   assert!(script_body.contains("--label \"vik\""));
-  assert!(script_body.contains("label:plan,work,rework,review,merge -label:blocked"));
+  assert!(script_body.contains("label:plan,rework,work,review,merge -label:blocked"));
   assert!(!script_body.contains("label:plan,label:work,label:rework,label:review,label:merge"));
-  assert_executable(&script);
 
   let prompt = std::fs::read_to_string(temp.path().join(".agents/prompts/work.md")).expect("read prompt");
+  assert!(!prompt.contains("Template:"));
   assert!(prompt.contains("gh issue view {{ issue.id }}"));
   assert!(prompt.contains("gh issue comment {{ issue.id }}"));
   assert!(prompt.contains("gh issue edit {{ issue.id }}"));
@@ -116,15 +121,17 @@ fn init_generates_simple_linear_setup_and_doctor_accepts_it() {
   assert!(workflow_yaml.contains("    work:"), "got: {workflow_yaml}");
   assert!(workflow_yaml.contains("    review:"), "got: {workflow_yaml}");
   assert!(!workflow_yaml.contains("    plan:"), "got: {workflow_yaml}");
-  assert!(workflow_yaml.contains("command: ./scripts/linear-issues-json"));
+  assert!(workflow_yaml.contains("command: |"));
+  assert!(workflow_yaml.contains("curl -sS https://api.linear.app/graphql"));
+  assert!(!workflow_yaml.contains("command: ./scripts/linear-issues-json"));
 
   let script = temp.path().join("scripts").join("linear-issues-json");
   let script_body = std::fs::read_to_string(&script).expect("read script");
   assert!(script_body.contains("LINEAR_API_KEY"));
   assert!(script_body.contains("https://api.linear.app/graphql"));
-  assert_executable(&script);
 
   let prompt = std::fs::read_to_string(temp.path().join(".agents/prompts/review.md")).expect("read prompt");
+  assert!(!prompt.contains("Template:"));
   assert!(prompt.contains("Linear MCP `get_issue"));
   assert!(prompt.contains("Linear MCP `create_comment"));
   assert!(prompt.contains("Linear MCP `update_issue"));
@@ -153,6 +160,9 @@ fn init_prompts_for_missing_choices() {
   let mut session = Session::spawn(command).expect("spawn vik init");
   session.set_expect_timeout(Some(Duration::from_secs(20)));
   session.expect("Templates?").expect("template prompt");
+  session
+    .expect("Symphony: plan(rework) -> work -> review -> merge")
+    .expect("symphony choice label");
   session.send("\x1b[B\r").expect("select simple template");
   session.expect("Issue tracker?").expect("tracker prompt");
   session.send("\x1b[B\r").expect("select linear tracker");
@@ -160,7 +170,7 @@ fn init_prompts_for_missing_choices() {
   session.expect(Eof).expect("vik init exits");
 
   let workflow_yaml = std::fs::read_to_string(&workflow).expect("read workflow");
-  assert!(workflow_yaml.contains("command: ./scripts/linear-issues-json"));
+  assert!(workflow_yaml.contains("curl -sS https://api.linear.app/graphql"));
   assert!(workflow_yaml.contains("    work:"), "got: {workflow_yaml}");
   assert!(workflow_yaml.contains("    review:"), "got: {workflow_yaml}");
   assert!(!workflow_yaml.contains("    plan:"), "got: {workflow_yaml}");
@@ -204,19 +214,8 @@ fn init_force_overwrites_existing_generated_files() {
 
   let workflow_yaml = std::fs::read_to_string(&workflow).expect("read workflow");
   let prompt_body = std::fs::read_to_string(&prompt).expect("read prompt");
-  assert!(workflow_yaml.contains("command: ./scripts/github-issues-json"));
+  assert!(workflow_yaml.contains("gh issue list --label \"vik\""));
   assert!(prompt_body.contains("# work Stage"));
   assert!(!workflow_yaml.contains("old workflow"));
   assert!(!prompt_body.contains("old prompt"));
 }
-
-#[cfg(unix)]
-fn assert_executable(path: &Path) {
-  use std::os::unix::fs::PermissionsExt;
-
-  let mode = std::fs::metadata(path).expect("metadata").permissions().mode();
-  assert_ne!(mode & 0o111, 0, "{} is not executable", path.display());
-}
-
-#[cfg(not(unix))]
-fn assert_executable(_path: &Path) {}

@@ -1,6 +1,5 @@
 # work Stage
 
-Template: __TEMPLATE_NAME__
 Issue: `{{ issue.id }}`: `{{ issue.title }}`
 State: `{{ issue.state }}`
 Workdir: `{{ issue.workdir }}`

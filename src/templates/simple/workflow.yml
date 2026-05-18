@@ -12,7 +12,8 @@ agents:
 
 issues:
   pull:
-    command: ./scripts/__SCRIPT_NAME__
+    command: |
+__PULL_COMMAND__
     idle_sec: __IDLE_SEC__
 
 issue:

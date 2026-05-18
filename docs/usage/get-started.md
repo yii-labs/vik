@@ -66,7 +66,7 @@ vik init ./workflow.yml
 
 `vik init` asks for:
 
-- template: `Symphony Like` or `Simple`
+- template: `Symphony` or `Simple`
 - tracker: `GitHub Issue` or `Linear`
 
 For scripts or CI, pass choices directly:

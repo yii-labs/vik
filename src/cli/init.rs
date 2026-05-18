@@ -76,7 +76,7 @@ fn choose_template(choice: Option<InitTemplate>) -> Result<InitTemplate, InitErr
       "Templates?",
       &[
         Choice::new(
-          "Symphony Like: plan -> work(rework) -> review -> merge",
+          "Symphony: plan(rework) -> work -> review -> merge",
           InitTemplate::Symphony,
         ),
         Choice::new("Simple(oneshot): work -> review", InitTemplate::Simple),
@@ -165,7 +165,6 @@ impl InitGenerator {
         path: file.path.clone(),
         source,
       })?;
-      make_executable(file)?;
     }
 
     Ok(InitReport {
@@ -183,7 +182,7 @@ impl InitGenerator {
 
     let mut files = vec![
       GeneratedFile::plain(self.workflow_path.clone(), template.render_workflow(tracker)),
-      GeneratedFile::executable(
+      GeneratedFile::plain(
         scripts_dir.join(tracker.script_name()),
         tracker.render_script(template.stages()),
       ),
@@ -198,33 +197,6 @@ impl InitGenerator {
 
     files
   }
-}
-
-#[cfg(unix)]
-fn make_executable(file: &GeneratedFile) -> Result<(), InitError> {
-  use std::os::unix::fs::PermissionsExt;
-
-  if !file.executable {
-    return Ok(());
-  }
-
-  let mut permissions = fs::metadata(&file.path)
-    .map_err(|source| InitError::Metadata {
-      path: file.path.clone(),
-      source,
-    })?
-    .permissions();
-  permissions.set_mode(0o755);
-  fs::set_permissions(&file.path, permissions).map_err(|source| InitError::Permissions {
-    path: file.path.clone(),
-    source,
-  })
-}
-
-#[cfg(not(unix))]
-fn make_executable(file: &GeneratedFile) -> Result<(), InitError> {
-  let _ = file.executable;
-  Ok(())
 }
 
 fn workflow_dir(path: &Path) -> PathBuf {
@@ -256,24 +228,11 @@ impl InitTracker {
 struct GeneratedFile {
   path: PathBuf,
   contents: String,
-  executable: bool,
 }
 
 impl GeneratedFile {
   fn plain(path: PathBuf, contents: String) -> Self {
-    Self {
-      path,
-      contents,
-      executable: false,
-    }
-  }
-
-  fn executable(path: PathBuf, contents: String) -> Self {
-    Self {
-      path,
-      contents,
-      executable: true,
-    }
+    Self { path, contents }
   }
 }
 
@@ -318,22 +277,6 @@ enum InitError {
 
   #[error("failed to write {path}: {source}")]
   Write {
-    path: PathBuf,
-    #[source]
-    source: io::Error,
-  },
-
-  #[cfg(unix)]
-  #[error("failed to inspect {path}: {source}")]
-  Metadata {
-    path: PathBuf,
-    #[source]
-    source: io::Error,
-  },
-
-  #[cfg(unix)]
-  #[error("failed to set executable bit on {path}: {source}")]
-  Permissions {
     path: PathBuf,
     #[source]
     source: io::Error,
