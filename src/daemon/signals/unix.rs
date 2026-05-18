@@ -5,8 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::signal::unix::{SignalKind, signal};
 use tokio_util::sync::CancellationToken;
-
-use crate::logging::Phase;
+use tracing::Instrument;
 
 use super::SignalError;
 
@@ -49,14 +48,14 @@ pub fn install(shutdown: CancellationToken) -> Result<(), SignalError> {
   // — operators looking for a config-reload feature should see the
   // log and stop wondering why `kill -HUP` had no effect.
   let mut hup = signal(SignalKind::hangup()).map_err(SignalError::Install)?;
-  tokio::spawn(async move {
-    while hup.recv().await.is_some() {
-      tracing::info!(
-          phase = %Phase::Daemon,
-          "SIGHUP received; ignoring (no reload configured)",
-      );
+  tokio::spawn(
+    async move {
+      while hup.recv().await.is_some() {
+        tracing::info!("SIGHUP received; ignoring (no reload configured)");
+      }
     }
-  });
+    .instrument(tracing::info_span!("daemon")),
+  );
 
   Ok(())
 }
@@ -70,25 +69,20 @@ fn install_stream(
   let mut stream = signal(kind).map_err(SignalError::Install)?;
   let shutdown = shutdown.clone();
   let forced = Arc::clone(forced);
-  tokio::spawn(async move {
-    while stream.recv().await.is_some() {
-      if forced.swap(true, Ordering::SeqCst) {
-        // Exit code 130 is the conventional "terminated by Ctrl-C"
-        // status that most Unix shells expect.
-        tracing::error!(
-            phase = %Phase::Daemon,
-            signal = label,
-            "second shutdown signal; aborting",
-        );
-        std::process::exit(130);
+  tokio::spawn(
+    async move {
+      while stream.recv().await.is_some() {
+        if forced.swap(true, Ordering::SeqCst) {
+          // Exit code 130 is the conventional "terminated by Ctrl-C"
+          // status that most Unix shells expect.
+          tracing::error!(signal = label, "second shutdown signal; aborting");
+          std::process::exit(130);
+        }
+        tracing::info!(signal = label, "shutdown signal received; requesting graceful shutdown");
+        shutdown.cancel();
       }
-      tracing::info!(
-          phase = %Phase::Daemon,
-          signal = label,
-          "shutdown signal received; requesting graceful shutdown",
-      );
-      shutdown.cancel();
     }
-  });
+    .instrument(tracing::info_span!("daemon")),
+  );
   Ok(())
 }

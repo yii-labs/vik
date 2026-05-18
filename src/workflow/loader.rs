@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use super::{Workflow, WorkflowError};
 use crate::config::WorkflowSchema;
 use crate::hooks::HookRunner;
+use crate::utils;
 use crate::workspace::Workspace;
-use crate::{logging, utils};
 
 #[derive(Debug)]
 pub struct WorkflowSchemaLoader;
@@ -26,12 +26,12 @@ pub struct LoadedWorkflowSchema {
 impl WorkflowSchemaLoader {
   pub fn load(&self, path: &Path) -> Result<LoadedWorkflowSchema, super::WorkflowError> {
     let abs_path = self.canonicalize(path)?;
-    tracing::debug!(phase=%logging::Phase::Startup, "Workflow path was canonicalized to {abs_path:?}.");
+    tracing::debug!("Workflow path was canonicalized to {abs_path:?}.");
     self.ensure_valid_workflow_path(&abs_path)?;
-    tracing::debug!(phase=%logging::Phase::Startup, "Workflow definition file exists and is readable.");
+    tracing::debug!("Workflow definition file exists and is readable.");
 
     let contents = fs::read_to_string(&abs_path).map_err(|err| WorkflowError::Read(abs_path.clone(), err))?;
-    tracing::debug!(phase=%logging::Phase::Startup, "Workflow definition file was read successfully.");
+    tracing::debug!("Workflow definition file was read successfully.");
 
     self.load_from_str(&contents, Some(abs_path))
   }
