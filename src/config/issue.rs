@@ -55,9 +55,9 @@ pub struct IssueHandlingSchema {
   #[serde(default)]
   pub hooks: IssueHooks,
 
-  /// `IndexMap` preserves author order so `should_dispatch` can iterate
-  /// stages in workflow-file order — multiple stages may match the same
-  /// state, and authors expect deterministic launch order.
+  /// Authored YAML stays a name-keyed map. Runtime storage keeps that ordered
+  /// map and duplicates each map key into the stage value.
+  #[serde(deserialize_with = "deserialize_stages")]
   pub stages: IndexMap<String, IssueStageSchema>,
 
   #[serde(flatten)]
@@ -75,29 +75,20 @@ pub struct IssueHooks {
   unknown_fields: serde_yaml::Mapping,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IssueStageSchema {
+  /// Derived from the `issue.stages.<name>` map key. `name` is not a
+  /// supported field inside a stage body; if authored there, it remains an
+  /// unknown-field diagnostic.
+  #[serde(skip)]
+  pub name: String,
   pub when: IssueStageMatch,
   pub agent: String,
-  #[serde(flatten)]
+  #[serde(flatten, deserialize_with = "deserialize_prompt_source")]
   pub prompt_source: IssueStagePromptSource,
   #[serde(default)]
   pub hooks: IssueStageHooks,
 
-  #[serde(flatten)]
-  unknown_fields: serde_yaml::Mapping,
-}
-
-#[derive(Deserialize)]
-struct IssueStageSchemaInput {
-  when: IssueStageMatch,
-  agent: String,
-  #[serde(default)]
-  prompt_file: Option<PathBuf>,
-  #[serde(default)]
-  prompt: Option<String>,
-  #[serde(default)]
-  hooks: IssueStageHooks,
   #[serde(flatten)]
   unknown_fields: serde_yaml::Mapping,
 }
@@ -111,29 +102,25 @@ pub enum IssueStagePromptSource {
   Inline(String),
 }
 
-impl<'de> Deserialize<'de> for IssueStageSchema {
-  fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-  where
-    D: Deserializer<'de>,
-  {
-    let input = IssueStageSchemaInput::deserialize(deserializer)?;
-    let prompt_source = match (input.prompt_file, input.prompt) {
-      (Some(prompt_file), None) => IssueStagePromptSource::File(prompt_file),
-      (None, Some(prompt)) => IssueStagePromptSource::Inline(prompt),
-      (Some(_), Some(_)) | (None, None) => {
-        return Err(de::Error::custom(
-          "issue stage must define exactly one of `prompt_file` or `prompt`",
-        ));
-      },
-    };
+#[derive(Deserialize)]
+struct IssueStagePromptSourceInput {
+  #[serde(default)]
+  prompt_file: Option<PathBuf>,
+  #[serde(default)]
+  prompt: Option<String>,
+}
 
-    Ok(Self {
-      when: input.when,
-      agent: input.agent,
-      prompt_source,
-      hooks: input.hooks,
-      unknown_fields: input.unknown_fields,
-    })
+fn deserialize_prompt_source<'de, D>(deserializer: D) -> Result<IssueStagePromptSource, D::Error>
+where
+  D: Deserializer<'de>,
+{
+  let input = IssueStagePromptSourceInput::deserialize(deserializer)?;
+  match (input.prompt_file, input.prompt) {
+    (Some(prompt_file), None) => Ok(IssueStagePromptSource::File(prompt_file)),
+    (None, Some(prompt)) => Ok(IssueStagePromptSource::Inline(prompt)),
+    (Some(_), Some(_)) | (None, None) => Err(de::Error::custom(
+      "issue stage must define exactly one of `prompt_file` or `prompt`",
+    )),
   }
 }
 
@@ -147,6 +134,7 @@ impl Default for IssueStagePromptSource {
 impl IssueStageSchema {
   pub fn new(when: impl Into<String>) -> Self {
     Self {
+      name: String::new(),
       when: IssueStageMatch {
         state: when.into(),
         unknown_fields: Default::default(),
@@ -156,6 +144,11 @@ impl IssueStageSchema {
       hooks: IssueStageHooks::default(),
       unknown_fields: Default::default(),
     }
+  }
+
+  pub fn with_name(mut self, name: impl Into<String>) -> Self {
+    self.name = name.into();
+    self
   }
 
   pub fn with_prompt_file(mut self, prompt_file: impl Into<PathBuf>) -> Self {
@@ -219,8 +212,9 @@ impl Diagnose for IssueHandlingSchema {
 
     diagnostics.error_if_empty_map("stages", self.stages.is_empty());
     if !self.stages.is_empty() {
-      self.stages.iter().for_each(|(stage_name, stage)| {
-        diagnostics.extends_with_pointer(&format!("stages.{stage_name}"), stage.diagnose(schema));
+      self.stages.iter().for_each(|(name, stage)| {
+        diagnostics.error_if_empty_str("stages", name);
+        diagnostics.extends_with_pointer(&stage_pointer(name), stage.diagnose(schema));
       });
     }
 
@@ -228,6 +222,26 @@ impl Diagnose for IssueHandlingSchema {
     diagnostics.warn_unknown_fields(&self.unknown_fields);
 
     diagnostics
+  }
+}
+
+fn deserialize_stages<'de, D>(deserializer: D) -> Result<IndexMap<String, IssueStageSchema>, D::Error>
+where
+  D: serde::Deserializer<'de>,
+{
+  let mut stages = IndexMap::<String, IssueStageSchema>::deserialize(deserializer)?;
+  stages.iter_mut().for_each(|(name, stage)| {
+    stage.name = name.clone();
+  });
+
+  Ok(stages)
+}
+
+fn stage_pointer(stage_name: &str) -> String {
+  if stage_name.trim().is_empty() {
+    "stages".to_string()
+  } else {
+    format!("stages.{stage_name}")
   }
 }
 
@@ -365,6 +379,122 @@ prompt_file: ''
   }
 
   #[test]
+  fn issue_stages_deserialize_map_into_named_indexmap_entries() {
+    let issue: IssueHandlingSchema = serde_yaml::from_str(
+      r#"
+stages:
+  plan:
+    when:
+      state: todo
+    agent: codex
+    prompt_file: ./plan.md
+  implement:
+    when:
+      state: todo
+    agent: codex
+    prompt_file: ./implement.md
+"#,
+    )
+    .expect("issue schema parses");
+
+    assert_eq!(
+      issue.stages.keys().map(String::as_str).collect::<Vec<_>>(),
+      ["plan", "implement"]
+    );
+    assert_eq!(issue.stages.get("plan").expect("plan stage").name, "plan");
+    assert_eq!(
+      issue.stages.get("implement").expect("implement stage").name,
+      "implement"
+    );
+  }
+
+  #[test]
+  fn issue_stages_reject_array_shape() {
+    let err = serde_yaml::from_str::<IssueHandlingSchema>(
+      r#"
+stages:
+  - name: plan
+    when:
+      state: todo
+    agent: codex
+    prompt_file: ./plan.md
+"#,
+    )
+    .expect_err("array-shaped stages are unsupported");
+
+    assert!(err.to_string().contains("invalid type: sequence"));
+  }
+
+  #[test]
+  fn issue_stages_report_empty_map() {
+    let issue: IssueHandlingSchema = serde_yaml::from_str(
+      r#"
+stages: {}
+"#,
+    )
+    .expect("issue schema parses");
+
+    let diagnostics = issue.diagnose(&workflow_with_agent());
+
+    assert!(
+      diagnostics
+        .errors
+        .iter()
+        .any(|diag| { diag.pointer == "stages" && matches!(diag.code, DiagnosticCode::EmptyMap) })
+    );
+  }
+
+  #[test]
+  fn issue_stages_report_empty_stage_name() {
+    let issue: IssueHandlingSchema = serde_yaml::from_str(
+      r#"
+stages:
+  "":
+    when:
+      state: todo
+    agent: codex
+    prompt_file: ./plan.md
+"#,
+    )
+    .expect("issue schema parses");
+
+    let diagnostics = issue.diagnose(&workflow_with_agent());
+
+    assert!(
+      diagnostics
+        .errors
+        .iter()
+        .any(|diag| { diag.pointer == "stages" && matches!(diag.code, DiagnosticCode::EmptyStr) })
+    );
+  }
+
+  #[test]
+  fn issue_stages_derive_name_from_map_key_not_authored_field() {
+    let issue: IssueHandlingSchema = serde_yaml::from_str(
+      r#"
+stages:
+  plan:
+    name: authored
+    when:
+      state: todo
+    agent: codex
+    prompt_file: ./plan.md
+"#,
+    )
+    .expect("issue schema parses");
+
+    let diagnostics = issue.diagnose(&workflow_with_agent());
+
+    assert_eq!(issue.stages.get("plan").expect("plan stage").name, "plan");
+    assert!(
+      diagnostics
+        .warnings
+        .iter()
+        .any(|diag| { diag.pointer == "stages.plan.name" && matches!(diag.code, DiagnosticCode::UnknownField) })
+    );
+  }
+
+  #[test]
   fn issue_stage_prompt_source_accepts_prompt_file() {
     let stage: IssueStageSchema = serde_yaml::from_str(
       r#"
@@ -385,11 +515,6 @@ prompt_file: ./prompts/plan.md
 
   #[test]
   fn issue_stage_prompt_source_accepts_inline_prompt() {
-    let mut workflow = WorkflowSchema::default();
-    workflow.agents.insert(
-      "codex".to_string(),
-      AgentProfileSchema::new(AgentRuntime::Codex, "gpt-5.5".to_string()),
-    );
     let stage: IssueStageSchema = serde_yaml::from_str(
       r#"
 when:
@@ -401,7 +526,7 @@ prompt: |
     )
     .expect("stage schema parses");
 
-    let diagnostics = stage.diagnose(&workflow);
+    let diagnostics = stage.diagnose(&workflow_with_agent());
 
     assert!(!diagnostics.has_errors(), "{diagnostics}");
     assert!(!diagnostics.has_warnings(), "{diagnostics}");
@@ -441,11 +566,6 @@ agent: codex
 
   #[test]
   fn issue_stage_prompt_source_preserves_unknown_field_warning() {
-    let mut workflow = WorkflowSchema::default();
-    workflow.agents.insert(
-      "codex".to_string(),
-      AgentProfileSchema::new(AgentRuntime::Codex, "gpt-5.5".to_string()),
-    );
     let stage: IssueStageSchema = serde_yaml::from_str(
       r#"
 when:
@@ -457,7 +577,7 @@ extra_stage_field: true
     )
     .expect("stage schema parses");
 
-    let diagnostics = stage.diagnose(&workflow);
+    let diagnostics = stage.diagnose(&workflow_with_agent());
 
     assert!(!diagnostics.has_errors(), "{diagnostics}");
     assert!(
@@ -466,5 +586,14 @@ extra_stage_field: true
         .iter()
         .any(|diag| { diag.pointer == "extra_stage_field" && matches!(diag.code, DiagnosticCode::UnknownField) })
     );
+  }
+
+  fn workflow_with_agent() -> WorkflowSchema {
+    let mut workflow = WorkflowSchema::default();
+    workflow.agents.insert(
+      "codex".to_string(),
+      AgentProfileSchema::new(AgentRuntime::Codex, "gpt-5.5".to_string()),
+    );
+    workflow
   }
 }

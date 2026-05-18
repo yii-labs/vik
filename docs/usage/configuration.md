@@ -163,13 +163,15 @@ Required issue fields:
 
 Optional issue fields are preserved under `issue` in the prompt and hook
 context. Avoid extra field names that collide with Vik issue bindings such as
-`id`, `title`, `description`, `state`, or `workdir`.
+`id`, `title`, `description`, `state`, `workdir`, or `stage`. In stage prompt
+and hook contexts, `issue.stage` is Vik-owned stage name.
 
 Duplicate issue ids in one intake result are skipped after the first one.
 
 ## Stages
 
-`issue.stages` is an ordered map. Stage keys are user-defined names.
+`issue.stages` is an ordered map. Stage keys are user-defined names. Vik keeps
+that YAML shape and duplicates each key into the stage value as `stage.name`.
 
 Each stage requires:
 
@@ -236,10 +238,11 @@ wrapper. Hooks do not support prompt command expansion.
 Hook contexts:
 
 - `after_create`: `issue`, `workspace_root`, `workflow_path`, and `env`.
-- stage hooks: same context as `after_create`.
+- stage hooks: same context as `after_create`, plus `issue.stage`.
 
 `issue` contains `id`, `title`, `description`, `state`, `workdir`, and optional
-extra issue fields.
+extra issue fields. Stage hook and prompt contexts also contain `issue.stage`
+for the current stage. Vik does not add root-level `stage`.
 
 Hooks run with current directory set to the issue workspace.
 
@@ -273,6 +276,7 @@ rendering.
 Stage prompt context includes:
 
 - `issue.id`, `issue.title`, `issue.description`, and `issue.state`.
+- `issue.stage`: current stage name.
 - `issue.workdir`: issue workspace path.
 - optional extra issue fields returned by `issues.pull.command` as
   `issue.<field>`.
@@ -282,8 +286,8 @@ Stage prompt context includes:
 
 Current agent subprocesses run with current directory set to the issue
 workspace. `issue.workdir` exists for prompts that need to print or pass the
-path. Current code does not expose `stage`, `workflow`, `loop`, or `profile`
-template objects.
+path. Current code does not expose root-level `stage`, `workflow`, `loop`, or
+`profile` template objects.
 
 ## Observation
 

@@ -61,11 +61,11 @@ impl WorkflowBuilder {
     state: impl Into<String>,
     prompt_file: impl Into<PathBuf>,
   ) -> Self {
-    self
-      .schema
-      .issue
-      .stages
-      .insert(name.into(), IssueStageSchema::new(state).with_prompt_file(prompt_file));
+    let name = name.into();
+    let stage = IssueStageSchema::new(state)
+      .with_name(name.clone())
+      .with_prompt_file(prompt_file);
+    self.schema.issue.stages.insert(name, stage);
     self
   }
 
@@ -126,7 +126,13 @@ mod tests {
       Some("echo created")
     );
     assert_eq!(
-      workflow.schema().issue.stages.keys().map(String::as_str).collect::<Vec<_>>(),
+      workflow
+        .schema()
+        .issue
+        .stages
+        .values()
+        .map(|stage| stage.name.as_str())
+        .collect::<Vec<_>>(),
       ["implement"]
     );
     assert_eq!(

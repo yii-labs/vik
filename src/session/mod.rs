@@ -812,9 +812,13 @@ mod tests {
         .build(),
     );
     let issue_run = Arc::new(IssueRun::new(Arc::clone(&workflow), issue(issue_id, state)));
-    let schema = workflow.stages().get(stage_name).expect("stage fixture exists").clone();
+    let schema = workflow
+      .stages()
+      .find(|stage| stage.name == stage_name)
+      .expect("stage fixture exists")
+      .clone();
 
-    IssueStage::new(issue_run, stage_name.to_string(), schema)
+    IssueStage::new(issue_run, schema)
   }
 
   fn issue(id: &str, state: &str) -> Issue {
