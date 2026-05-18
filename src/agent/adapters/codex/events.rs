@@ -60,7 +60,7 @@ pub(super) enum CurrentEvent {
   #[serde(rename = "turn.started")]
   TurnStarted,
   #[serde(rename = "turn.completed")]
-  TurnCompleted { usage: TokenUsage },
+  TurnCompleted { usage: Option<TokenUsage> },
   #[serde(rename = "turn.failed")]
   TurnFailed { error: ThreadError },
   #[serde(rename = "item.started")]

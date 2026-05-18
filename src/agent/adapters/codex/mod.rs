@@ -117,15 +117,18 @@ fn map_current_item(value: &Value, item: ThreadItem, phase: ToolCallPhase) -> Ve
 
 /// `turn.completed` carries both the per-turn usage and the stream
 /// terminator — fan out into two events so the session sees both.
-fn map_current_turn_completed(usage: events::TokenUsage) -> Vec<AgentEvent> {
-  vec![
-    AgentEvent::TokenUsage {
-      input: usage.input_tokens,
-      output: usage.output_tokens,
-      cache_read: usage.cached_input_tokens,
-    },
-    AgentEvent::Completed,
-  ]
+fn map_current_turn_completed(usage: Option<events::TokenUsage>) -> Vec<AgentEvent> {
+  match usage {
+    Some(usage) => vec![
+      AgentEvent::TokenUsage {
+        input: usage.input_tokens,
+        output: usage.output_tokens,
+        cache_read: usage.cached_input_tokens,
+      },
+      AgentEvent::Completed,
+    ],
+    None => vec![AgentEvent::Completed],
+  }
 }
 
 /// `pub(super)` so the in-module tests below can drive it directly
@@ -356,6 +359,12 @@ mod tests {
         AgentEvent::Completed,
       ]
     );
+  }
+
+  #[test]
+  fn current_turn_completed_without_usage_still_completes() {
+    let line = r#"{"type":"turn.completed"}"#;
+    assert_eq!(parse_events(line), vec![AgentEvent::Completed]);
   }
 
   #[test]
