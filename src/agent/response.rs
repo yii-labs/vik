@@ -1,16 +1,19 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// Provider-agnostic event vocabulary.
 ///
-/// Adapters translate provider-specific JSONL into this enum; the
-/// session JSONL on disk is a record of these decoded events, not the
-/// raw provider bytes. A run yields at most one [`AgentEvent::SessionStarted`],
-/// any number of `Message`/`TokenUsage`/`RateLimit` interleaved, and
-/// terminates with one [`AgentEvent::Completed`] (or trailing `Error`).
-/// Parse errors on a single JSONL line surface as [`AgentEvent::Error`]
-/// rather than tearing the subprocess down — forward-compat beats hard
-/// fail on a new provider event shape.
+/// Adapters translate provider-specific JSONL into this enum. Semantic
+/// events keep the session snapshot small; observation events
+/// (`ToolCall`, `Subagent`, and `Unknown`) keep the full parsed
+/// provider JSON in `raw` so session JSONL remains useful when a
+/// provider ships a new event shape. A run yields at most one
+/// [`AgentEvent::SessionStarted`], any number of
+/// `Message`/`TokenUsage`/`RateLimit` interleaved, and terminates with
+/// one [`AgentEvent::Completed`] (or trailing `Error`). Parse errors on
+/// a single JSONL line surface as [`AgentEvent::Error`] rather than
+/// tearing the subprocess down.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AgentEvent {
@@ -42,6 +45,32 @@ pub enum AgentEvent {
     observed_at: DateTime<Utc>,
   },
 
+  ToolCall {
+    call_id: Option<String>,
+    name: Option<String>,
+    phase: ToolCallPhase,
+    input: Option<Value>,
+    output: Option<Value>,
+    raw: Value,
+  },
+
+  /// Delegation/subagent evidence from providers that expose it. Raw
+  /// JSON carries provider-specific detail such as prompts, models, and
+  /// agent states.
+  Subagent {
+    call_id: Option<String>,
+    action: String,
+    status: Option<String>,
+    target_ids: Vec<String>,
+    raw: Value,
+  },
+
+  /// Valid provider JSON that Vik does not model yet.
+  Unknown {
+    event_type: Option<String>,
+    raw: Value,
+  },
+
   Completed,
 
   /// Either a JSONL parse failure on one line or a provider-side error.
@@ -50,6 +79,13 @@ pub enum AgentEvent {
   Error {
     detail: String,
   },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolCallPhase {
+  Request,
+  Result,
 }
 
 #[cfg(test)]
@@ -109,6 +145,53 @@ mod tests {
           "remaining": 42,
           "reset_at": "2026-05-16T10:15:30Z",
           "observed_at": "2026-05-16T10:00:00Z"
+        }),
+      ),
+      (
+        AgentEvent::ToolCall {
+          call_id: Some("tool-1".into()),
+          name: Some("Bash".into()),
+          phase: ToolCallPhase::Request,
+          input: Some(json!({"command": "cargo test"})),
+          output: None,
+          raw: json!({"type": "assistant"}),
+        },
+        json!({
+          "kind": "tool_call",
+          "call_id": "tool-1",
+          "name": "Bash",
+          "phase": "request",
+          "input": {"command": "cargo test"},
+          "output": null,
+          "raw": {"type": "assistant"}
+        }),
+      ),
+      (
+        AgentEvent::Subagent {
+          call_id: Some("collab-1".into()),
+          action: "spawnAgent".into(),
+          status: Some("completed".into()),
+          target_ids: vec!["thread-2".into()],
+          raw: json!({"type": "collabAgentToolCall"}),
+        },
+        json!({
+          "kind": "subagent",
+          "call_id": "collab-1",
+          "action": "spawnAgent",
+          "status": "completed",
+          "target_ids": ["thread-2"],
+          "raw": {"type": "collabAgentToolCall"}
+        }),
+      ),
+      (
+        AgentEvent::Unknown {
+          event_type: Some("future_event_kind".into()),
+          raw: json!({"type": "future_event_kind"}),
+        },
+        json!({
+          "kind": "unknown",
+          "event_type": "future_event_kind",
+          "raw": {"type": "future_event_kind"}
         }),
       ),
       (
@@ -184,6 +267,53 @@ mod tests {
           remaining: 42,
           reset_at: utc("2026-05-16T10:15:30Z"),
           observed_at: utc("2026-05-16T10:00:00Z"),
+        },
+      ),
+      (
+        json!({
+          "kind": "tool_call",
+          "call_id": "tool-1",
+          "name": "Bash",
+          "phase": "request",
+          "input": {"command": "cargo test"},
+          "output": null,
+          "raw": {"type": "assistant"}
+        }),
+        AgentEvent::ToolCall {
+          call_id: Some("tool-1".into()),
+          name: Some("Bash".into()),
+          phase: ToolCallPhase::Request,
+          input: Some(json!({"command": "cargo test"})),
+          output: None,
+          raw: json!({"type": "assistant"}),
+        },
+      ),
+      (
+        json!({
+          "kind": "subagent",
+          "call_id": "collab-1",
+          "action": "spawnAgent",
+          "status": "completed",
+          "target_ids": ["thread-2"],
+          "raw": {"type": "collabAgentToolCall"}
+        }),
+        AgentEvent::Subagent {
+          call_id: Some("collab-1".into()),
+          action: "spawnAgent".into(),
+          status: Some("completed".into()),
+          target_ids: vec!["thread-2".into()],
+          raw: json!({"type": "collabAgentToolCall"}),
+        },
+      ),
+      (
+        json!({
+          "kind": "unknown",
+          "event_type": "future_event_kind",
+          "raw": {"type": "future_event_kind"}
+        }),
+        AgentEvent::Unknown {
+          event_type: Some("future_event_kind".into()),
+          raw: json!({"type": "future_event_kind"}),
         },
       ),
       (

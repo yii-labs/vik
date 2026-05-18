@@ -9,7 +9,8 @@ Current shape:
 - `spawn` looks up the selected agent profile from `Workflow`.
 - `Session` selects a stateless adapter with `agent::get_adapter(runtime)`.
 - The adapter builds the provider command and maps provider JSONL to
-  provider-agnostic `AgentEvent` values.
+  provider-agnostic `AgentEvent` values. Valid unmodeled provider lines stay
+  visible as retained observation events.
 
 We rejected direct adapter calls from orchestrator because provider command
 shape, JSONL event mapping, session logging, and cancellation belong below the

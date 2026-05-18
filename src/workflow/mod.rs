@@ -3,7 +3,7 @@
 //! Where `WorkflowSchema` is parsed-only YAML, [`Workflow`] adds the
 //! pieces that need a resolved file path: a [`Workspace`] anchored at
 //! `workspace.root`, a [`HookRunner`] bound to this workflow, and helpers
-//! that resolve other paths (prompt files, intake commands) relative to
+//! that resolve workflow-relative paths (prompt files, intake commands) to
 //! the workflow file directory.
 //!
 //! The split lets `vik doctor` validate raw YAML through
@@ -15,7 +15,6 @@ pub mod loader;
 
 use std::path::{Path, PathBuf};
 
-use indexmap::IndexMap;
 use thiserror::Error;
 
 use crate::config::diagnose::Diagnostics;
@@ -53,8 +52,8 @@ impl Workflow {
     &self.schema.agents
   }
 
-  pub fn stages(&self) -> &IndexMap<String, issue::IssueStageSchema> {
-    &self.schema.issue.stages
+  pub fn stages(&self) -> impl ExactSizeIterator<Item = &issue::IssueStageSchema> + '_ {
+    self.schema.issue.stages.values()
   }
 
   pub fn hooks(&self) -> &HookRunner {

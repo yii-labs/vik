@@ -1,6 +1,6 @@
 ---
 name: debug
-description: Debug this Vik repo after the single-crate refactor. Use when Codex needs to diagnose Vik runtime, workflow, daemon, orchestration, hook, prompt-rendering, provider-adapter, session JSONL, or workspace/log/state-file problems in /Users/yii/code/vik.
+description: Debug this Vik repo after the single-crate refactor. Use when Codex needs to diagnose Vik runtime, workflow, daemon, orchestration, hook, prompt-rendering, provider-adapter, session JSONL.
 ---
 
 # Debug Vik
@@ -77,7 +77,7 @@ Important workflow facts:
 Checked-in `workflow.yml` has `workspace.root: .vik`, so current Vik-owned state lives under:
 
 ```text
-/Users/yii/code/vik/.vik/workflows/-Users-yii-code-vik-workflow.yml/
+<relative-path-to-workflow.yml>/.vik/workflows/<sanitized-absolute-workflow-path>/
 ```
 
 Always use `vik status` or `Workflow::workspace().*` path helpers to find current state. Ignore older leftover paths unless the status output points there.
@@ -119,16 +119,18 @@ Fast log commands:
 
 ```sh
 cargo run -- status ./workflow.yml
-tail -n 100 .vik/workflows/-Users-yii-code-vik-workflow.yml/logs/vik.log.*
-tail -n 100 .vik/workflows/-Users-yii-code-vik-workflow.yml/logs/vik-error.log.*
-jq -c 'select(.level=="ERROR" or .phase=="intake" or .phase=="stage_run" or .phase=="hook")' .vik/workflows/-Users-yii-code-vik-workflow.yml/logs/vik.log.*
+tail -n 100 <relative-path-to-workflow.yml>/.vik/workflows/<sanitized-absolute-workflow-path>/logs/vik.log.*
+tail -n 100 <relative-path-to-workflow.yml>/.vik/workflows/<sanitized-absolute-workflow-path>/logs/vik-error.log.*
+jq -c 'select(.level=="ERROR" or .phase=="intake" or .phase=="stage_run" or .phase=="hook")' <relative-path-to-workflow.yml>/.vik/workflows/<sanitized-absolute-workflow-path>/logs/vik.log.*
 ```
 
 If paths differ, replace the example `logs` directory with `log_dir` from `vik status`.
 
 ## Session JSONL
 
-Session JSONL files store normalized `AgentEvent` records, not raw provider stdout.
+Session JSONL files store `AgentEvent` records. They are not byte-for-byte raw
+provider stdout, but `tool_call`, `subagent`, and `unknown` records keep the
+full parsed provider JSON under `raw`.
 
 Event shapes:
 
@@ -137,6 +139,9 @@ Event shapes:
 {"kind":"message","text":"..."}
 {"kind":"token_usage","input":120,"output":45,"cache_read":12}
 {"kind":"rate_limit","scope":"codex:tokens_per_min","remaining":100,"reset_at":"...","observed_at":"..."}
+{"kind":"tool_call","call_id":"...","name":"...","phase":"request","input":{},"output":null,"raw":{}}
+{"kind":"subagent","call_id":"...","action":"spawnAgent","status":"completed","target_ids":["..."],"raw":{}}
+{"kind":"unknown","event_type":"future_event_kind","raw":{}}
 {"kind":"completed"}
 {"kind":"error","detail":"..."}
 ```
@@ -144,9 +149,9 @@ Event shapes:
 Inspect session logs:
 
 ```sh
-find .vik/workflows/-Users-yii-code-vik-workflow.yml/sessions -type f -name '*.jsonl' -print
-jq -c . .vik/workflows/-Users-yii-code-vik-workflow.yml/sessions/<issue.id>/*.jsonl
-jq -r 'select(.kind=="message") | .text' .vik/workflows/-Users-yii-code-vik-workflow.yml/sessions/<issue.id>/*.jsonl
+find <relative-path-to-workflow.yml>/.vik/workflows/<sanitized-absolute-workflow-path>/sessions -type f -name '*.jsonl' -print
+jq -c . <relative-path-to-workflow.yml>/.vik/workflows/<sanitized-absolute-workflow-path>/sessions/<issue.id>/*.jsonl
+jq -r 'select(.kind=="message") | .text' <relative-path-to-workflow.yml>/.vik/workflows/<sanitized-absolute-workflow-path>/sessions/<issue.id>/*.jsonl
 ```
 
 Provider fixture input lives under:
@@ -195,8 +200,10 @@ Hook failure:
 - Start in `src/hooks/mod.rs`.
 - Hooks run through `sh -c` on Unix, `cmd /C` on Windows.
 - Timeout is 30 seconds.
-- `after_create` context has only `issue` and `env`.
-- `before_run` and `after_run` context has `cwd`, `workspace`, `issue`, `stage`, `env`.
+- `after_create` context has `issue`, `workspace_root`, `workflow_path`, and `env`.
+- `before_run` and `after_run` context has `issue`, `issue.stage`,
+  `workspace_root`, `workflow_path`, and `env`.
+- In stage hook context, `issue.stage` is Vik-owned stage name.
 - Nonzero stderr tail is capped at 2048 bytes.
 
 Prompt render failure:

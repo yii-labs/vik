@@ -4,11 +4,11 @@
 
 Vik is a local service that orchestrates coding agents against issues from an
 external tracker. A workflow file defines how to fetch issues, how issue states
-map to stages, which agent profile each stage uses, and which prompt file each
-run receives.
+map to stages, which agent profile each stage uses, and which prompt source
+each run receives.
 
 Vik does not own tracker state. Workflow pull commands read tracker state, and
-prompt files own tracker updates. Vik observes state on each intake cycle and
+prompts own tracker updates. Vik observes state on each intake cycle and
 dispatches matching stages.
 
 ## Problem
@@ -52,8 +52,7 @@ when a run stalls, crashes, or restarts.
 - **Issue Stage**: one named stage matched by exact issue state.
 - **Issue Workspace**:
   `<workflow-workspace-root>/issues/<issue.id>/`.
-- **Session**: one stage execution with state snapshot and decoded `AgentEvent`
-  JSONL.
+- **Session**: one stage execution with state snapshot and `AgentEvent` JSONL.
 - **Session Factory**: orchestrator spawn boundary for sessions.
 
 ## Workflow Config
@@ -83,6 +82,7 @@ when a run stalls, crashes, or restarts.
   - optional `description` or `desc`
 - Extra issue fields are preserved under `issue` in hook and prompt rendering
   context.
+- In stage prompt and hook context, `issue.stage` is Vik-owned stage name.
 - Duplicate issue ids in one intake batch: first wins.
 
 ## Dispatch
@@ -133,10 +133,11 @@ today.
 
 `SessionFactory` creates sessions for stage runs. A session:
 
-- renders the prompt file
+- renders the prompt source
 - starts the selected provider process
 - maps provider stdout JSONL to `AgentEvent`
-- writes decoded events to JSONL
+- writes events to JSONL, including retained tool-call, subagent, and unknown
+  provider evidence
 - tracks `SessionState`, last message, token usage, and rate-limit observations
 - exposes state changes and cancellation through session channels
 
@@ -189,10 +190,11 @@ Agent subprocess cwd is the issue workspace.
 - stdout is injected as text.
 - one trailing newline is trimmed.
 - non-zero exit fails rendering.
-- Prompt context is the same context used by hooks.
+- Stage prompt context is the same context used by stage hooks.
+- Stage prompt and hook context expose the stage name as `issue.stage`.
 - Prompt context can read `env.<VAR>` from the Vik process environment.
-- Current code does not expose `stage`, `workflow`, `loop`, or `profile`
-  template objects.
+- Current code does not expose root-level `stage`, `workflow`, `loop`, or
+  `profile` template objects.
 
 ## CLI Surface
 

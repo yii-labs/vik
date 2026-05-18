@@ -179,8 +179,9 @@ Session spawn:
 1. `SessionFactory` resolves the agent profile and adapter.
 2. It returns `SessionCommandSender` plus `SessionStateReceiver` and spawns the task.
 3. The session task emits `Preparing`.
-4. Resolve the stage prompt path through `IssueStage.workflow().resolve_path`.
-5. Read the prompt file.
+4. Resolve the stage prompt source. For `prompt_file`, resolve the path through
+   `IssueStage.workflow().resolve_path` and read the file. For `prompt`, use
+   the inline text directly.
 6. Render MiniJinja with serialized `IssueStage` context.
 7. Expand prompt commands with ``!`exec(command)` ``.
 8. Build provider command.
@@ -209,6 +210,11 @@ watchdog config in workflow schema.
 
 - `build_command(&self, profile, prompt) -> AgentCommand`
 - `map_event(&self, value) -> Vec<AgentEvent>`
+
+Adapters keep provider-specific parsing local. Valid provider lines that do not
+map to a semantic event become `AgentEvent::Unknown` with the full parsed
+provider JSON in `raw`. Tool calls and subagent/delegation events are retained
+as provider-neutral observation records.
 
 `get_adapter(runtime)` returns a stateless adapter:
 
@@ -243,12 +249,12 @@ The `issue` object contains:
 - `workdir`
 - extra issue payload fields from the pull command
 
-`IssueStage` keeps stage name, stage schema, and log path for Rust callers. Its
-current `Serialize` implementation delegates to `IssueRun`.
+`IssueStage` keeps stage schema and log path for Rust callers. Its `Serialize`
+implementation extends `IssueRun` context with `issue.stage`.
 
-`JinjaRenderer` also adds process env under `env`. Bindings like `stage.name`,
-`workspace.root`, `workflow`, `loop`, `profile`, `cwd`, and root-level issue
-fields like `id` are not produced by current code.
+`JinjaRenderer` also adds process env under `env`. Bindings like root-level
+`stage`, `workspace.root`, `workflow`, `loop`, `profile`, `cwd`, and root-level
+issue fields like `id` are not produced by current code.
 
 ## Hooks
 
@@ -298,7 +304,7 @@ Runtime artifacts:
 | `<root>/service/state.json`                                | daemon   | pid and lifecycle state   |
 | `<root>/logs/vik.log.YYYY-MM-DD`                           | logging  | INFO+ log events          |
 | `<root>/logs/vik-error.log.YYYY-MM-DD`                     | logging  | ERROR-only log events     |
-| `<root>/sessions/<issue_id>/<stage_name>-<uuid-v7>.jsonl`  | session  | decoded AgentEvent stream |
+| `<root>/sessions/<issue_id>/<stage_name>-<uuid-v7>.jsonl`  | session  | AgentEvent stream with retained provider evidence |
 | `<root>/issues/<issue_id>/`                                | operator | issue workspace           |
 
 ## Daemon

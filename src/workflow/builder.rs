@@ -61,11 +61,23 @@ impl WorkflowBuilder {
     state: impl Into<String>,
     prompt_file: impl Into<PathBuf>,
   ) -> Self {
+    let name = name.into();
+    let stage = IssueStageSchema::new(state)
+      .with_name(name.clone())
+      .with_prompt_file(prompt_file);
+    self.schema.issue.stages.insert(name, stage);
     self
-      .schema
-      .issue
-      .stages
-      .insert(name.into(), IssueStageSchema::new(state).with_prompt_file(prompt_file));
+  }
+
+  pub fn add_inline_stage(
+    mut self,
+    name: impl Into<String>,
+    state: impl Into<String>,
+    prompt: impl Into<String>,
+  ) -> Self {
+    let name = name.into();
+    let stage = IssueStageSchema::new(state).with_name(name.clone()).with_inline_prompt(prompt);
+    self.schema.issue.stages.insert(name, stage);
     self
   }
 
@@ -112,7 +124,13 @@ mod tests {
       Some("echo created")
     );
     assert_eq!(
-      workflow.schema().issue.stages.keys().map(String::as_str).collect::<Vec<_>>(),
+      workflow
+        .schema()
+        .issue
+        .stages
+        .values()
+        .map(|stage| stage.name.as_str())
+        .collect::<Vec<_>>(),
       ["implement"]
     );
     assert_eq!(
@@ -121,6 +139,24 @@ mod tests {
         .path()
         .join("workflows")
         .join(workflow_path.to_string_lossy().replace('/', "-"))
+    );
+  }
+
+  #[test]
+  fn workflow_builder_inline_stage_uses_map_key_as_stage_name() {
+    let workflow = Workflow::builder()
+      .add_inline_stage("plan", "todo", "plan on {{ issue.id }}")
+      .build();
+
+    assert_eq!(
+      workflow
+        .schema()
+        .issue
+        .stages
+        .values()
+        .map(|stage| stage.name.as_str())
+        .collect::<Vec<_>>(),
+      ["plan"]
     );
   }
 

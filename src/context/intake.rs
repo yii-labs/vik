@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 /// `identifier`/`description`, GitHub uses `id`/`desc` in different
 /// places, etc. Keeping both forms accepted means workflow authors do
 /// not have to write a transformation step in their pull command.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Issue {
   #[serde(alias = "identifier")]
   pub id: String,

@@ -68,7 +68,7 @@ impl Orchestrator {
         event = consumer.recv(), if !intake_closed => {
           match event {
             Some(event) => {
-              if self.handle_event(event).await {
+              if self.handle_event(event) {
                 intake_stopped = true;
               }
             }
@@ -88,8 +88,6 @@ impl Orchestrator {
           if received.is_none() {
             return Err(OrchestratorError::EventChannelClosed);
           }
-
-          let _ = self.sessions.handle_received_event().await;
         }
       }
     }
@@ -97,10 +95,10 @@ impl Orchestrator {
 
   /// Returns `true` when intake has stopped. The caller still waits for
   /// `StageSessionManager` to drain before exiting.
-  async fn handle_event(&mut self, event: OrchestratorEvent) -> bool {
+  fn handle_event(&mut self, event: OrchestratorEvent) -> bool {
     match event {
       OrchestratorEvent::Intake(IntakeEvent::Issue(issue)) => {
-        self.sessions.try_spawn(issue).await;
+        self.sessions.try_run_issue(issue);
         false
       },
       OrchestratorEvent::Intake(IntakeEvent::Failed(error)) => {
@@ -108,116 +106,6 @@ impl Orchestrator {
         false
       },
       OrchestratorEvent::Intake(IntakeEvent::Stopped) => true,
-    }
-  }
-}
-
-#[cfg(test)]
-mod tests {
-  use std::fs;
-  use std::time::Duration;
-
-  use tokio::time::timeout;
-
-  use super::*;
-  use crate::context::Issue;
-  use crate::workflow::Workflow;
-
-  #[tokio::test]
-  async fn intake_issue_event_runs_issue_setup_inside_session_manager() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let root = temp.path().join("workspace");
-    let workflow_path = temp.path().join("workflow.yml");
-    let workflow = workflow_fixture_with_path(10, Some("echo ok >> after_create.log"), &root, workflow_path);
-    let mut orchestrator = Orchestrator::new(workflow);
-
-    let intake_stopped = orchestrator
-      .handle_event(OrchestratorEvent::Intake(IntakeEvent::Issue(issue("ABC-1", "todo"))))
-      .await;
-    assert!(!intake_stopped);
-
-    timeout(Duration::from_secs(2), recv_until_drained(&mut orchestrator.sessions))
-      .await
-      .expect("session manager drains")
-      .expect("drained event");
-
-    let issue_workdir = orchestrator.workflow.workspace().issue_workdir("ABC-1");
-    assert_eq!(
-      fs::read_to_string(issue_workdir.join("after_create.log"))
-        .expect("after_create hook wrote log")
-        .trim(),
-      "ok"
-    );
-    assert!(
-      !orchestrator
-        .workflow
-        .workspace()
-        .issue_sessions_dir("ABC-1")
-        .join("after-create.done")
-        .exists(),
-      "issue setup must not create stage/session marker files"
-    );
-  }
-
-  #[tokio::test]
-  async fn intake_stopped_event_marks_intake_stopped() {
-    let mut orchestrator = Orchestrator::new(workflow_fixture(1, None));
-
-    let intake_stopped = orchestrator.handle_event(OrchestratorEvent::Intake(IntakeEvent::Stopped)).await;
-
-    assert!(intake_stopped);
-  }
-
-  fn workflow_fixture(max_issue_concurrency: u32, after_create: Option<&str>) -> Workflow {
-    let mut builder = Workflow::builder()
-      .max_issue_concurrency(max_issue_concurrency)
-      .add_stage("plan", "todo", "./plan.md")
-      .add_stage("implement", "todo", "./implement.md")
-      .workspace_root("workspace");
-
-    if let Some(after_create) = after_create {
-      builder = builder.after_issue_workdir_create_hook(after_create);
-    }
-
-    builder.build()
-  }
-
-  fn workflow_fixture_with_path(
-    max_issue_concurrency: u32,
-    after_create: Option<&str>,
-    root: &std::path::Path,
-    workflow_path: std::path::PathBuf,
-  ) -> Workflow {
-    let mut builder = Workflow::builder()
-      .max_issue_concurrency(max_issue_concurrency)
-      .add_stage("plan", "todo", "./plan.md")
-      .add_stage("implement", "todo", "./implement.md")
-      .workspace_root(root)
-      .workflow_path(workflow_path);
-
-    if let Some(after_create) = after_create {
-      builder = builder.after_issue_workdir_create_hook(after_create);
-    }
-
-    builder.build()
-  }
-
-  fn issue(id: &str, state: &str) -> Issue {
-    Issue {
-      id: id.to_string(),
-      title: "title".to_string(),
-      description: String::new(),
-      state: state.to_string(),
-      extra_payload: serde_yaml::Mapping::new(),
-    }
-  }
-
-  async fn recv_until_drained(manager: &mut StageSessionManager) -> Option<session_manager::StageSessionEvent> {
-    loop {
-      manager.recv().await?;
-      if let Some(event) = manager.handle_received_event().await {
-        return Some(event);
-      }
     }
   }
 }

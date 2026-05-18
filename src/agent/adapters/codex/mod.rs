@@ -8,16 +8,19 @@
 //!
 //! Prompt is written to stdin; Codex blocks until EOF.
 //!
-//! Codex emits two event shapes today and we accept both: the legacy
-//! `{"msg": {"type": ...}}` envelope and the newer flat
+//! Codex emits flat JSONL events such as
 //! `{"type": "thread.started" | "item.completed" | "turn.completed"}`.
-//! Unknown shapes log at DEBUG and drop — the stream must survive new
-//! event kinds shipped by Codex.
+//! Unknown shapes log at DEBUG and emit `AgentEvent::Unknown` with the
+//! full parsed provider JSON so future Codex event kinds stay visible
+//! in session JSONL.
+
+mod events;
 
 use serde_json::Value;
 
-use super::{AgentAdapter, AgentCommand, AgentEvent, AgentStdin, build_extra_args};
+use super::{AgentAdapter, AgentCommand, AgentEvent, AgentStdin, ToolCallPhase, build_extra_args};
 use crate::config::AgentProfileSchema;
+use events::{CodexEvent, ThreadItem};
 
 const CODEX_PROGRAM: &str = "codex";
 
@@ -45,160 +48,103 @@ impl AgentAdapter for CodexAdapter {
 }
 
 fn map_events(value: &Value) -> Vec<AgentEvent> {
-  // Try the legacy nested-`msg` form first; if that misses, fall through
-  // to the flat `type` form. Trying both lets us cope with mixed
-  // streams from different Codex CLI versions in one run.
-  if let Some(event) = map_value(value) {
-    return vec![event];
-  }
-
-  let Some(ty) = value.get("type").and_then(Value::as_str) else {
-    return Vec::new();
+  let Ok(event) = events::parse(value) else {
+    return vec![unknown_event(value)];
   };
 
-  match ty {
-    "thread.started" => value
-      .get("thread_id")
-      .and_then(Value::as_str)
-      .map(|session_id| {
-        vec![AgentEvent::SessionStarted {
-          session_id: session_id.to_string(),
-        }]
-      })
-      .unwrap_or_default(),
-    "item.completed" => map_current_item_completed(value),
-    "turn.completed" => map_current_turn_completed(value),
-    "error" => vec![AgentEvent::Error {
-      detail: value.get("message").and_then(Value::as_str).unwrap_or("").to_string(),
-    }],
-    other => {
+  match event {
+    CodexEvent::ThreadStarted { thread_id } => vec![AgentEvent::SessionStarted { session_id: thread_id }],
+    CodexEvent::ItemStarted { item } => map_current_item(value, item, ToolCallPhase::Request),
+    CodexEvent::ItemCompleted { item } => map_current_item(value, item, ToolCallPhase::Result),
+    CodexEvent::TurnCompleted { usage } => map_current_turn_completed(usage),
+    CodexEvent::TurnFailed { error } => vec![AgentEvent::Error { detail: error.message }],
+    CodexEvent::Error { message } => vec![AgentEvent::Error { detail: message }],
+    CodexEvent::TurnStarted | CodexEvent::ItemUpdated | CodexEvent::Unknown => {
       tracing::debug!(
         runtime = "codex",
-        codex_event_type = other,
-        "codex event ignored: unknown type",
+        codex_event_type = events::event_type(value).as_deref().unwrap_or("unknown"),
+        "codex event retained as unknown",
       );
-      Vec::new()
+      vec![unknown_event(value)]
     },
   }
 }
 
-fn map_current_item_completed(value: &Value) -> Vec<AgentEvent> {
-  let Some(item) = value.get("item") else {
-    return Vec::new();
-  };
-  let Some(item_type) = item.get("type").and_then(Value::as_str) else {
-    return Vec::new();
-  };
-
-  match item_type {
-    "agent_message" => vec![AgentEvent::Message {
-      text: item.get("text").and_then(Value::as_str).unwrap_or("").to_string(),
+fn map_current_item(value: &Value, item: ThreadItem, phase: ToolCallPhase) -> Vec<AgentEvent> {
+  match item {
+    ThreadItem::AgentMessage { text, .. } if phase == ToolCallPhase::Result => vec![AgentEvent::Message {
+      text: text.unwrap_or_default(),
     }],
-    _ => Vec::new(),
+    ThreadItem::CommandExecution { id, fields } => {
+      let raw_item = ThreadItem::command_execution_payload(&id, &fields);
+      vec![AgentEvent::ToolCall {
+        call_id: Some(id),
+        name: Some("command_execution".into()),
+        phase,
+        input: (phase == ToolCallPhase::Request).then_some(raw_item.clone()),
+        output: (phase == ToolCallPhase::Result).then_some(raw_item),
+        raw: value.clone(),
+      }]
+    },
+    ThreadItem::McpToolCall {
+      id,
+      tool,
+      arguments,
+      result,
+      error,
+    } => vec![AgentEvent::ToolCall {
+      call_id: Some(id),
+      name: tool,
+      phase,
+      input: (phase == ToolCallPhase::Request).then_some(arguments).flatten(),
+      output: (phase == ToolCallPhase::Result).then(|| result.or(error)).flatten(),
+      raw: value.clone(),
+    }],
+    ThreadItem::CollabToolCall {
+      id,
+      tool,
+      status,
+      receiver_thread_ids,
+    } => vec![AgentEvent::Subagent {
+      call_id: Some(id),
+      action: tool.unwrap_or_else(|| "unknown".into()),
+      status,
+      target_ids: receiver_thread_ids,
+      raw: value.clone(),
+    }],
+    _ => vec![unknown_event(value)],
   }
 }
 
 /// `turn.completed` carries both the per-turn usage and the stream
 /// terminator — fan out into two events so the session sees both.
-fn map_current_turn_completed(value: &Value) -> Vec<AgentEvent> {
-  let mut events = Vec::new();
-  if let Some(usage) = value.get("usage") {
-    events.push(AgentEvent::TokenUsage {
-      input: usage.get("input_tokens").and_then(Value::as_u64).unwrap_or(0),
-      output: usage.get("output_tokens").and_then(Value::as_u64).unwrap_or(0),
-      cache_read: usage.get("cached_input_tokens").and_then(Value::as_u64).unwrap_or(0),
-    });
+fn map_current_turn_completed(usage: Option<events::TokenUsage>) -> Vec<AgentEvent> {
+  match usage {
+    Some(usage) => vec![
+      AgentEvent::TokenUsage {
+        input: usage.input_tokens,
+        output: usage.output_tokens,
+        cache_read: usage.cached_input_tokens,
+      },
+      AgentEvent::Completed,
+    ],
+    None => vec![AgentEvent::Completed],
   }
-  events.push(AgentEvent::Completed);
-  events
 }
 
-/// `pub(super)` so the in-module tests below can drive it directly
-/// without round-tripping through the adapter.
-pub(super) fn map_value(value: &Value) -> Option<AgentEvent> {
-  let msg = value.get("msg")?;
-  let ty = msg.get("type")?.as_str()?;
-
-  match ty {
-    "session_configured" => {
-      // Newer codex versions report session id under `msg.session_id`,
-      // older ones under the outer envelope's `id`. Try both.
-      let session_id = msg
-        .get("session_id")
-        .and_then(Value::as_str)
-        .or_else(|| value.get("id").and_then(Value::as_str))?
-        .to_string();
-      Some(AgentEvent::SessionStarted { session_id })
-    },
-    "agent_message" => {
-      let text = msg
-        .get("message")
-        .and_then(Value::as_str)
-        .or_else(|| msg.get("text").and_then(Value::as_str))
-        .unwrap_or("")
-        .to_string();
-      Some(AgentEvent::Message { text })
-    },
-    "token_count" => {
-      let info = msg.get("info")?;
-      // Prefer the `total_token_usage` subtree when present — it
-      // already represents the cumulative count, so we don't need to
-      // accumulate per-turn deltas ourselves.
-      let totals = info.get("total_token_usage").unwrap_or(info);
-      let input = totals.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
-      let output = totals.get("output_tokens").and_then(Value::as_u64).unwrap_or(0);
-      let cache_read = totals.get("cached_input_tokens").and_then(Value::as_u64).unwrap_or(0);
-      Some(AgentEvent::TokenUsage {
-        input,
-        output,
-        cache_read,
-      })
-    },
-    "rate_limit_warning" | "rate_limit_reset" => {
-      let scope_raw = msg.get("scope").and_then(Value::as_str).unwrap_or("unknown");
-      // Provider prefix keeps Codex limits from colliding with Claude
-      // limits in the session's per-scope map.
-      let scope = format!("codex:{scope_raw}");
-      let remaining = msg.get("remaining").and_then(Value::as_u64).unwrap_or(0);
-      let reset_at = msg
-        .get("reset_at")
-        .and_then(Value::as_str)
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| dt.with_timezone(&chrono::Utc))
-        .unwrap_or_else(chrono::Utc::now);
-      Some(AgentEvent::RateLimit {
-        scope,
-        remaining,
-        reset_at,
-        observed_at: chrono::Utc::now(),
-      })
-    },
-    "turn_complete" | "shutdown_complete" => Some(AgentEvent::Completed),
-    "error" => {
-      let detail = msg.get("message").and_then(Value::as_str).unwrap_or("").to_string();
-      Some(AgentEvent::Error { detail })
-    },
-    other => {
-      tracing::debug!(
-        runtime = "codex",
-        codex_event_type = other,
-        "codex event ignored: unknown type",
-      );
-      None
-    },
+fn unknown_event(value: &Value) -> AgentEvent {
+  AgentEvent::Unknown {
+    event_type: events::event_type(value),
+    raw: value.clone(),
   }
 }
 
 #[cfg(test)]
 mod tests {
   use crate::config::AgentRuntime;
+  use serde_json::json;
 
   use super::*;
-
-  fn parse(line: &str) -> Option<AgentEvent> {
-    let value: Value = serde_json::from_str(line).expect("fixture is valid JSON");
-    map_value(&value)
-  }
 
   fn parse_events(line: &str) -> Vec<AgentEvent> {
     let value: Value = serde_json::from_str(line).expect("fixture is valid JSON");
@@ -206,68 +152,15 @@ mod tests {
   }
 
   #[test]
-  fn session_configured_maps_to_session_started() {
+  fn unsupported_msg_envelope_maps_to_unknown_event_with_raw_payload() {
     let line = r#"{"id":"evt-0","msg":{"type":"session_configured","session_id":"S-1"}}"#;
     assert_eq!(
-      parse(line),
-      Some(AgentEvent::SessionStarted {
-        session_id: "S-1".into(),
-      })
+      parse_events(line),
+      vec![AgentEvent::Unknown {
+        event_type: None,
+        raw: json!({"id": "evt-0", "msg": {"type": "session_configured", "session_id": "S-1"}}),
+      }]
     );
-  }
-
-  #[test]
-  fn agent_message_maps_to_message() {
-    let line = r#"{"id":"evt-1","msg":{"type":"agent_message","message":"hi"}}"#;
-    assert_eq!(parse(line), Some(AgentEvent::Message { text: "hi".into() }));
-  }
-
-  #[test]
-  fn token_count_reads_total_usage() {
-    let line = r#"{"id":"evt-2","msg":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"output_tokens":20,"cached_input_tokens":5}}}}"#;
-    assert_eq!(
-      parse(line),
-      Some(AgentEvent::TokenUsage {
-        input: 10,
-        output: 20,
-        cache_read: 5,
-      })
-    );
-  }
-
-  #[test]
-  fn turn_complete_maps_to_completed() {
-    let line = r#"{"id":"evt-3","msg":{"type":"turn_complete"}}"#;
-    assert_eq!(parse(line), Some(AgentEvent::Completed));
-  }
-
-  #[test]
-  fn unknown_event_is_dropped() {
-    let line = r#"{"id":"evt-4","msg":{"type":"future_event_kind"}}"#;
-    assert_eq!(parse(line), None);
-  }
-
-  #[test]
-  fn rate_limit_emits_scope_prefix() {
-    let line = r#"{"id":"evt-5","msg":{"type":"rate_limit_warning","scope":"tokens_per_min","remaining":100}}"#;
-    match parse(line) {
-      Some(AgentEvent::RateLimit { scope, remaining, .. }) => {
-        assert_eq!(scope, "codex:tokens_per_min");
-        assert_eq!(remaining, 100);
-      },
-      other => panic!("expected RateLimit, got {other:?}"),
-    }
-  }
-
-  #[test]
-  fn error_event_maps_to_provider_error() {
-    let line = r#"{"id":"evt-6","msg":{"type":"error","message":"boom"}}"#;
-    match parse(line) {
-      Some(AgentEvent::Error { detail }) => {
-        assert_eq!(detail, "boom");
-      },
-      other => panic!("expected Error, got {other:?}"),
-    }
   }
 
   #[test]
@@ -282,9 +175,40 @@ mod tests {
   }
 
   #[test]
+  fn current_thread_started_without_thread_id_maps_to_unknown() {
+    let line = r#"{"type":"thread.started"}"#;
+    assert_eq!(
+      parse_events(line),
+      vec![AgentEvent::Unknown {
+        event_type: Some("thread.started".into()),
+        raw: json!({"type": "thread.started"}),
+      }]
+    );
+  }
+
+  #[test]
   fn current_item_completed_agent_message_maps_to_message() {
     let line = r#"{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"hello"}}"#;
     assert_eq!(parse_events(line), vec![AgentEvent::Message { text: "hello".into() }]);
+  }
+
+  #[test]
+  fn current_agent_message_started_maps_to_unknown_event() {
+    let line = r#"{"type":"item.started","item":{"id":"item_0","type":"agent_message","text":""}}"#;
+    assert_eq!(
+      parse_events(line),
+      vec![AgentEvent::Unknown {
+        event_type: Some("item.started".into()),
+        raw: json!({
+          "type": "item.started",
+          "item": {
+            "id": "item_0",
+            "type": "agent_message",
+            "text": ""
+          }
+        }),
+      }]
+    );
   }
 
   #[test]
@@ -300,6 +224,178 @@ mod tests {
         },
         AgentEvent::Completed,
       ]
+    );
+  }
+
+  #[test]
+  fn current_turn_completed_without_usage_still_completes() {
+    let line = r#"{"type":"turn.completed"}"#;
+    assert_eq!(parse_events(line), vec![AgentEvent::Completed]);
+  }
+
+  #[test]
+  fn current_turn_failed_maps_to_provider_error() {
+    let line = r#"{"type":"turn.failed","error":{"message":"boom"}}"#;
+    assert_eq!(parse_events(line), vec![AgentEvent::Error { detail: "boom".into() }]);
+  }
+
+  #[test]
+  fn current_error_event_maps_to_provider_error() {
+    let line = r#"{"type":"error","message":"boom"}"#;
+    assert_eq!(parse_events(line), vec![AgentEvent::Error { detail: "boom".into() }]);
+  }
+
+  #[test]
+  fn current_command_execution_started_maps_to_tool_call_request() {
+    let line = r#"{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc pwd","aggregated_output":"","exit_code":null,"status":"in_progress"}}"#;
+    assert_eq!(
+      parse_events(line),
+      vec![AgentEvent::ToolCall {
+        call_id: Some("item_1".into()),
+        name: Some("command_execution".into()),
+        phase: ToolCallPhase::Request,
+        input: Some(json!({
+          "id": "item_1",
+          "type": "command_execution",
+          "command": "/bin/zsh -lc pwd",
+          "aggregated_output": "",
+          "exit_code": null,
+          "status": "in_progress"
+        })),
+        output: None,
+        raw: json!({
+          "type": "item.started",
+          "item": {
+            "id": "item_1",
+            "type": "command_execution",
+            "command": "/bin/zsh -lc pwd",
+            "aggregated_output": "",
+            "exit_code": null,
+            "status": "in_progress"
+          }
+        }),
+      }]
+    );
+  }
+
+  #[test]
+  fn current_command_execution_completed_maps_to_tool_call_result() {
+    let line = r#"{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc pwd","aggregated_output":"/tmp\n","exit_code":0,"status":"completed"}}"#;
+    assert_eq!(
+      parse_events(line),
+      vec![AgentEvent::ToolCall {
+        call_id: Some("item_1".into()),
+        name: Some("command_execution".into()),
+        phase: ToolCallPhase::Result,
+        input: None,
+        output: Some(json!({
+          "id": "item_1",
+          "type": "command_execution",
+          "command": "/bin/zsh -lc pwd",
+          "aggregated_output": "/tmp\n",
+          "exit_code": 0,
+          "status": "completed"
+        })),
+        raw: json!({
+          "type": "item.completed",
+          "item": {
+            "id": "item_1",
+            "type": "command_execution",
+            "command": "/bin/zsh -lc pwd",
+            "aggregated_output": "/tmp\n",
+            "exit_code": 0,
+            "status": "completed"
+          }
+        }),
+      }]
+    );
+  }
+
+  #[test]
+  fn current_mcp_tool_call_completed_maps_to_tool_call_result() {
+    let line = r#"{"type":"item.completed","item":{"id":"item_2","type":"mcp_tool_call","server":"github","tool":"pulls.get","arguments":{"number":96},"result":{"state":"OPEN"},"status":"completed"}}"#;
+    assert_eq!(
+      parse_events(line),
+      vec![AgentEvent::ToolCall {
+        call_id: Some("item_2".into()),
+        name: Some("pulls.get".into()),
+        phase: ToolCallPhase::Result,
+        input: None,
+        output: Some(json!({"state": "OPEN"})),
+        raw: json!({
+          "type": "item.completed",
+          "item": {
+            "id": "item_2",
+            "type": "mcp_tool_call",
+            "server": "github",
+            "tool": "pulls.get",
+            "arguments": {"number": 96},
+            "result": {"state": "OPEN"},
+            "status": "completed"
+          }
+        }),
+      }]
+    );
+  }
+
+  #[test]
+  fn current_turn_started_maps_to_unknown_event_with_raw_payload() {
+    let line = r#"{"type":"turn.started"}"#;
+    assert_eq!(
+      parse_events(line),
+      vec![AgentEvent::Unknown {
+        event_type: Some("turn.started".into()),
+        raw: json!({"type": "turn.started"}),
+      }]
+    );
+  }
+
+  #[test]
+  fn current_collab_tool_call_maps_to_subagent_event() {
+    let line = r#"{"type":"item.started","item":{"id":"call_2","type":"collab_tool_call","tool":"spawn_agent","status":"in_progress","sender_thread_id":"thread-1","receiver_thread_ids":["thread-3"],"prompt":"scan docs"}}"#;
+    assert_eq!(
+      parse_events(line),
+      vec![AgentEvent::Subagent {
+        call_id: Some("call_2".into()),
+        action: "spawn_agent".into(),
+        status: Some("in_progress".into()),
+        target_ids: vec!["thread-3".into()],
+        raw: json!({
+          "type": "item.started",
+          "item": {
+            "id": "call_2",
+            "type": "collab_tool_call",
+            "tool": "spawn_agent",
+            "status": "in_progress",
+            "sender_thread_id": "thread-1",
+            "receiver_thread_ids": ["thread-3"],
+            "prompt": "scan docs"
+          }
+        }),
+      }]
+    );
+  }
+
+  #[test]
+  fn collab_agent_tool_call_retains_unknown_raw_event() {
+    let line = r#"{"type":"collabAgentToolCall","id":"call_1","tool":"spawnAgent","status":"completed","senderThreadId":"thread-1","receiverThreadIds":["thread-2"],"agentsStates":{},"model":"gpt-5.5","reasoningEffort":"medium","prompt":"scan docs"}"#;
+    assert_eq!(
+      parse_events(line),
+      vec![AgentEvent::Unknown {
+        event_type: Some("collabAgentToolCall".into()),
+        raw: json!({
+          "type": "collabAgentToolCall",
+          "id": "call_1",
+          "tool": "spawnAgent",
+          "status": "completed",
+          "senderThreadId": "thread-1",
+          "receiverThreadIds": ["thread-2"],
+          "agentsStates": {},
+          "model": "gpt-5.5",
+          "reasoningEffort": "medium",
+          "prompt": "scan docs"
+        }),
+      }]
     );
   }
 
@@ -332,29 +428,6 @@ mod tests {
       events.iter().filter(|e| matches!(e, AgentEvent::Completed)).count() == 1,
       "turn.completed yields one Completed"
     );
-  }
-
-  #[test]
-  fn rate_limit_fixture_yields_rate_limit_and_error() {
-    let path = concat!(
-      env!("CARGO_MANIFEST_DIR"),
-      "/tests/fixtures/agent_events/codex/rate_limit_and_error.jsonl"
-    );
-    let body = std::fs::read_to_string(path).expect("fixture present");
-    let mut rl_count = 0usize;
-    let mut saw_error = false;
-    for line in body.lines() {
-      match parse(line) {
-        Some(AgentEvent::RateLimit { scope, .. }) => {
-          assert!(scope.starts_with("codex:"), "scope must be prefixed");
-          rl_count += 1;
-        },
-        Some(AgentEvent::Error { .. }) => saw_error = true,
-        _ => {},
-      }
-    }
-    assert_eq!(rl_count, 2, "warning + reset each yield RateLimit");
-    assert!(saw_error, "fixture includes one provider error line");
   }
 
   #[test]

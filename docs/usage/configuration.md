@@ -53,8 +53,9 @@ vik doctor --strict ./workflow.yml
 vik doctor --json ./workflow.yml
 ```
 
-Current `doctor` checks YAML load and schema diagnostics. It does not check
-prompt file existence, CLI binaries, auth, or external tracker access.
+Current `doctor` checks YAML load and schema diagnostics. It rejects stages
+with zero or multiple prompt sources. It does not check prompt file existence,
+CLI binaries, auth, or external tracker access.
 
 ## Loop
 
@@ -162,19 +163,51 @@ Required issue fields:
 
 Optional issue fields are preserved under `issue` in the prompt and hook
 context. Avoid extra field names that collide with Vik issue bindings such as
-`id`, `title`, `description`, `state`, or `workdir`.
+`id`, `title`, `description`, `state`, `workdir`, or `stage`. In stage prompt
+and hook contexts, `issue.stage` is Vik-owned stage name.
 
 Duplicate issue ids in one intake result are skipped after the first one.
 
 ## Stages
 
-`issue.stages` is an ordered map. Stage keys are user-defined names.
+`issue.stages` is an ordered map. Stage keys are user-defined names. Vik keeps
+that YAML shape and duplicates each key into the stage value as `stage.name`.
 
 Each stage requires:
 
 - `when.state`: exact issue state that triggers the stage.
 - `agent`: agent profile name.
-- `prompt_file`: prompt file for the stage.
+- exactly one prompt source:
+  - `prompt_file`: prompt file for the stage.
+  - `prompt`: inline prompt text for the stage.
+
+Example with a prompt file:
+
+```yaml
+issue:
+  stages:
+    plan:
+      when:
+        state: plan
+      agent: codex-medium
+      prompt_file: ./.agents/prompts/plan.md
+```
+
+Example with inline text:
+
+```yaml
+issue:
+  stages:
+    plan:
+      when:
+        state: plan
+      agent: codex-medium
+      prompt: |
+        Work on issue {{ issue.id }}: {{ issue.title }}.
+```
+
+`prompt_file` and `prompt` are mutually exclusive. A stage with both or neither
+is invalid. `prompt_file` paths resolve from the workflow file directory.
 
 Dispatch uses exact, case-sensitive state match:
 
@@ -205,16 +238,19 @@ wrapper. Hooks do not support prompt command expansion.
 Hook contexts:
 
 - `after_create`: `issue`, `workspace_root`, `workflow_path`, and `env`.
-- stage hooks: same context as `after_create`.
+- stage hooks: same context as `after_create`, plus `issue.stage`.
 
 `issue` contains `id`, `title`, `description`, `state`, `workdir`, and optional
-extra issue fields.
+extra issue fields. Stage hook and prompt contexts also contain `issue.stage`
+for the current stage. Vik does not add root-level `stage`.
 
 Hooks run with current directory set to the issue workspace.
 
-## Prompt Files
+## Prompt Sources
 
-Prompt files are MiniJinja templates. Unknown variables fail rendering.
+Prompt sources are MiniJinja templates. Unknown variables fail rendering. For
+`prompt_file`, Vik reads the file first. For `prompt`, Vik uses the inline text
+directly. Both forms share the same context and command expansion.
 
 Prompt render order:
 
@@ -240,6 +276,7 @@ rendering.
 Stage prompt context includes:
 
 - `issue.id`, `issue.title`, `issue.description`, and `issue.state`.
+- `issue.stage`: current stage name.
 - `issue.workdir`: issue workspace path.
 - optional extra issue fields returned by `issues.pull.command` as
   `issue.<field>`.
@@ -249,8 +286,8 @@ Stage prompt context includes:
 
 Current agent subprocesses run with current directory set to the issue
 workspace. `issue.workdir` exists for prompts that need to print or pass the
-path. Current code does not expose `stage`, `workflow`, `loop`, or `profile`
-template objects.
+path. Current code does not expose root-level `stage`, `workflow`, `loop`, or
+`profile` template objects.
 
 ## Observation
 

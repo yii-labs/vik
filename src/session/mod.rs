@@ -5,7 +5,9 @@
 //! Callers communicate through a small command channel and a state-change
 //! channel. Snapshot reads are explicit commands; normal progress only
 //! emits [`SessionState`] transitions.
-
+//! Decoded provider events append to session JSONL as the durable record.
+//! Semantic events also update the snapshot; observation-only events stay
+//! JSONL-only.
 mod factory;
 mod jsonl_writer;
 mod snapshot;
@@ -28,8 +30,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use crate::agent::{AgentAdapter, AgentCommand, AgentStdin, get_adapter};
-use crate::config::AgentProfileSchema;
+use crate::config::{AgentProfileSchema, IssueStagePromptSource};
 use crate::context::IssueStage;
+use crate::logging::Phase;
 use crate::shell::{Child, CommandExecError, CommandExt};
 use crate::template::{PromptRenderer, TemplateError};
 
@@ -62,6 +65,7 @@ pub enum SessionCommandError {
   SnapshotReplyDropped,
 }
 
+#[derive(Debug)]
 pub struct SessionCommandSender {
   sender: mpsc::Sender<SessionCommand>,
 }
@@ -131,6 +135,13 @@ impl Session {
     profile: AgentProfileSchema,
     shutdown: CancellationToken,
   ) -> (SessionCommandSender, SessionStateReceiver) {
+    let _span = tracing::info_span!(
+      "session",
+      phase = %Phase::StageRun,
+      session_id = tracing::field::Empty,
+    )
+    .entered();
+
     let (command_tx, command_rx) = mpsc::channel(SESSION_COMMAND_BUFFER);
     let (state_tx, state_rx) = mpsc::channel(SESSION_STATE_BUFFER);
     let agent = get_adapter(profile.runtime);
@@ -166,7 +177,7 @@ impl Session {
         return;
       },
       Err(error) => {
-        tracing::error!(error = %error, "session start failed");
+        tracing::error!(error = %error, "start failed");
         self.set_state(SessionState::Failed).await;
         self.log_final_snapshot();
         return;
@@ -179,15 +190,18 @@ impl Session {
 
   async fn prepare_and_spawn(&mut self) -> Result<bool, SessionError> {
     self.set_state(SessionState::Preparing).await;
-    tracing::info!("session preparing");
+    tracing::info!("preparing");
 
     if let Some(parent) = self.stage.log_file().parent() {
       fs::create_dir_all(parent).await?;
     }
 
     self.writer = Some(JsonlWriter::open(self.stage.log_file())?);
+    tracing::debug!(session_log = %self.stage.log_file().display(), "log opened");
 
     let prompt = Self::render_prompt(self.stage.clone()).await?;
+    tracing::debug!("prompt rendered");
+
     let agent_command = self.agent.build_command(&self.profile, prompt);
     if self.shutdown.is_cancelled() {
       self.set_state(SessionState::Cancelled).await;
@@ -204,7 +218,7 @@ impl Session {
     }
 
     self.set_state(SessionState::Running).await;
-    tracing::info!("session running");
+    tracing::info!("running...");
 
     Ok(true)
   }
@@ -409,13 +423,13 @@ impl Session {
       tracing::error!("session jsonl write failed: {err}");
     }
 
-    self.snapshot.last_event_at = Some(Utc::now());
-
     match event {
       AgentEvent::SessionStarted { session_id } => {
+        self.snapshot.last_event_at = Some(Utc::now());
         self.observe_agent_session_id(session_id);
       },
       AgentEvent::Message { text } => {
+        self.snapshot.last_event_at = Some(Utc::now());
         self.snapshot.last_message = Some(text);
       },
       AgentEvent::TokenUsage {
@@ -423,6 +437,10 @@ impl Session {
         output,
         cache_read,
       } => {
+        self.snapshot.last_event_at = Some(Utc::now());
+        // saturating_add tolerates duplicated TokenUsage events
+        // without panicking; providers occasionally report twice on
+        // retry and the totals only grow.
         self.snapshot.tokens.input = self.snapshot.tokens.input.saturating_add(input);
         self.snapshot.tokens.output = self.snapshot.tokens.output.saturating_add(output);
         self.snapshot.tokens.cache_read = self.snapshot.tokens.cache_read.saturating_add(cache_read);
@@ -433,6 +451,10 @@ impl Session {
         reset_at,
         observed_at,
       } => {
+        self.snapshot.last_event_at = Some(Utc::now());
+        // Latest-wins by observation time: a provider retry can land a
+        // stale observation after a newer one, and we want to keep the
+        // most recent ground truth.
         let keep = match self.snapshot.rate_limits.get(&scope) {
           Some(existing) => observed_at >= existing.observed_at,
           None => true,
@@ -449,11 +471,14 @@ impl Session {
         }
       },
       AgentEvent::Completed => {
+        self.snapshot.last_event_at = Some(Utc::now());
         self.set_state(SessionState::Completed).await;
       },
       AgentEvent::Error { detail: _ } => {
+        self.snapshot.last_event_at = Some(Utc::now());
         self.set_state(SessionState::Failed).await;
       },
+      AgentEvent::ToolCall { .. } | AgentEvent::Subagent { .. } | AgentEvent::Unknown { .. } => (),
     }
   }
 
@@ -501,20 +526,26 @@ impl Session {
 
   async fn render_prompt(stage: IssueStage) -> Result<String, SessionError> {
     let renderer = PromptRenderer::new();
-    let prompt_file = stage
-      .workflow()
-      .resolve_path(&stage.stage().prompt_file)
-      .ok_or_else(|| SessionError::PromptPath(stage.stage().prompt_file.clone()))?;
+    let template = match &stage.stage().prompt_source {
+      IssueStagePromptSource::File(prompt_file) => {
+        let prompt_file = stage
+          .workflow()
+          .resolve_path(prompt_file)
+          .ok_or_else(|| SessionError::PromptPath(prompt_file.clone()))?;
 
-    let mut file = File::open(&prompt_file)
-      .await
-      .map_err(|err| SessionError::TemplateRender(TemplateError::Io(err)))?;
+        let mut file = File::open(&prompt_file)
+          .await
+          .map_err(|err| SessionError::TemplateRender(TemplateError::Io(err)))?;
 
-    let mut template = String::new();
-    file
-      .read_to_string(&mut template)
-      .await
-      .map_err(|err| SessionError::TemplateRender(TemplateError::Io(err)))?;
+        let mut template = String::new();
+        file
+          .read_to_string(&mut template)
+          .await
+          .map_err(|err| SessionError::TemplateRender(TemplateError::Io(err)))?;
+        template
+      },
+      IssueStagePromptSource::Inline(prompt) => prompt.clone(),
+    };
 
     Ok(renderer.render(&template, &stage).await?)
   }
@@ -524,17 +555,15 @@ impl Session {
 mod tests {
   use std::sync::Arc;
 
-  use serde_json::Value;
+  use serde_json::{Value, json};
   use tracing_subscriber::{Registry, layer::SubscriberExt};
 
   use super::*;
+  use crate::agent::ToolCallPhase;
   use crate::agent::{AgentAdapter, AgentCommand};
   use crate::config::{AgentProfileSchema, AgentRuntime};
   use crate::context::{Issue, IssueRun};
-  use crate::logging::{
-    stage_span,
-    tests::{CaptureLayer, captured_event, captured_message_exists},
-  };
+  use crate::logging::tests::{CaptureLayer, captured_event, captured_message_exists};
   use crate::workflow::Workflow;
 
   struct NoopAdapter;
@@ -576,6 +605,53 @@ mod tests {
       },
       state_rx,
     )
+  }
+
+  fn matching_stage(workflow: Workflow, issue_id: &str) -> IssueStage {
+    let workflow = Arc::new(workflow);
+    let issue_run = Arc::new(IssueRun::new(Arc::clone(&workflow), issue(issue_id, "todo")));
+    IssueRun::matching_stages(Arc::clone(&issue_run))
+      .into_iter()
+      .next()
+      .expect("stage matches issue state")
+  }
+
+  #[tokio::test]
+  async fn inline_prompt_renders_issue_variables_and_prompt_commands() {
+    let prompt_command = "printf command";
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workflow = Workflow::builder()
+      .workflow_path(temp.path().join("workflow.yml"))
+      .workspace_root(temp.path().join("workspace"))
+      .add_inline_stage(
+        "plan",
+        "todo",
+        format!("plan {{{{ issue.id }}}} !`exec({prompt_command})`"),
+      )
+      .build();
+    let stage = matching_stage(workflow, "ABC-1");
+
+    let prompt = Session::render_prompt(stage).await.expect("prompt renders");
+
+    assert_eq!(prompt, "plan ABC-1 command");
+  }
+
+  #[tokio::test]
+  async fn prompt_file_renders_from_workflow_relative_path() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let prompts_dir = temp.path().join("prompts");
+    std::fs::create_dir(&prompts_dir).expect("prompts dir");
+    std::fs::write(prompts_dir.join("plan.md"), "file {{ issue.id }}").expect("prompt file");
+    let workflow = Workflow::builder()
+      .workflow_path(temp.path().join("workflow.yml"))
+      .workspace_root(temp.path().join("workspace"))
+      .add_stage("plan", "todo", "./prompts/plan.md")
+      .build();
+    let stage = matching_stage(workflow, "ABC-1");
+
+    let prompt = Session::render_prompt(stage).await.expect("prompt renders");
+
+    assert_eq!(prompt, "file ABC-1");
   }
 
   #[tokio::test]
@@ -636,6 +712,126 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn observation_events_write_jsonl_without_snapshot_updates() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("session.jsonl");
+
+    {
+      let (mut task, mut states) = session_task();
+      task.writer = Some(JsonlWriter::open(&path).expect("writer opens"));
+
+      task
+        .apply_event(AgentEvent::ToolCall {
+          call_id: Some("tool-1".into()),
+          name: Some("Bash".into()),
+          phase: ToolCallPhase::Request,
+          input: Some(json!({"command": "ls"})),
+          output: None,
+          raw: json!({"type": "assistant"}),
+        })
+        .await;
+      task
+        .apply_event(AgentEvent::Subagent {
+          call_id: Some("collab-1".into()),
+          action: "spawnAgent".into(),
+          status: Some("completed".into()),
+          target_ids: vec!["thread-2".into()],
+          raw: json!({"type": "collabAgentToolCall"}),
+        })
+        .await;
+      task
+        .apply_event(AgentEvent::Unknown {
+          event_type: Some("future_event_kind".into()),
+          raw: json!({"type": "future_event_kind"}),
+        })
+        .await;
+
+      assert!(matches!(task.snapshot.state, SessionState::UnStarted));
+      assert!(task.snapshot.agent_session_id.is_none());
+      assert!(task.snapshot.last_event_at.is_none());
+      assert!(task.snapshot.last_message.is_none());
+      assert_eq!(task.snapshot.tokens.input, 0);
+      assert_eq!(task.snapshot.tokens.output, 0);
+      assert_eq!(task.snapshot.tokens.cache_read, 0);
+      assert!(task.snapshot.rate_limits.is_empty());
+      assert!(states.try_recv().is_err());
+    }
+
+    let lines = std::fs::read_to_string(&path)
+      .expect("session JSONL reads")
+      .lines()
+      .map(|line| serde_json::from_str(line).expect("line is JSON"))
+      .collect::<Vec<serde_json::Value>>();
+
+    assert_eq!(
+      lines,
+      vec![
+        json!({
+          "kind": "tool_call",
+          "call_id": "tool-1",
+          "name": "Bash",
+          "phase": "request",
+          "input": {"command": "ls"},
+          "output": null,
+          "raw": {"type": "assistant"}
+        }),
+        json!({
+          "kind": "subagent",
+          "call_id": "collab-1",
+          "action": "spawnAgent",
+          "status": "completed",
+          "target_ids": ["thread-2"],
+          "raw": {"type": "collabAgentToolCall"}
+        }),
+        json!({
+          "kind": "unknown",
+          "event_type": "future_event_kind",
+          "raw": {"type": "future_event_kind"}
+        }),
+      ]
+    );
+  }
+
+  #[tokio::test]
+  async fn malformed_jsonl_writes_error_event_and_fails_session() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("session.jsonl");
+    let (mut task, _states) = session_task();
+    task.writer = Some(JsonlWriter::open(&path).expect("writer opens"));
+    task.set_state(SessionState::Running).await;
+
+    let mut child = Command::new("sh")
+      .arg("-c")
+      .arg("printf '%s\n' '{bad-json'")
+      .stdout(Stdio::piped())
+      .spawn()
+      .expect("test child spawns");
+    let stdout = child.stdout.take().expect("stdout piped");
+
+    task.stream_agent_events(stdout).await;
+    let status = child.wait().await.expect("test child exits");
+    assert!(status.success());
+
+    assert!(matches!(task.snapshot.state, SessionState::Failed));
+    task.writer = None;
+
+    let lines = std::fs::read_to_string(&path)
+      .expect("session JSONL reads")
+      .lines()
+      .map(|line| serde_json::from_str(line).expect("line is JSON"))
+      .collect::<Vec<serde_json::Value>>();
+
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["kind"], "error");
+    assert!(
+      lines[0]["detail"]
+        .as_str()
+        .expect("error detail is string")
+        .contains("key must be a string")
+    );
+  }
+
+  #[tokio::test]
   async fn set_state_emits_terminal_log_on_terminal_transition() {
     let (layer, events) = CaptureLayer::new();
     let subscriber = Registry::default().with(layer);
@@ -667,48 +863,6 @@ mod tests {
     let events = events.lock().expect("events mutex");
     let event = captured_event(&events, "agent session id observed");
     assert_eq!(event["session_id"], "sess-123");
-  }
-
-  #[tokio::test]
-  async fn session_started_records_current_stage_span_once() {
-    let (layer, events) = CaptureLayer::new();
-    let subscriber = Registry::default().with(layer);
-
-    let _default = tracing::subscriber::set_default(subscriber);
-    let span = stage_span("86", "implement", "codex");
-    let _entered = span.enter();
-    let (mut task, _states) = session_task();
-
-    task
-      .apply_event(AgentEvent::SessionStarted {
-        session_id: "019e35bf-2163-7c32-af3c-7728a92c94f7".into(),
-      })
-      .await;
-    task
-      .apply_event(AgentEvent::SessionStarted {
-        session_id: "019e35bf-2163-7c32-af3c-7728a92c94f7".into(),
-      })
-      .await;
-    tracing::info!("stage finished");
-
-    assert_eq!(
-      task.snapshot.agent_session_id.as_deref(),
-      Some("019e35bf-2163-7c32-af3c-7728a92c94f7")
-    );
-
-    let events = events.lock().expect("events mutex");
-    let observed_session_logs = events
-      .iter()
-      .filter(|event| event["message"] == "agent session id observed")
-      .collect::<Vec<_>>();
-    assert_eq!(observed_session_logs.len(), 1);
-    assert_eq!(
-      observed_session_logs[0]["session_id"],
-      "019e35bf-2163-7c32-af3c-7728a92c94f7"
-    );
-
-    let stage_finished = captured_event(&events, "stage finished");
-    assert_eq!(stage_finished["session_id"], "019e35bf-2163-7c32-af3c-7728a92c94f7");
   }
 
   #[tokio::test]
@@ -759,9 +913,13 @@ mod tests {
         .build(),
     );
     let issue_run = Arc::new(IssueRun::new(Arc::clone(&workflow), issue(issue_id, state)));
-    let schema = workflow.stages().get(stage_name).expect("stage fixture exists").clone();
+    let schema = workflow
+      .stages()
+      .find(|stage| stage.name == stage_name)
+      .expect("stage fixture exists")
+      .clone();
 
-    IssueStage::new(issue_run, stage_name.to_string(), schema)
+    IssueStage::new(issue_run, schema)
   }
 
   fn issue(id: &str, state: &str) -> Issue {
