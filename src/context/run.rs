@@ -91,7 +91,6 @@ impl IssueRun {
     issue_run
       .workflow()
       .stages()
-      .iter()
       .filter(|stage| stage.when.state == issue_run.issue.state)
       .map(|stage| IssueStage::new(Arc::clone(&issue_run), stage.clone()))
       .collect()

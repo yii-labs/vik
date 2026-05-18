@@ -761,7 +761,6 @@ mod tests {
     let issue_run = Arc::new(IssueRun::new(Arc::clone(&workflow), issue(issue_id, state)));
     let schema = workflow
       .stages()
-      .iter()
       .find(|stage| stage.name == stage_name)
       .expect("stage fixture exists")
       .clone();

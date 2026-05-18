@@ -6,7 +6,6 @@
 //! dispatches against `issue.state`. Splitting them keeps intake config
 //! editable without touching the stage map.
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 
 use indexmap::IndexMap;
@@ -55,11 +54,10 @@ pub struct IssueHandlingSchema {
   #[serde(default)]
   pub hooks: IssueHooks,
 
-  /// Authored YAML stays a name-keyed map, but runtime code sees an ordered
-  /// list. The custom deserializer copies each map key into
-  /// [`IssueStageSchema::name`] and preserves author order.
+  /// Authored YAML stays a name-keyed map. The custom deserializer copies
+  /// each map key into [`IssueStageSchema::name`] and preserves author order.
   #[serde(deserialize_with = "deserialize_stages")]
-  pub stages: Vec<IssueStageSchema>,
+  pub stages: IndexMap<String, IssueStageSchema>,
 
   #[serde(flatten)]
   unknown_fields: serde_yaml::Mapping,
@@ -170,16 +168,8 @@ impl Diagnose for IssueHandlingSchema {
 
     diagnostics.error_if_empty_map("stages", self.stages.is_empty());
     if !self.stages.is_empty() {
-      let mut names = HashSet::new();
-      self.stages.iter().for_each(|stage| {
+      self.stages.values().for_each(|stage| {
         diagnostics.error_if_empty_str("stages", &stage.name);
-        if !stage.name.trim().is_empty() && !names.insert(stage.name.as_str()) {
-          let pointer = stage_pointer(&stage.name);
-          diagnostics.push(Diagnostic::error(
-            &pointer,
-            DiagnosticCode::DuplicateStageName(stage.name.clone()),
-          ));
-        }
         diagnostics.extends_with_pointer(&stage_pointer(&stage.name), stage.diagnose(schema));
       });
     }
@@ -191,21 +181,14 @@ impl Diagnose for IssueHandlingSchema {
   }
 }
 
-fn deserialize_stages<'de, D>(deserializer: D) -> Result<Vec<IssueStageSchema>, D::Error>
+fn deserialize_stages<'de, D>(deserializer: D) -> Result<IndexMap<String, IssueStageSchema>, D::Error>
 where
   D: serde::Deserializer<'de>,
 {
-  let stages = IndexMap::<String, IssueStageSchema>::deserialize(deserializer)?;
+  let mut stages = IndexMap::<String, IssueStageSchema>::deserialize(deserializer)?;
+  stages.iter_mut().for_each(|(name, stage)| stage.name = name.clone());
 
-  Ok(
-    stages
-      .into_iter()
-      .map(|(name, mut stage)| {
-        stage.name = name;
-        stage
-      })
-      .collect(),
-  )
+  Ok(stages)
 }
 
 fn stage_pointer(stage_name: &str) -> String {
@@ -356,7 +339,7 @@ stages:
     .expect("issue schema parses");
 
     assert_eq!(
-      issue.stages.iter().map(|stage| stage.name.as_str()).collect::<Vec<_>>(),
+      issue.stages.values().map(|stage| stage.name.as_str()).collect::<Vec<_>>(),
       ["plan", "implement"]
     );
   }
@@ -422,19 +405,6 @@ stages:
   }
 
   #[test]
-  fn issue_stages_report_duplicate_internal_names() {
-    let mut issue = IssueHandlingSchema::default();
-    issue.stages.push(stage("plan", "todo"));
-    issue.stages.push(stage("plan", "work"));
-
-    let diagnostics = issue.diagnose(&workflow_with_agent());
-
-    assert!(diagnostics.errors.iter().any(|diag| {
-      diag.pointer == "stages.plan" && matches!(&diag.code, DiagnosticCode::DuplicateStageName(name) if name == "plan")
-    }));
-  }
-
-  #[test]
   fn issue_stages_derive_name_from_map_key_not_authored_field() {
     let issue: IssueHandlingSchema = serde_yaml::from_str(
       r#"
@@ -451,7 +421,7 @@ stages:
 
     let diagnostics = issue.diagnose(&workflow_with_agent());
 
-    assert_eq!(issue.stages[0].name, "plan");
+    assert_eq!(issue.stages.get("plan").expect("plan stage").name, "plan");
     assert!(
       diagnostics
         .warnings
@@ -467,11 +437,5 @@ stages:
       AgentProfileSchema::new(AgentRuntime::Codex, "gpt-5.5".to_string()),
     );
     workflow
-  }
-
-  fn stage(name: &str, state: &str) -> IssueStageSchema {
-    let mut stage = IssueStageSchema::new(state).with_name(name).with_prompt_file("./prompt.md");
-    stage.agent = "codex".to_string();
-    stage
   }
 }

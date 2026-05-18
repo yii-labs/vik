@@ -171,8 +171,7 @@ Duplicate issue ids in one intake result are skipped after the first one.
 ## Stages
 
 `issue.stages` is an ordered map. Stage keys are user-defined names. Vik keeps
-that YAML shape, then stores stages internally as ordered entries with the key
-as the stage name.
+that YAML shape and duplicates each key into the stage value as `stage.name`.
 
 Each stage requires:
 
