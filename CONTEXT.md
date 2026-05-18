@@ -94,8 +94,7 @@ _Avoid_: direct adapter calls from orchestrator
 - A runtime **Issue Stage** belongs to one **Issue Run** and extends the Issue
   Run context with `issue.stage.name` when rendering hooks, rendering prompts,
   and spawning a Session.
-- If tracker payload already has `stage`, stage context preserves it at
-  `issue.stage.value`.
+- In stage hook and prompt context, `issue.stage` is Vik-owned metadata.
 - `issue.state == issue.stages.<name>.when.state` is the only dispatch rule.
 - Stage iteration preserves workflow author order.
 - Orchestrator reserves `(issue.id, stage.name)` before async setup so
