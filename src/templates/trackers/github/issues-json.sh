@@ -1,5 +1,5 @@
 gh issue list --label "vik" --state "open" --limit 50 \
-  --search 'label:__STAGE_LABELS__ -label:blocked sort:created-asc' \
+  --search '-label:blocked sort:created-asc' \
   --json number,title,labels \
   --jq '
     [

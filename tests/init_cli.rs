@@ -85,7 +85,9 @@ fn init_generates_symphony_github_setup_and_doctor_accepts_it() {
   assert!(script_body.starts_with("gh issue list"));
   assert!(script_body.contains("gh issue list"));
   assert!(script_body.contains("--label \"vik\""));
-  assert!(script_body.contains("label:plan,rework,work,review,merge -label:blocked"));
+  assert!(script_body.contains("--search '-label:blocked sort:created-asc'"));
+  assert!(script_body.contains(". == \"plan\" or . == \"rework\" or . == \"work\""));
+  assert!(!script_body.contains("label:plan,rework,work,review,merge"));
   assert!(!script_body.contains("label:plan,label:work,label:rework,label:review,label:merge"));
 
   let prompt = std::fs::read_to_string(temp.path().join(".agents/prompts/work.md")).expect("read prompt");

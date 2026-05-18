@@ -149,14 +149,11 @@ pub(crate) fn linear_tracker() -> TrackerTemplate {
 
 fn render_github_script(script: &'static str, stages: &[StageTemplate]) -> String {
   let labels = stages.iter().map(|stage| stage.state).collect::<Vec<_>>();
-  let search_labels = labels.join(",");
   let jq_states = labels
     .iter()
     .map(|label| format!(". == \"{label}\""))
     .collect::<Vec<_>>()
     .join(" or ");
 
-  script
-    .replace("__STAGE_LABELS__", &search_labels)
-    .replace("__JQ_STATES__", &jq_states)
+  script.replace("__JQ_STATES__", &jq_states)
 }
