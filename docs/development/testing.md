@@ -36,7 +36,7 @@ Prefer TDD for behavior changes and bug fixes.
 
 ## Logging Fixtures
 
-- `CaptureLayer` in logging module is designed for tests need to log content assertions.
+- `CaptureLayer` in logging module is designed for tests that need log content assertions.
 
 ## Validation
 

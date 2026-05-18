@@ -288,33 +288,54 @@ impl SessionTask {
   }
 
   async fn wait_child(&mut self) {
-    let Some(child) = &mut self.child else {
+    let Some(mut child) = self.child.take() else {
       return;
     };
 
-    match child.wait().await {
-      Ok(status) => {
-        if !status.success() {
-          tracing::warn!(status = %status, "session child exited unsuccessfully");
-          if !self.snapshot.state.is_terminated() {
-            self.set_state(SessionState::Failed).await;
+    let mut commands_closed = false;
+
+    loop {
+      tokio::select! {
+        status = child.wait() => {
+          match status {
+            Ok(status) => {
+              if !status.success() {
+                tracing::warn!(status = %status, "session child exited unsuccessfully");
+                if !self.snapshot.state.is_terminated() {
+                  self.set_state(SessionState::Failed).await;
+                }
+              }
+            },
+            Err(error) => {
+              tracing::warn!(error = %error, "session child wait failed");
+              if !self.snapshot.state.is_terminated() {
+                self.set_state(SessionState::Failed).await;
+              }
+            },
           }
-        }
-      },
-      Err(error) => {
-        tracing::warn!(error = %error, "session child wait failed");
-        if !self.snapshot.state.is_terminated() {
-          self.set_state(SessionState::Failed).await;
-        }
-      },
+
+          self.child = Some(child);
+          return;
+        },
+        command = self.commands.recv(), if !commands_closed => {
+          match command {
+            Some(command) => self.handle_command_with_child(command, Some(&child)).await,
+            None => commands_closed = true,
+          }
+        },
+      }
     }
   }
 
   async fn handle_command(&mut self, command: SessionCommand) {
+    self.handle_command_with_child(command, None).await;
+  }
+
+  async fn handle_command_with_child(&mut self, command: SessionCommand, child: Option<&Child>) {
     match command {
       SessionCommand::Cancel => {
         tracing::info!("session cancelling");
-        if let Some(child) = &self.child {
+        if let Some(child) = child.or(self.child.as_ref()) {
           child.cancel();
         }
         self.set_state(SessionState::Cancelled).await;
@@ -392,10 +413,7 @@ impl SessionTask {
       },
       None => {
         tracing::info!(session_id = %session_id, "agent session id observed");
-        let span = tracing::Span::current();
-        if span.has_field("session_id") {
-          span.record("session_id", session_id.as_str());
-        }
+        tracing::Span::current().record("session_id", session_id.as_str());
         self.snapshot.agent_session_id = Some(session_id);
       },
     }

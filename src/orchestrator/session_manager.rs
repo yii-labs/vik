@@ -5,7 +5,7 @@
 //! senders, and drain signalling. The top-level orchestrator only passes
 //! issues in and waits for the manager to become empty.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use thiserror::Error;
@@ -28,6 +28,7 @@ pub(super) struct StageSessionManager {
   stages: HashMap<IssueStageKey, IssueStage>,
   events: mpsc::Receiver<ManagerEvent>,
   event_tx: mpsc::Sender<ManagerEvent>,
+  pending_events: VecDeque<ManagerEvent>,
   shutdown: CancellationToken,
 }
 
@@ -42,6 +43,7 @@ impl StageSessionManager {
       stages: HashMap::new(),
       events,
       event_tx,
+      pending_events: VecDeque::new(),
       shutdown: CancellationToken::new(),
     }
   }
@@ -100,17 +102,22 @@ impl StageSessionManager {
     );
   }
 
-  pub(super) async fn recv(&mut self) -> Option<StageSessionEvent> {
-    while let Some(event) = self.events.recv().await {
-      let was_empty = self.is_empty();
-      self.handle_event(event).await;
+  pub(super) async fn recv(&mut self) -> Option<()> {
+    let event = self.events.recv().await?;
+    self.pending_events.push_back(event);
+    Some(())
+  }
 
-      if !was_empty && self.is_empty() {
-        return Some(StageSessionEvent::Drained);
-      }
+  pub(super) async fn handle_received_event(&mut self) -> Option<StageSessionEvent> {
+    let event = self.pending_events.pop_front()?;
+    let was_empty = self.is_empty();
+    self.handle_event(event).await;
+
+    if !was_empty && self.is_empty() {
+      Some(StageSessionEvent::Drained)
+    } else {
+      None
     }
-
-    None
   }
 
   pub(super) async fn cancel_all(&mut self) {
@@ -261,21 +268,30 @@ impl StageSessionManager {
     let Some(issue_stage) = self.stages.get(key).cloned() else {
       return;
     };
+    let workflow = Arc::clone(&self.workflow);
+    let span = stage_span(
+      &issue_stage.issue().id,
+      issue_stage.stage_name(),
+      &issue_stage.stage().agent,
+    );
 
-    if !matches!(state, SessionState::Cancelled)
-      && let Err(error) = self
-        .workflow
-        .hooks()
-        .after_issue_stage_run(&issue_stage, &issue_stage.stage().hooks.after_run)
-        .await
-    {
-      tracing::error!(
-        error = %error,
-        "issue stage after_run hook failed",
-      );
+    async move {
+      if !matches!(state, SessionState::Cancelled)
+        && let Err(error) = workflow
+          .hooks()
+          .after_issue_stage_run(&issue_stage, &issue_stage.stage().hooks.after_run)
+          .await
+      {
+        tracing::error!(
+          error = %error,
+          "issue stage after_run hook failed",
+        );
+      }
+
+      tracing::info!("stage session exited");
     }
-
-    tracing::info!("stage session exited");
+    .instrument(span)
+    .await;
     self.sessions.remove(key);
     self.stages.remove(key);
   }
@@ -560,7 +576,7 @@ mod tests {
 
     manager.try_spawn(issue("ABC-1", "todo")).await;
 
-    timeout(Duration::from_secs(2), manager.recv())
+    timeout(Duration::from_secs(2), recv_until_drained(&mut manager))
       .await
       .expect("manager drains")
       .expect("drained event");
@@ -656,6 +672,15 @@ mod tests {
       description: String::new(),
       state: state.to_string(),
       extra_payload: serde_yaml::Mapping::new(),
+    }
+  }
+
+  async fn recv_until_drained(manager: &mut StageSessionManager) -> Option<StageSessionEvent> {
+    loop {
+      manager.recv().await?;
+      if let Some(event) = manager.handle_received_event().await {
+        return Some(event);
+      }
     }
   }
 }

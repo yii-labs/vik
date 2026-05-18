@@ -76,10 +76,12 @@ impl Orchestrator {
           }
         }
 
-        drained = self.sessions.recv(), if !self.sessions.is_empty() => {
-          if drained.is_none() {
+        received = self.sessions.recv(), if !self.sessions.is_empty() => {
+          if received.is_none() {
             return Err(OrchestratorError::EventChannelClosed);
           }
+
+          let _ = self.sessions.handle_received_event().await;
         }
       }
     }
@@ -126,7 +128,7 @@ mod tests {
       .await;
     assert!(!intake_stopped);
 
-    timeout(Duration::from_secs(2), orchestrator.sessions.recv())
+    timeout(Duration::from_secs(2), recv_until_drained(&mut orchestrator.sessions))
       .await
       .expect("session manager drains")
       .expect("drained event");
@@ -199,6 +201,15 @@ mod tests {
       description: String::new(),
       state: state.to_string(),
       extra_payload: serde_yaml::Mapping::new(),
+    }
+  }
+
+  async fn recv_until_drained(manager: &mut StageSessionManager) -> Option<session_manager::StageSessionEvent> {
+    loop {
+      manager.recv().await?;
+      if let Some(event) = manager.handle_received_event().await {
+        return Some(event);
+      }
     }
   }
 }
