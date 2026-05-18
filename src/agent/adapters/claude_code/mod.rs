@@ -19,7 +19,7 @@ use serde_json::Value;
 use crate::config::AgentProfileSchema;
 
 use super::{AgentAdapter, AgentCommand, AgentEvent, AgentStdin, ToolCallPhase, build_extra_args};
-use events::{ClaudeEvent, ContentBlock, MessageEvent};
+use events::{ClaudeEvent, ContentBlock, MessageEvent, SystemEvent};
 
 const CLAUDE_PROGRAM: &str = "claude";
 
@@ -52,25 +52,18 @@ impl AgentAdapter for ClaudeCodeAdapter {
 }
 
 pub(super) fn map_value(value: &Value) -> Vec<AgentEvent> {
-  let Some(event) = events::parse(value) else {
+  let Ok(event) = events::parse(value) else {
     return vec![unknown_event(value)];
   };
 
   match event {
-    ClaudeEvent::System(event) => {
-      // Only the `init` subtype reports session_id; other system
-      // subtypes (config dumps, hook outputs) carry data we do not
-      // surface as events.
-      if event.subtype != "init" {
+    ClaudeEvent::System(SystemEvent::Init { session_id }) => {
+      if session_id.is_empty() {
         return vec![unknown_event(value)];
       }
-      if event.session_id.is_empty() {
-        return vec![unknown_event(value)];
-      }
-      vec![AgentEvent::SessionStarted {
-        session_id: event.session_id,
-      }]
+      vec![AgentEvent::SessionStarted { session_id }]
     },
+    ClaudeEvent::System(SystemEvent::Unknown) => vec![unknown_event(value)],
     ClaudeEvent::Assistant(event) => {
       let mut events = Vec::new();
       let text = extract_assistant_text(&event);
@@ -108,7 +101,7 @@ pub(super) fn map_value(value: &Value) -> Vec<AgentEvent> {
     ClaudeEvent::Unknown => {
       tracing::debug!(
         runtime = "claude_code",
-        claude_event_type = event_type(value).unwrap_or("unknown"),
+        claude_event_type = events::event_type(value).as_deref().unwrap_or("unknown"),
         "claude_code event retained as unknown",
       );
       vec![unknown_event(value)]
@@ -136,16 +129,16 @@ fn extract_tool_uses(value: &Value, event: &MessageEvent) -> Vec<AgentEvent> {
   content_blocks(event)
     .iter()
     .filter_map(|block| match block {
-      ContentBlock::ToolUse { id, name, .. } if is_subagent_tool(name) => Some(AgentEvent::Subagent {
+      ContentBlock::ToolUse { id, name, .. } if name.is_subagent() => Some(AgentEvent::Subagent {
         call_id: Some(id.clone()),
-        action: name.clone(),
+        action: name.as_str().into(),
         status: None,
         target_ids: Vec::new(),
         raw: value.clone(),
       }),
       ContentBlock::ToolUse { id, name, input } => Some(AgentEvent::ToolCall {
         call_id: Some(id.clone()),
-        name: Some(name.clone()),
+        name: Some(name.as_str().into()),
         phase: ToolCallPhase::Request,
         input: Some(input.clone()),
         output: None,
@@ -177,21 +170,13 @@ fn extract_tool_results(value: &Value, event: &MessageEvent) -> Vec<AgentEvent> 
 
 fn unknown_event(value: &Value) -> AgentEvent {
   AgentEvent::Unknown {
-    event_type: event_type(value).map(str::to_string),
+    event_type: events::event_type(value),
     raw: value.clone(),
   }
 }
 
 fn content_blocks(event: &MessageEvent) -> &[ContentBlock] {
   event.message.content.blocks()
-}
-
-fn is_subagent_tool(name: &str) -> bool {
-  matches!(name, "Agent" | "Task")
-}
-
-fn event_type(value: &Value) -> Option<&str> {
-  value.get("type").and_then(Value::as_str)
 }
 
 #[cfg(test)]
@@ -212,6 +197,22 @@ mod tests {
       parse(line),
       vec![AgentEvent::SessionStarted {
         session_id: "S-42".into(),
+      }]
+    );
+  }
+
+  #[test]
+  fn non_init_system_event_maps_to_unknown() {
+    let line = r#"{"type":"system","subtype":"hook","payload":{"ok":true}}"#;
+    assert_eq!(
+      parse(line),
+      vec![AgentEvent::Unknown {
+        event_type: Some("system".into()),
+        raw: json!({
+          "type": "system",
+          "subtype": "hook",
+          "payload": {"ok": true}
+        }),
       }]
     );
   }

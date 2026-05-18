@@ -13,9 +13,13 @@ pub(super) enum ClaudeEvent {
 }
 
 #[derive(Debug, Deserialize)]
-pub(super) struct SystemEvent {
-  pub subtype: String,
-  pub session_id: String,
+#[serde(tag = "subtype", rename_all = "snake_case")]
+pub(super) enum SystemEvent {
+  Init {
+    session_id: String,
+  },
+  #[serde(other)]
+  Unknown,
 }
 
 #[derive(Debug, Deserialize)]
@@ -60,7 +64,7 @@ pub(super) enum ContentBlock {
   },
   ToolUse {
     id: String,
-    name: String,
+    name: ToolName,
     input: Value,
   },
   ToolResult {
@@ -71,6 +75,41 @@ pub(super) enum ContentBlock {
   },
   #[serde(other)]
   Unknown,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub(super) enum ToolName {
+  Known(KnownToolName),
+  Other(String),
+}
+
+impl ToolName {
+  pub(super) fn as_str(&self) -> &str {
+    match self {
+      Self::Known(name) => name.as_str(),
+      Self::Other(name) => name.as_str(),
+    }
+  }
+
+  pub(super) fn is_subagent(&self) -> bool {
+    matches!(self, Self::Known(KnownToolName::Agent | KnownToolName::Task))
+  }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(super) enum KnownToolName {
+  Agent,
+  Task,
+}
+
+impl KnownToolName {
+  fn as_str(&self) -> &'static str {
+    match self {
+      Self::Agent => "Agent",
+      Self::Task => "Task",
+    }
+  }
 }
 
 #[derive(Debug, Deserialize)]
@@ -88,6 +127,16 @@ pub(super) struct TokenUsage {
   pub cache_read_input_tokens: u64,
 }
 
-pub(super) fn parse(value: &Value) -> Option<ClaudeEvent> {
-  serde_json::from_value(value.clone()).ok()
+#[derive(Debug, Deserialize)]
+struct EventType {
+  #[serde(rename = "type")]
+  kind: String,
+}
+
+pub(super) fn parse(value: &Value) -> Result<ClaudeEvent, serde_json::Error> {
+  serde_json::from_value(value.clone())
+}
+
+pub(super) fn event_type(value: &Value) -> Option<String> {
+  serde_json::from_value::<EventType>(value.clone()).ok().map(|event| event.kind)
 }

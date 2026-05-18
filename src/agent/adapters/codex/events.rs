@@ -1,43 +1,5 @@
 use serde::Deserialize;
-use serde_json::Value;
-
-#[derive(Debug, Deserialize)]
-pub(super) struct LegacyEnvelope {
-  pub id: Option<String>,
-  pub msg: LegacyMessage,
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct LegacyMessage {
-  #[serde(rename = "type")]
-  pub kind: String,
-  pub session_id: Option<String>,
-  pub message: Option<String>,
-  pub text: Option<String>,
-  pub info: Option<LegacyTokenInfo>,
-  pub scope: Option<String>,
-  pub remaining: Option<u64>,
-  pub reset_at: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct LegacyTokenInfo {
-  pub total_token_usage: Option<TokenUsage>,
-  pub input_tokens: Option<u64>,
-  pub output_tokens: Option<u64>,
-  pub cached_input_tokens: Option<u64>,
-}
-
-impl LegacyTokenInfo {
-  pub(super) fn usage(&self) -> TokenUsage {
-    self.total_token_usage.clone().unwrap_or(TokenUsage {
-      input_tokens: self.input_tokens.unwrap_or_default(),
-      output_tokens: self.output_tokens.unwrap_or_default(),
-      cached_input_tokens: self.cached_input_tokens.unwrap_or_default(),
-      reasoning_output_tokens: 0,
-    })
-  }
-}
+use serde_json::{Map, Value};
 
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct TokenUsage {
@@ -54,7 +16,7 @@ pub(super) struct TokenUsage {
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
-pub(super) enum CurrentEvent {
+pub(super) enum CodexEvent {
   #[serde(rename = "thread.started")]
   ThreadStarted { thread_id: String },
   #[serde(rename = "turn.started")]
@@ -82,24 +44,55 @@ pub(super) struct ThreadError {
 }
 
 #[derive(Debug, Deserialize)]
-pub(super) struct ThreadItem {
-  pub id: String,
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(super) enum ThreadItem {
+  AgentMessage {
+    #[allow(dead_code)]
+    id: String,
+    text: Option<String>,
+  },
+  CommandExecution {
+    id: String,
+    #[serde(flatten)]
+    fields: Map<String, Value>,
+  },
+  McpToolCall {
+    id: String,
+    tool: Option<String>,
+    arguments: Option<Value>,
+    result: Option<Value>,
+    error: Option<Value>,
+  },
+  CollabToolCall {
+    id: String,
+    tool: Option<String>,
+    status: Option<String>,
+    #[serde(default)]
+    receiver_thread_ids: Vec<String>,
+  },
+  #[serde(other)]
+  Unknown,
+}
+
+impl ThreadItem {
+  pub(super) fn command_execution_payload(id: &str, fields: &Map<String, Value>) -> Value {
+    let mut payload = fields.clone();
+    payload.insert("id".into(), Value::String(id.into()));
+    payload.insert("type".into(), Value::String("command_execution".into()));
+    Value::Object(payload)
+  }
+}
+
+#[derive(Debug, Deserialize)]
+struct EventType {
   #[serde(rename = "type")]
-  pub kind: String,
-  pub text: Option<String>,
-  pub tool: Option<String>,
-  pub arguments: Option<Value>,
-  pub result: Option<Value>,
-  pub error: Option<Value>,
-  #[serde(default)]
-  pub receiver_thread_ids: Vec<String>,
-  pub status: Option<String>,
+  kind: String,
 }
 
-pub(super) fn parse_legacy(value: &Value) -> Option<LegacyEnvelope> {
-  serde_json::from_value(value.clone()).ok()
+pub(super) fn parse(value: &Value) -> Result<CodexEvent, serde_json::Error> {
+  serde_json::from_value(value.clone())
 }
 
-pub(super) fn parse_current(value: &Value) -> Option<CurrentEvent> {
-  serde_json::from_value(value.clone()).ok()
+pub(super) fn event_type(value: &Value) -> Option<String> {
+  serde_json::from_value::<EventType>(value.clone()).ok().map(|event| event.kind)
 }
