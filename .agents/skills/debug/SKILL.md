@@ -198,8 +198,7 @@ Hook failure:
 - `after_create` context has `issue`, `workspace_root`, `workflow_path`, and `env`.
 - `before_run` and `after_run` context has `issue`, `issue.stage.name`,
   `workspace_root`, `workflow_path`, and `env`.
-- If tracker payload includes `stage`, stage hooks see that tracker value at
-  `issue.stage.value`.
+- In stage hook context, `issue.stage` is Vik-owned metadata.
 - Nonzero stderr tail is capped at 2048 bytes.
 
 Prompt render failure:

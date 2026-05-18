@@ -168,12 +168,8 @@ impl Serialize for IssueStage {
       .get_mut("issue")
       .and_then(serde_json::Value::as_object_mut)
       .ok_or_else(|| serde::ser::Error::custom("issue context must serialize as object"))?;
-    let tracker_stage = issue.remove("stage");
     let mut stage = serde_json::Map::new();
     stage.insert("name".into(), self.stage_name().into());
-    if let Some(value) = tracker_stage {
-      stage.insert("value".into(), value);
-    }
     issue.insert("stage".into(), serde_json::Value::Object(stage));
 
     root.serialize(serializer)
@@ -341,7 +337,7 @@ mod tests {
   }
 
   #[test]
-  fn issue_stage_serialization_preserves_tracker_stage_payload_as_value() {
+  fn issue_stage_serialization_keeps_stage_metadata_reserved() {
     let temp = tempfile::tempdir().expect("tempdir");
     let workflow = Arc::new(
       Workflow::builder()
@@ -364,13 +360,19 @@ mod tests {
     let context = serde_json::to_value(&stage).expect("issue stage serializes");
 
     assert_eq!(context["issue"]["stage"]["name"], "plan");
-    assert_eq!(context["issue"]["stage"]["value"], "tracker-stage");
+    assert!(
+      context["issue"]["stage"]
+        .as_object()
+        .expect("stage metadata object")
+        .get("value")
+        .is_none()
+    );
 
     let rendered = JinjaRenderer::new()
-      .render("{{ issue.stage.name }}|{{ issue.stage.value }}", &stage)
+      .render("{{ issue.stage.name }}", &stage)
       .expect("stage context renders");
 
-    assert_eq!(rendered, "plan|tracker-stage");
+    assert_eq!(rendered, "plan");
   }
 
   #[test]
