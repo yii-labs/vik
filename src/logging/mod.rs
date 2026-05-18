@@ -102,7 +102,9 @@ pub fn init(log_dir: &Path, enable_stdout: bool) -> Result<LoggingGuard, Logging
     .flatten_event(true)
     .with_ansi(false)
     .with_writer(error_writer)
-    .with_filter(EnvFilter::new("error"));
+    .with_filter(tracing_subscriber::filter::filter_fn(|metadata| {
+      metadata.is_span() || *metadata.level() == tracing::Level::ERROR
+    }));
 
   let registry = tracing_subscriber::registry()
     .with(stdout_layer)
@@ -116,7 +118,7 @@ pub fn init(log_dir: &Path, enable_stdout: bool) -> Result<LoggingGuard, Logging
   // Retention failures must not block startup — disk pressure is
   // operator-visible through the warning + filesystem.
   if let Err(err) = retention::prune_old_logs(log_dir, RETENTION_DAYS) {
-    tracing::error_span!("daemon").in_scope(|| {
+    tracing::info_span!("daemon").in_scope(|| {
       tracing::warn!(
         log_dir = %log_dir.display(),
         error = %err,

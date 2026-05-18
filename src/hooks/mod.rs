@@ -147,7 +147,7 @@ impl HookRunner {
     context: Context,
   ) -> Result<(), HookError> {
     let hook_name = kind.as_str();
-    let span = tracing::error_span!(
+    let span = tracing::info_span!(
       "hook",
       hook = %hook_name,
     );

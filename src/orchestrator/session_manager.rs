@@ -46,7 +46,7 @@ impl StageSessionManager {
   }
 
   pub(super) fn try_run_issue(&mut self, issue: Issue) {
-    let _span = tracing::error_span!("issue", issue_id = &issue.id, issue_state = &issue.state).entered();
+    let _span = tracing::info_span!("issue", issue_id = &issue.id, issue_state = &issue.state).entered();
 
     if self.shutdown.is_cancelled() {
       tracing::info!("stage session manager is shutting down; skipping issue this cycle");
@@ -154,7 +154,7 @@ impl StageSessionManager {
       return;
     };
     let stage_names: Vec<&str> = issue_stages.iter().map(|s| s.stage_name()).collect();
-    tracing::error_span!("issue", issue_id = %first.issue().id, issue_state = %first.issue().state).in_scope(|| {
+    tracing::info_span!("issue", issue_id = %first.issue().id, issue_state = %first.issue().state).in_scope(|| {
       tracing::info!(
         stage_names = ?stage_names,
         "issue ready; launching stages",
@@ -167,7 +167,7 @@ impl StageSessionManager {
   }
 
   fn launch_issue_stage(&self, issue_stage: IssueStage) {
-    let _span = tracing::error_span!(
+    let _span = tracing::info_span!(
       "stage",
       issue_id = %issue_stage.issue().id,
       stage = %issue_stage.stage().name,
@@ -231,7 +231,7 @@ impl StageSessionManager {
 
     let workflow = Arc::clone(&self.workflow);
     let event_tx = self.session_events_channel.0.clone();
-    let span = tracing::error_span!(
+    let span = tracing::info_span!(
       "stage",
       issue_id = %issue_stage.issue().id,
       stage = %issue_stage.stage().name,

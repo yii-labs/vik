@@ -54,7 +54,7 @@ pub fn install(shutdown: CancellationToken) -> Result<(), SignalError> {
         tracing::info!("SIGHUP received; ignoring (no reload configured)");
       }
     }
-    .instrument(tracing::error_span!("daemon")),
+    .instrument(tracing::info_span!("daemon")),
   );
 
   Ok(())
@@ -82,7 +82,7 @@ fn install_stream(
         shutdown.cancel();
       }
     }
-    .instrument(tracing::error_span!("daemon")),
+    .instrument(tracing::info_span!("daemon")),
   );
   Ok(())
 }

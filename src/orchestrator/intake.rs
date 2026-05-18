@@ -39,7 +39,7 @@ impl IntakeLoop {
   }
 
   pub(super) fn start(self, shutdown: CancellationToken) -> JoinHandle<()> {
-    let span = tracing::error_span!("intake");
+    let span = tracing::info_span!("intake");
     tokio::spawn(async move { self.run(shutdown).await }.instrument(span))
   }
 

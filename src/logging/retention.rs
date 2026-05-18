@@ -44,7 +44,7 @@ pub(crate) fn prune_with_cutoff(log_dir: &Path, cutoff: NaiveDate) -> std::io::R
     if date < cutoff
       && let Err(err) = std::fs::remove_file(&path)
     {
-      tracing::error_span!("daemon").in_scope(|| {
+      tracing::info_span!("daemon").in_scope(|| {
         tracing::warn!(
           log_file = %path.display(),
           error = %err,
