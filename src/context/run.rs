@@ -168,9 +168,7 @@ impl Serialize for IssueStage {
       .get_mut("issue")
       .and_then(serde_json::Value::as_object_mut)
       .ok_or_else(|| serde::ser::Error::custom("issue context must serialize as object"))?;
-    let mut stage = serde_json::Map::new();
-    stage.insert("name".into(), self.stage_name().into());
-    issue.insert("stage".into(), serde_json::Value::Object(stage));
+    issue.insert("stage".into(), self.stage_name().into());
 
     root.serialize(serializer)
   }
@@ -310,7 +308,7 @@ mod tests {
       .expect("stage matches issue state");
 
     let context = serde_json::to_value(&stage).expect("issue stage serializes");
-    assert_eq!(context["issue"]["stage"]["name"], "plan");
+    assert_eq!(context["issue"]["stage"], "plan");
     assert!(context.get("stage").is_none());
     assert!(
       serde_json::to_value(issue_run.as_ref()).expect("issue run serializes")["issue"]
@@ -320,7 +318,7 @@ mod tests {
 
     let rendered = JinjaRenderer::new()
       .render(
-        "{{ issue.id }}|{{ issue.priority }}|{{ issue.stage.name }}|{{ issue.workdir }}|{{ workflow_path }}|{{ workspace_root }}",
+        "{{ issue.id }}|{{ issue.priority }}|{{ issue.stage }}|{{ issue.workdir }}|{{ workflow_path }}|{{ workspace_root }}",
         &stage,
       )
       .expect("issue stage context renders");
@@ -359,17 +357,10 @@ mod tests {
 
     let context = serde_json::to_value(&stage).expect("issue stage serializes");
 
-    assert_eq!(context["issue"]["stage"]["name"], "plan");
-    assert!(
-      context["issue"]["stage"]
-        .as_object()
-        .expect("stage metadata object")
-        .get("value")
-        .is_none()
-    );
+    assert_eq!(context["issue"]["stage"], "plan");
 
     let rendered = JinjaRenderer::new()
-      .render("{{ issue.stage.name }}", &stage)
+      .render("{{ issue.stage }}", &stage)
       .expect("stage context renders");
 
     assert_eq!(rendered, "plan");

@@ -244,11 +244,11 @@ The `issue` object contains:
 - extra issue payload fields from the pull command
 
 `IssueStage` keeps stage schema and log path for Rust callers. Its `Serialize`
-implementation extends `IssueRun` context with `issue.stage.name`.
+implementation extends `IssueRun` context with `issue.stage`.
 
 `JinjaRenderer` also adds process env under `env`. Bindings like root-level
-`stage.name`, `workspace.root`, `workflow`, `loop`, `profile`, `cwd`, and
-root-level issue fields like `id` are not produced by current code.
+`stage`, `workspace.root`, `workflow`, `loop`, `profile`, `cwd`, and root-level
+issue fields like `id` are not produced by current code.
 
 ## Hooks
 

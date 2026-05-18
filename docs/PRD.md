@@ -83,8 +83,7 @@ when a run stalls, crashes, or restarts.
   - optional `description` or `desc`
 - Extra issue fields are preserved under `issue` in hook and prompt rendering
   context.
-- In stage prompt and hook context, `issue.stage` is Vik-owned metadata and
-  exposes current stage name at `issue.stage.name`.
+- In stage prompt and hook context, `issue.stage` is Vik-owned stage name.
 - Duplicate issue ids in one intake batch: first wins.
 
 ## Dispatch
@@ -192,7 +191,7 @@ Agent subprocess cwd is the issue workspace.
 - one trailing newline is trimmed.
 - non-zero exit fails rendering.
 - Stage prompt context is the same context used by stage hooks.
-- Stage prompt and hook context expose the stage name as `issue.stage.name`.
+- Stage prompt and hook context expose the stage name as `issue.stage`.
 - Prompt context can read `env.<VAR>` from the Vik process environment.
 - Current code does not expose root-level `stage`, `workflow`, `loop`, or
   `profile` template objects.

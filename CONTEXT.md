@@ -92,9 +92,9 @@ _Avoid_: direct adapter calls from orchestrator
 - An **Issue Run** wraps one plain **Issue** with runtime context before any
   Issue Stage can spawn.
 - A runtime **Issue Stage** belongs to one **Issue Run** and extends the Issue
-  Run context with `issue.stage.name` when rendering hooks, rendering prompts,
-  and spawning a Session.
-- In stage hook and prompt context, `issue.stage` is Vik-owned metadata.
+  Run context with `issue.stage` when rendering hooks, rendering prompts, and
+  spawning a Session.
+- In stage hook and prompt context, `issue.stage` is Vik-owned stage name.
 - `issue.state == issue.stages.<name>.when.state` is the only dispatch rule.
 - Stage iteration preserves workflow author order.
 - Orchestrator reserves `(issue.id, stage.name)` before async setup so
@@ -110,7 +110,7 @@ _Avoid_: direct adapter calls from orchestrator
 - Prompt files see `env.<VAR>` from the Vik process environment.
 - `after_create` hook templates see `issue`, `workspace_root`,
   `workflow_path`, and `env`.
-- Stage hook and prompt templates also see `issue.stage.name`.
+- Stage hook and prompt templates also see `issue.stage`.
 - Stage hook and prompt templates do not expose root-level `stage`, `workflow`,
   `loop`, or `profile`.
 - Vik-owned state lives under `<workspace.root>/.vik/`.
