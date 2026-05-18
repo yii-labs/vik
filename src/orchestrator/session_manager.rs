@@ -234,7 +234,7 @@ impl StageSessionManager {
           return;
         }
 
-        let (commands, states) = match factory.spawn_stage(issue_stage.clone()) {
+        let (commands, states) = match factory.spawn_stage(issue_stage.clone(), shutdown.clone()) {
           Ok(session) => session,
           Err(error) => {
             Self::send_manager_event(

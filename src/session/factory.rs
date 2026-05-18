@@ -3,6 +3,7 @@ use std::sync::Arc;
 use super::{SessionCommandSender, SessionError, SessionStateReceiver, SessionTask};
 use crate::agent::get_adapter;
 use crate::{context::IssueStage, workflow::Workflow};
+use tokio_util::sync::CancellationToken;
 
 /// Spawn boundary between the stage-session manager and session task.
 /// Resolving the agent profile here keeps caller setup focused on
@@ -20,6 +21,7 @@ impl SessionFactory {
   pub fn spawn_stage(
     &self,
     issue_stage: IssueStage,
+    shutdown: CancellationToken,
   ) -> Result<(SessionCommandSender, SessionStateReceiver), SessionError> {
     let stage = issue_stage.stage();
     let profile = match self.workflow.agents().get(&stage.agent) {
@@ -35,6 +37,7 @@ impl SessionFactory {
       issue_stage,
       profile.clone(),
       get_adapter(profile.runtime),
+      shutdown,
     ))
   }
 }

@@ -24,6 +24,7 @@ use tokio::fs::{self, File};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdout, Command};
 use tokio::sync::{mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use crate::agent::{AgentAdapter, AgentCommand, AgentStdin};
@@ -116,6 +117,7 @@ struct SessionTask {
   stage: IssueStage,
   profile: AgentProfileSchema,
   agent: Box<dyn AgentAdapter>,
+  shutdown: CancellationToken,
   commands: mpsc::Receiver<SessionCommand>,
   states: mpsc::Sender<SessionState>,
   snapshot: SessionSnapshot,
@@ -128,6 +130,7 @@ impl SessionTask {
     stage: IssueStage,
     profile: AgentProfileSchema,
     agent: Box<dyn AgentAdapter>,
+    shutdown: CancellationToken,
   ) -> (SessionCommandSender, SessionStateReceiver) {
     let (command_tx, command_rx) = mpsc::channel(SESSION_COMMAND_BUFFER);
     let (state_tx, state_rx) = mpsc::channel(SESSION_STATE_BUFFER);
@@ -136,6 +139,7 @@ impl SessionTask {
       stage,
       profile,
       agent,
+      shutdown,
       commands: command_rx,
       states: state_tx,
       snapshot: SessionSnapshot {
@@ -155,7 +159,17 @@ impl SessionTask {
   }
 
   async fn run(mut self) {
-    if let Err(error) = self.prepare_and_spawn().await {
+    let shutdown = self.shutdown.clone();
+    let result = tokio::select! {
+      result = self.prepare_and_spawn() => result,
+      _ = shutdown.cancelled() => {
+        self.set_state(SessionState::Cancelled).await;
+        self.log_final_snapshot();
+        return;
+      },
+    };
+
+    if let Err(error) = result {
       tracing::error!(error = %error, "session start failed");
       self.set_state(SessionState::Failed).await;
       self.log_final_snapshot();
@@ -238,15 +252,24 @@ impl SessionTask {
 
   async fn stream_agent_events(&mut self, stdout: ChildStdout) {
     let mut lines = BufReader::new(stdout).lines();
+    let shutdown = self.shutdown.clone();
+    let mut commands_closed = false;
 
     loop {
       tokio::select! {
-        command = self.commands.recv() => {
-          if let Some(command) = command {
-            self.handle_command(command).await;
-            if self.snapshot.state.is_terminated() {
-              break;
-            }
+        _ = shutdown.cancelled() => {
+          self.cancel_with_child(None).await;
+          break;
+        },
+        command = self.commands.recv(), if !commands_closed => {
+          match command {
+            Some(command) => {
+              self.handle_command(command).await;
+              if self.snapshot.state.is_terminated() {
+                break;
+              }
+            },
+            None => commands_closed = true,
           }
         },
         line = lines.next_line() => {
@@ -293,6 +316,13 @@ impl SessionTask {
     };
 
     let mut commands_closed = false;
+    let mut shutdown_seen = false;
+    let shutdown = self.shutdown.clone();
+
+    if shutdown.is_cancelled() {
+      self.cancel_with_child(Some(&child)).await;
+      shutdown_seen = true;
+    }
 
     loop {
       tokio::select! {
@@ -323,6 +353,10 @@ impl SessionTask {
             None => commands_closed = true,
           }
         },
+        _ = shutdown.cancelled(), if !shutdown_seen => {
+          self.cancel_with_child(Some(&child)).await;
+          shutdown_seen = true;
+        },
       }
     }
   }
@@ -334,16 +368,20 @@ impl SessionTask {
   async fn handle_command_with_child(&mut self, command: SessionCommand, child: Option<&Child>) {
     match command {
       SessionCommand::Cancel => {
-        tracing::info!("session cancelling");
-        if let Some(child) = child.or(self.child.as_ref()) {
-          child.cancel();
-        }
-        self.set_state(SessionState::Cancelled).await;
+        self.cancel_with_child(child).await;
       },
       SessionCommand::Snapshot { reply } => {
         let _ = reply.send(self.snapshot.clone());
       },
     }
+  }
+
+  async fn cancel_with_child(&mut self, child: Option<&Child>) {
+    tracing::info!("session cancelling");
+    if let Some(child) = child.or(self.child.as_ref()) {
+      child.cancel();
+    }
+    self.set_state(SessionState::Cancelled).await;
   }
 
   async fn apply_event(&mut self, event: AgentEvent) {
@@ -508,6 +546,7 @@ mod tests {
         stage,
         profile: AgentProfileSchema::new(AgentRuntime::Codex, "gpt-5.5".to_string()),
         agent: Box::new(NoopAdapter),
+        shutdown: CancellationToken::new(),
         commands: command_rx,
         states: state_tx,
         snapshot: SessionSnapshot {
