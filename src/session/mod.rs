@@ -187,7 +187,7 @@ impl Session {
 
     self.writer = Some(JsonlWriter::open(self.stage.log_file())?);
 
-    let prompt = render_prompt(self.stage.clone()).await?;
+    let prompt = Self::render_prompt(self.stage.clone()).await?;
     let agent_command = self.agent.build_command(&self.profile, prompt);
     if self.shutdown.is_cancelled() {
       self.set_state(SessionState::Cancelled).await;
@@ -498,26 +498,26 @@ impl Session {
       "session finished",
     );
   }
-}
 
-async fn render_prompt(stage: IssueStage) -> Result<String, SessionError> {
-  let renderer = PromptRenderer::new();
-  let prompt_file = stage
-    .workflow()
-    .resolve_path(&stage.stage().prompt_file)
-    .ok_or_else(|| SessionError::PromptPath(stage.stage().prompt_file.clone()))?;
+  async fn render_prompt(stage: IssueStage) -> Result<String, SessionError> {
+    let renderer = PromptRenderer::new();
+    let prompt_file = stage
+      .workflow()
+      .resolve_path(&stage.stage().prompt_file)
+      .ok_or_else(|| SessionError::PromptPath(stage.stage().prompt_file.clone()))?;
 
-  let mut file = File::open(&prompt_file)
-    .await
-    .map_err(|err| SessionError::TemplateRender(TemplateError::Io(err)))?;
+    let mut file = File::open(&prompt_file)
+      .await
+      .map_err(|err| SessionError::TemplateRender(TemplateError::Io(err)))?;
 
-  let mut template = String::new();
-  file
-    .read_to_string(&mut template)
-    .await
-    .map_err(|err| SessionError::TemplateRender(TemplateError::Io(err)))?;
+    let mut template = String::new();
+    file
+      .read_to_string(&mut template)
+      .await
+      .map_err(|err| SessionError::TemplateRender(TemplateError::Io(err)))?;
 
-  Ok(renderer.render(&template, &stage).await?)
+    Ok(renderer.render(&template, &stage).await?)
+  }
 }
 
 #[cfg(test)]
