@@ -1,12 +1,16 @@
-//! `vik init [WORKFLOW]` — generate a starter workflow setup.
+//! `vik init [WORKFLOW]` - generate a starter workflow setup.
 
+use std::fmt::{self, Display};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, ValueEnum};
+use inquire::Select;
 use thiserror::Error;
+
+use crate::templates::{self, TrackerTemplate, WorkflowTemplate};
 
 #[derive(Debug, Parser)]
 pub struct InitArgs {
@@ -108,28 +112,18 @@ impl<T> Choice<T> {
   }
 }
 
+impl<T> Display for Choice<T> {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.write_str(self.label)
+  }
+}
+
 fn prompt_choice<T: Copy>(title: &str, choices: &[Choice<T>], flag: &'static str) -> Result<T, InitError> {
-  let mut stdout = io::stdout();
-  writeln!(stdout, "{title}")?;
-  for (index, choice) in choices.iter().enumerate() {
-    writeln!(stdout, "  {}) {}", index + 1, choice.label)?;
-  }
-
-  loop {
-    write!(stdout, "Select 1-{}: ", choices.len())?;
-    stdout.flush()?;
-
-    let mut input = String::new();
-    if io::stdin().read_line(&mut input)? == 0 {
-      return Err(InitError::MissingChoice { flag });
-    }
-    if let Ok(index) = input.trim().parse::<usize>()
-      && (1..=choices.len()).contains(&index)
-    {
-      return Ok(choices[index - 1].value);
-    }
-    writeln!(stdout, "Invalid choice.")?;
-  }
+  Select::new(title, choices.to_vec())
+    .without_filtering()
+    .prompt()
+    .map(|choice| choice.value)
+    .map_err(|source| InitError::Prompt { flag, source })
 }
 
 struct InitGenerator {
@@ -184,62 +178,25 @@ impl InitGenerator {
   fn files(&self, workflow_dir: &Path) -> Vec<GeneratedFile> {
     let prompt_dir = workflow_dir.join(".agents").join("prompts");
     let scripts_dir = workflow_dir.join("scripts");
-    let stages = self.template.stages();
+    let template = self.template.definition();
+    let tracker = self.tracker.definition();
 
     let mut files = vec![
-      GeneratedFile::plain(self.workflow_path.clone(), self.workflow_yaml()),
+      GeneratedFile::plain(self.workflow_path.clone(), template.render_workflow(tracker)),
       GeneratedFile::executable(
-        scripts_dir.join(self.tracker.script_name()),
-        self.tracker.script(stages),
+        scripts_dir.join(tracker.script_name()),
+        tracker.render_script(template.stages()),
       ),
     ];
 
-    for stage in stages {
+    for stage in template.stages() {
       files.push(GeneratedFile::plain(
         prompt_dir.join(format!("{}.md", stage.name)),
-        prompt(*stage, self.template, self.tracker),
+        template.render_prompt(*stage, tracker),
       ));
     }
 
     files
-  }
-
-  fn workflow_yaml(&self) -> String {
-    let mut yaml = format!(
-      "\
-loop:
-  max_issue_concurrency: 2
-  wait_ms: 5000
-
-workspace:
-  root: .vik
-
-agents:
-  coder:
-    runtime: codex
-    model: gpt-5.5
-
-issues:
-  pull:
-    command: ./scripts/{script_name}
-    idle_sec: {idle_sec}
-
-issue:
-  stages:
-",
-      script_name = self.tracker.script_name(),
-      idle_sec = self.tracker.idle_sec(),
-    );
-
-    for stage in self.template.stages() {
-      yaml.push_str(&format!(
-        "    {name}:\n      when:\n        state: {state}\n      agent: coder\n      prompt_file: ./.agents/prompts/{name}.md\n",
-        name = stage.name,
-        state = stage.state,
-      ));
-    }
-
-    yaml
   }
 }
 
@@ -278,81 +235,20 @@ fn workflow_dir(path: &Path) -> PathBuf {
     .to_path_buf()
 }
 
-#[derive(Clone, Copy)]
-struct Stage {
-  name: &'static str,
-  state: &'static str,
-}
-
-const SYMPHONY_STAGES: &[Stage] = &[
-  Stage {
-    name: "plan",
-    state: "plan",
-  },
-  Stage {
-    name: "work",
-    state: "work",
-  },
-  Stage {
-    name: "rework",
-    state: "rework",
-  },
-  Stage {
-    name: "review",
-    state: "review",
-  },
-  Stage {
-    name: "merge",
-    state: "merge",
-  },
-];
-
-const SIMPLE_STAGES: &[Stage] = &[
-  Stage {
-    name: "work",
-    state: "work",
-  },
-  Stage {
-    name: "review",
-    state: "review",
-  },
-];
-
 impl InitTemplate {
-  fn stages(self) -> &'static [Stage] {
+  fn definition(self) -> WorkflowTemplate {
     match self {
-      InitTemplate::Symphony => SYMPHONY_STAGES,
-      InitTemplate::Simple => SIMPLE_STAGES,
-    }
-  }
-
-  fn name(self) -> &'static str {
-    match self {
-      InitTemplate::Symphony => "Symphony Like",
-      InitTemplate::Simple => "Simple",
+      InitTemplate::Symphony => templates::symphony::template(),
+      InitTemplate::Simple => templates::simple::template(),
     }
   }
 }
 
 impl InitTracker {
-  fn script_name(self) -> &'static str {
+  fn definition(self) -> TrackerTemplate {
     match self {
-      InitTracker::Github => "github-issues-json",
-      InitTracker::Linear => "linear-issues-json",
-    }
-  }
-
-  fn idle_sec(self) -> u64 {
-    match self {
-      InitTracker::Github => 5,
-      InitTracker::Linear => 10,
-    }
-  }
-
-  fn script(self, stages: &[Stage]) -> String {
-    match self {
-      InitTracker::Github => github_script(stages),
-      InitTracker::Linear => linear_script(),
+      InitTracker::Github => templates::github_tracker(),
+      InitTracker::Linear => templates::linear_tracker(),
     }
   }
 }
@@ -401,149 +297,14 @@ impl InitReport {
   }
 }
 
-fn github_script(stages: &[Stage]) -> String {
-  let labels = stages.iter().map(|stage| stage.state).collect::<Vec<_>>();
-  let search_labels = labels
-    .iter()
-    .map(|label| format!("label:{label}"))
-    .collect::<Vec<_>>()
-    .join(",");
-  let jq_states = labels
-    .iter()
-    .map(|label| format!(". == \"{label}\""))
-    .collect::<Vec<_>>()
-    .join(" or ");
-
-  format!(
-    r#"#!/usr/bin/env bash
-set -euo pipefail
-
-gh issue list --label "vik" --state "open" --limit 50 \
-  --search '{search_labels} -label:blocked sort:created-asc' \
-  --json number,title,labels \
-  --jq '
-    [
-      .[]
-      | ([.labels[].name] | map(select({jq_states}))) as $states
-      | select($states | length == 1)
-      | {{ id: (.number | tostring), title: .title, state: $states[0] }}
-    ]
-  '
-"#,
-  )
-}
-
-fn linear_script() -> String {
-  r#"#!/usr/bin/env bash
-set -euo pipefail
-
-: "${LINEAR_API_KEY:?LINEAR_API_KEY is required}"
-TEAM_KEY="${LINEAR_TEAM_KEY:-ENG}"
-
-QUERY='
-query ($teamKey: String!) {
-  issues(
-    filter: { team: { key: { eq: $teamKey } } }
-    first: 50
-    orderBy: createdAt
-  ) {
-    nodes {
-      identifier
-      title
-      state { name }
-    }
-  }
-}'
-
-curl -sS https://api.linear.app/graphql \
-  -H "Authorization: $LINEAR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d "$(jq -n --arg q "$QUERY" --arg teamKey "$TEAM_KEY" '{query: $q, variables: {teamKey: $teamKey}}')" \
-| jq '
-    [
-      .data.issues.nodes[]
-      | { id: .identifier, title: .title, state: .state.name }
-    ]
-  '
-"#
-  .to_string()
-}
-
-fn prompt(stage: Stage, template: InitTemplate, tracker: InitTracker) -> String {
-  format!(
-    r#"# {stage_name} Stage
-
-Template: {template_name}
-Issue: `{{{{ issue.id }}}}`: `{{{{ issue.title }}}}`
-State: `{{{{ issue.state }}}}`
-Workdir: `{{{{ issue.workdir }}}}`
-
-## Start
-
-{tracker_read}
-
-## Work
-
-- Do only the work for this stage.
-- Keep tracker comments current.
-- Move tracker state only after this stage is complete.
-
-## Tracker Operations
-
-{tracker_operations}
-
-## Finish
-
-- Record what changed.
-- Record validation commands and results.
-- Move state to the next workflow state when complete.
-"#,
-    stage_name = stage.name,
-    template_name = template.name(),
-    tracker_read = tracker_read(tracker),
-    tracker_operations = tracker_operations(tracker),
-  )
-}
-
-fn tracker_read(tracker: InitTracker) -> &'static str {
-  match tracker {
-    InitTracker::Github => {
-      r#"Fetch current GitHub issue detail:
-
-!`exec(gh issue view {{ issue.id }} --json number,title,body,state,labels,comments,url,updatedAt)`
-"#
-    },
-    InitTracker::Linear => {
-      r#"Use the Linear MCP `get_issue` tool with `id: "{{ issue.id }}"`.
-Fetch description, state, labels, comments, and attachments.
-"#
-    },
-  }
-}
-
-fn tracker_operations(tracker: InitTracker) -> &'static str {
-  match tracker {
-    InitTracker::Github => {
-      r#"- View issue: `gh issue view {{ issue.id }} --json number,title,body,labels,comments,url`
-- Comment: `gh issue comment {{ issue.id }} --body "..."`
-- Move label state: `gh issue edit {{ issue.id }} --remove-label <old-state> --add-label <new-state>`
-- Link PR: include `Closes #{{ issue.id }}` in the PR body or run `gh pr edit <pr> --body-file <file>`.
-"#
-    },
-    InitTracker::Linear => {
-      r#"- Read issue: Linear MCP `get_issue { id: "{{ issue.id }}" }`.
-- Comment: Linear MCP `create_comment { issueId: "{{ issue.id }}", body: "..." }`.
-- Move state: Linear MCP `update_issue`; first find the target state id with `get_workflow_states`.
-- Attach PR: Linear MCP `create_attachment { issueId: "{{ issue.id }}", url: "<pr-url>", title: "<pr-title>" }`.
-"#
-    },
-  }
-}
-
 #[derive(Debug, Error)]
 enum InitError {
-  #[error("{flag} is required when no prompt answer is available")]
-  MissingChoice { flag: &'static str },
+  #[error("{flag} is required when interactive prompt fails: {source}")]
+  Prompt {
+    flag: &'static str,
+    #[source]
+    source: inquire::InquireError,
+  },
 
   #[error("refusing to overwrite existing file(s): {paths}", paths = display_paths(.paths))]
   WouldOverwrite { paths: Vec<PathBuf> },
@@ -577,9 +338,6 @@ enum InitError {
     #[source]
     source: io::Error,
   },
-
-  #[error(transparent)]
-  Io(#[from] io::Error),
 }
 
 fn display_paths(paths: &[PathBuf]) -> String {

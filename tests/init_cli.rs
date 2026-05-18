@@ -1,8 +1,10 @@
 //! Integration tests for `vik init`.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
+
+#[cfg(unix)]
+use std::time::Duration;
 
 fn vik_bin() -> PathBuf {
   PathBuf::from(env!("CARGO_BIN_EXE_vik"))
@@ -77,7 +79,9 @@ fn init_generates_symphony_github_setup_and_doctor_accepts_it() {
   let script = temp.path().join("scripts").join("github-issues-json");
   let script_body = std::fs::read_to_string(&script).expect("read script");
   assert!(script_body.contains("gh issue list"));
-  assert!(script_body.contains("label:plan,label:work,label:rework,label:review,label:merge"));
+  assert!(script_body.contains("--label \"vik\""));
+  assert!(script_body.contains("label:plan,work,rework,review,merge -label:blocked"));
+  assert!(!script_body.contains("label:plan,label:work,label:rework,label:review,label:merge"));
   assert_executable(&script);
 
   let prompt = std::fs::read_to_string(temp.path().join(".agents/prompts/work.md")).expect("read prompt");
@@ -136,37 +140,24 @@ fn init_generates_simple_linear_setup_and_doctor_accepts_it() {
 }
 
 #[test]
+#[cfg(unix)]
 fn init_prompts_for_missing_choices() {
+  use expectrl::{Eof, Expect, Session};
+
   let temp = tempfile::tempdir().expect("tempdir");
   let workflow = temp.path().join("workflow.yml");
 
-  let mut child = Command::new(vik_bin())
-    .arg("init")
-    .arg(&workflow)
-    .stdin(Stdio::piped())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .spawn()
-    .expect("spawn vik init");
+  let mut command = Command::new(vik_bin());
+  command.arg("init").arg(&workflow);
 
-  child
-    .stdin
-    .as_mut()
-    .expect("stdin")
-    .write_all(b"2\n2\n")
-    .expect("write choices");
-
-  let output = child.wait_with_output().expect("wait vik init");
-  assert!(
-    output.status.success(),
-    "stdout: {}\nstderr: {}",
-    String::from_utf8_lossy(&output.stdout),
-    String::from_utf8_lossy(&output.stderr),
-  );
-
-  let stdout = String::from_utf8(output.stdout).expect("utf-8 stdout");
-  assert!(stdout.contains("Templates?"), "got: {stdout}");
-  assert!(stdout.contains("Issue tracker?"), "got: {stdout}");
+  let mut session = Session::spawn(command).expect("spawn vik init");
+  session.set_expect_timeout(Some(Duration::from_secs(20)));
+  session.expect("Templates?").expect("template prompt");
+  session.send("\x1b[B\r").expect("select simple template");
+  session.expect("Issue tracker?").expect("tracker prompt");
+  session.send("\x1b[B\r").expect("select linear tracker");
+  session.expect("Created Vik workflow setup").expect("created setup");
+  session.expect(Eof).expect("vik init exits");
 
   let workflow_yaml = std::fs::read_to_string(&workflow).expect("read workflow");
   assert!(workflow_yaml.contains("command: ./scripts/linear-issues-json"));

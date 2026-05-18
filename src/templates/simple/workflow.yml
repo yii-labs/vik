@@ -1,0 +1,20 @@
+loop:
+  max_issue_concurrency: 2
+  wait_ms: 5000
+
+workspace:
+  root: .vik
+
+agents:
+  coder:
+    runtime: codex
+    model: gpt-5.5
+
+issues:
+  pull:
+    command: ./scripts/__SCRIPT_NAME__
+    idle_sec: __IDLE_SEC__
+
+issue:
+  stages:
+__STAGES__

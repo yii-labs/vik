@@ -9,6 +9,7 @@ mod orchestrator;
 mod session;
 mod shell;
 mod template;
+mod templates;
 mod utils;
 mod workflow;
 mod workspace;

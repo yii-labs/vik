@@ -69,11 +69,14 @@ pub fn run() -> ExitCode {
     },
   };
 
-  if let Command::Init(args) = cli.command {
-    return init::execute(cli.workflow, args);
-  }
+  let Cli { workflow, command } = cli;
 
-  let loaded = match WorkflowSchemaLoader.load(&cli.workflow) {
+  let command = match command {
+    Command::Init(args) => return init::execute(workflow, args),
+    command => command,
+  };
+
+  let loaded = match WorkflowSchemaLoader.load(&workflow) {
     Ok(loaded) => loaded,
     Err(err) => {
       eprintln!("{err}");
@@ -81,7 +84,7 @@ pub fn run() -> ExitCode {
     },
   };
 
-  match cli.command {
+  match command {
     // Doctor takes the raw schema — it must never instantiate the
     // supervisor because part of its job is to report errors that
     // would prevent supervisor construction.

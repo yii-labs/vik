@@ -1,0 +1,4 @@
+- View issue: `gh issue view {{ issue.id }} --json number,title,body,labels,comments,url`
+- Comment: `gh issue comment {{ issue.id }} --body "..."`
+- Move label state: `gh issue edit {{ issue.id }} --remove-label <old-state> --add-label <new-state>`
+- Link PR: include `Closes #{{ issue.id }}` in the PR body or run `gh pr edit <pr> --body-file <file>`.
