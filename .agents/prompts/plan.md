@@ -33,7 +33,21 @@ When `{{ issue.state }}` is `rework`, treat the task as a full approach reset:
 
 ## Additional Context
 
-- if the skill `grill-me` or `grill-with-docs` available, run with it to tighten the plan.
+- If the skill `grill-me` or `grill-with-docs` is available, use it to tighten
+  the plan before moving the issue to `work`.
+- Vik workflow stages are usually one-shot runs. Do not block only because a
+  grill skill asks interactive questions.
+- Answer any codebase-checkable grill questions by reading the issue, workpad,
+  linked PRs, docs, source, tests, workflow files, and CI state.
+- Ask the user only when missing information makes a safe plan impossible.
+- If missing information blocks the plan, keep the issue in its current state
+  and record the blocker in the active workpad.
+- If the skill `handoff` is available, use it only as a planning aid. The
+  durable handoff is the active `## Vik Workpad` comment.
+- Do not rely on temp files or generated handoff files as the source of truth
+  for the next stage.
+- Summarize any useful `handoff` output back into the workpad before the state
+  transition.
 
 ## Workpad Template
 
