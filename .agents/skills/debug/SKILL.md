@@ -195,8 +195,10 @@ Hook failure:
 - Start in `src/hooks/mod.rs`.
 - Hooks run through `sh -c` on Unix, `cmd /C` on Windows.
 - Timeout is 30 seconds.
-- `after_create` context has only `issue` and `env`.
-- `before_run` and `after_run` context has `cwd`, `workspace`, `issue`, `stage`, `env`.
+- `after_create` context has `issue`, `workspace_root`, `workflow_path`, and `env`.
+- `before_run` and `after_run` context has `issue`, `issue.stage`,
+  `workspace_root`, `workflow_path`, and `env`.
+- In stage hook context, `issue.stage` is Vik-owned stage name.
 - Nonzero stderr tail is capped at 2048 bytes.
 
 Prompt render failure:

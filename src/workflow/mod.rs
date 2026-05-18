@@ -15,7 +15,6 @@ pub mod loader;
 
 use std::path::{Path, PathBuf};
 
-use indexmap::IndexMap;
 use thiserror::Error;
 
 use crate::config::diagnose::Diagnostics;
@@ -53,8 +52,8 @@ impl Workflow {
     &self.schema.agents
   }
 
-  pub fn stages(&self) -> &IndexMap<String, issue::IssueStageSchema> {
-    &self.schema.issue.stages
+  pub fn stages(&self) -> impl ExactSizeIterator<Item = &issue::IssueStageSchema> + '_ {
+    self.schema.issue.stages.values()
   }
 
   pub fn hooks(&self) -> &HookRunner {
