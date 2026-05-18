@@ -131,6 +131,9 @@ fn init_generates_simple_linear_setup_and_doctor_accepts_it() {
   let script_body = std::fs::read_to_string(&script).expect("read script");
   assert!(script_body.contains("LINEAR_API_KEY"));
   assert!(script_body.contains("https://api.linear.app/graphql"));
+  assert!(script_body.contains("STATES='[\"work\",\"review\"]'"));
+  assert!(script_body.contains("state: { name: { in: $states } }"));
+  assert!(script_body.contains("variables: {teamKey: $teamKey, states: $states}"));
 
   let prompt = std::fs::read_to_string(temp.path().join(".agents/prompts/review.md")).expect("read prompt");
   assert!(!prompt.contains("Template:"));

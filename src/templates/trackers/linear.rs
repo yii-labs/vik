@@ -1,7 +1,7 @@
 use super::super::TrackerTemplate;
 
 pub(crate) fn template() -> TrackerTemplate {
-  TrackerTemplate::static_script(
+  TrackerTemplate::linear_script(
     "linear-issues-json",
     10,
     include_str!("linear/issues-json.sh"),

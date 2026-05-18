@@ -73,7 +73,7 @@ pub(crate) struct TrackerTemplate {
 }
 
 impl TrackerTemplate {
-  pub(super) const fn static_script(
+  pub(super) const fn linear_script(
     script_name: &'static str,
     idle_sec: u64,
     script: &'static str,
@@ -83,7 +83,7 @@ impl TrackerTemplate {
     Self {
       script_name,
       idle_sec,
-      script: TrackerScript::Static(script),
+      script: TrackerScript::Linear(script),
       read,
       operations,
     }
@@ -127,16 +127,16 @@ impl TrackerTemplate {
 
   pub(crate) fn render_script(self, stages: &[StageTemplate]) -> String {
     match self.script {
-      TrackerScript::Static(script) => script.to_string(),
       TrackerScript::Github(script) => render_github_script(script, stages),
+      TrackerScript::Linear(script) => render_linear_script(script, stages),
     }
   }
 }
 
 #[derive(Clone, Copy)]
 enum TrackerScript {
-  Static(&'static str),
   Github(&'static str),
+  Linear(&'static str),
 }
 
 pub(crate) fn github_tracker() -> TrackerTemplate {
@@ -156,4 +156,10 @@ fn render_github_script(script: &'static str, stages: &[StageTemplate]) -> Strin
     .join(" or ");
 
   script.replace("__JQ_STATES__", &jq_states)
+}
+
+fn render_linear_script(script: &'static str, stages: &[StageTemplate]) -> String {
+  let states = stages.iter().map(|stage| stage.state).collect::<Vec<_>>();
+  let states_json = serde_json::to_string(&states).expect("stage names serialize");
+  script.replace("__STATE_NAMES_JSON__", &states_json)
 }
