@@ -178,8 +178,8 @@ impl StageSessionManager {
       "stage",
       phase = %Phase::StageRun,
       issue_id = %issue_stage.issue().id,
-      stage_name = %issue_stage.stage().name,
-      agent_profile = %issue_stage.stage().agent,
+      stage = %issue_stage.stage().name,
+      agent = %issue_stage.stage().agent,
     )
     .entered();
 
@@ -243,8 +243,8 @@ impl StageSessionManager {
       "stage",
       phase = %Phase::StageRun,
       issue_id = %issue_stage.issue().id,
-      stage_name = %issue_stage.stage().name,
-      agent_profile = %issue_stage.stage().agent,
+      stage = %issue_stage.stage().name,
+      agent = %issue_stage.stage().agent,
     );
 
     tokio::spawn(
