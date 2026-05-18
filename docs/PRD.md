@@ -141,7 +141,7 @@ today.
 - maps provider stdout JSONL to `AgentEvent`
 - writes decoded events to JSONL
 - tracks `SessionState`, last message, token usage, and rate-limit observations
-- exposes cancellation through the child process wrapper
+- exposes state changes and cancellation through session channels
 
 Session files:
 
