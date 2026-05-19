@@ -52,6 +52,10 @@ impl Serialize for IssueRun {
       self.workflow().workflow_path().to_string_lossy().into(),
     );
     root.insert(
+      "workflow_dir".into(),
+      self.workflow().workflow_dir().to_string_lossy().into(),
+    );
+    root.insert(
       "workspace_root".into(),
       self.workflow().workspace().root().to_string_lossy().into(),
     );
@@ -244,8 +248,9 @@ mod tests {
 
     assert_eq!(
       context["workflow_path"].as_str(),
-      Some(workflow.workflow_path().to_string_lossy().as_ref())
+      temp.path().join("workflow.yml").to_str()
     );
+    assert_eq!(context["workflow_dir"].as_str(), temp.path().to_str());
     assert_eq!(
       context["workspace_root"].as_str(),
       Some(workflow.workspace().root().to_string_lossy().as_ref())

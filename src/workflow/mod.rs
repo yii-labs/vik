@@ -44,6 +44,10 @@ impl Workflow {
     &self.workspace
   }
 
+  pub(crate) fn workflow_dir(&self) -> &Path {
+    &self.workflow_dir
+  }
+
   pub(crate) fn workflow_path(&self) -> &Path {
     &self.workflow_path
   }
