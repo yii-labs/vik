@@ -69,10 +69,11 @@ your editor of choice.
 ## 2. Tell Vik where to put files
 
 Vik keeps logs, per-issue working folders, and session records under
-one workflow-scoped workspace directory. If you omit `workspace.root`,
-Vik uses `VIK_HOME` when set; otherwise it uses your home directory.
+one workflow-scoped workspace directory. If you omit the whole `workspace`
+section, Vik uses `.vik` as the workspace home.
 
-Add to `workflow.yml`:
+You can skip this section for the default workspace. Add this only if you want
+Vik to use `VIK_HOME` when set, or your home directory otherwise:
 
 ```yaml
 workspace: {}

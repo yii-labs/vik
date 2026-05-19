@@ -10,11 +10,6 @@ home directory. Workflow string values do not expand `$VAR` or `${VAR}`.
 Minimal shape:
 
 ```yaml
-loop: {}
-
-workspace:
-  root: ~/code/vik-workspaces
-
 agents:
   codex-medium:
     runtime: codex
@@ -59,11 +54,12 @@ CLI binaries, auth, or external tracker access.
 
 ## Loop
 
-`loop` is required. Its fields are optional.
+`loop` is optional. If it is omitted, Vik uses the default loop values.
+If `loop` is present, its fields are optional.
 
 - `max_issue_concurrency`: maximum active issue ids. Default: `10`.
 - `wait_ms`: parsed today, but current intake scheduling uses
-  `issues.pull.idle_sec`.
+  `issues.pull.idle_sec`. Default: `5000`.
 - `max_iterations`: optional intake loop cap. Omitted means run until shutdown.
 
 The orchestrator does not wait for all stages to finish before future intake
@@ -72,9 +68,13 @@ work.
 
 ## Workspace
 
-`workspace.root` is optional. It names the workspace home. Relative values
-resolve from the workflow file directory. If omitted or null, Vik uses
-`VIK_HOME` when set; otherwise it uses the OS home directory.
+`workspace` is optional. If it is omitted, Vik uses `.vik` as the workspace
+home.
+
+If `workspace` is present, `workspace.root` is optional. It names the workspace
+home. Relative values resolve from the workflow file directory. If
+`workspace.root` is omitted or null, Vik uses `VIK_HOME` when set; otherwise it
+uses the OS home directory.
 
 Vik creates a workflow-scoped workspace root under that home:
 
