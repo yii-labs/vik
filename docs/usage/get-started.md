@@ -73,7 +73,7 @@ one workflow-scoped workspace directory. If you omit the whole `workspace`
 section, Vik uses `.vik` as the workspace home.
 
 You can skip this section for the default workspace. Add this only if you want
-Vik to use `VIK_HOME` when set, or your home directory otherwise:
+Vik to use `VIK_HOME/.vik` when set, or `~/.vik` otherwise:
 
 ```yaml
 workspace: {}
