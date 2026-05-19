@@ -1,11 +1,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use serde::Serialize;
 use thiserror::Error;
 use uuid::Uuid;
 
 use crate::config::IssueStageSchema as StageSchema;
+use crate::context::RenderContext;
 use crate::hooks::HookError;
 use crate::workflow::Workflow;
 
@@ -30,37 +30,25 @@ pub struct IssueRun {
   workdir: PathBuf,
 }
 
-impl Serialize for IssueRun {
-  fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-  where
-    S: serde::Serializer,
-  {
-    let json = serde_json::to_value(&self.issue).map_err(serde::ser::Error::custom)?;
+impl RenderContext for IssueRun {
+  fn as_render_context(&self) -> super::Context {
+    let mut context = self.workflow().as_render_context();
 
-    let mut issue = serde_json::Map::new();
-    if let serde_json::Value::Object(issue_map) = json {
-      for (k, v) in issue_map {
-        issue.insert(k, v);
-      }
-      issue.insert("workdir".into(), self.workdir.to_string_lossy().into());
+    let mut json = match serde_json::to_value(&self.issue) {
+      Ok(json) => json,
+      Err(error) => {
+        tracing::error!("failed to serialize issue for render context: {error}");
+        serde_json::json!({})
+      },
+    };
+
+    if let Some(issue_map) = json.as_object_mut() {
+      issue_map.insert("workdir".into(), self.workdir.to_string_lossy().into());
     }
 
-    let mut root = serde_json::Map::new();
-    root.insert("issue".into(), issue.into());
-    root.insert(
-      "workflow_path".into(),
-      self.workflow().workflow_path().to_string_lossy().into(),
-    );
-    root.insert(
-      "workflow_dir".into(),
-      self.workflow().workflow_dir().to_string_lossy().into(),
-    );
-    root.insert(
-      "workspace_root".into(),
-      self.workflow().workspace().root().to_string_lossy().into(),
-    );
+    context.with_value("issue", json);
 
-    root.serialize(serializer)
+    context
   }
 }
 
@@ -162,19 +150,16 @@ pub struct IssueStage {
   log_file: PathBuf,
 }
 
-impl Serialize for IssueStage {
-  fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-  where
-    S: serde::Serializer,
-  {
-    let mut root = serde_json::to_value(self.issue.as_ref()).map_err(serde::ser::Error::custom)?;
-    let issue = root
-      .get_mut("issue")
-      .and_then(serde_json::Value::as_object_mut)
-      .ok_or_else(|| serde::ser::Error::custom("issue context must serialize as object"))?;
-    issue.insert("stage".into(), self.stage_name().into());
+impl RenderContext for IssueStage {
+  fn as_render_context(&self) -> super::Context {
+    let mut context = self.issue.as_render_context();
 
-    root.serialize(serializer)
+    let issue = context.inner.get_mut("issue").and_then(serde_json::Value::as_object_mut);
+    if let Some(issue) = issue {
+      issue.insert("stage".into(), self.stage_name().into());
+    }
+
+    context
   }
 }
 
@@ -244,7 +229,7 @@ mod tests {
     ));
     let issue_run = IssueRun::new(Arc::clone(&workflow), issue_with_extra("ABC-1", "todo"));
 
-    let context = serde_json::to_value(&issue_run).expect("issue run serializes");
+    let context = serde_json::to_value(issue_run.as_render_context()).expect("issue run serializes");
 
     assert_eq!(
       context["workflow_path"].as_str(),
@@ -281,7 +266,7 @@ mod tests {
     let rendered = JinjaRenderer::new()
       .render(
         "{{ issue.id }}|{{ issue.priority }}|{{ issue.workdir }}|{{ workflow_path }}|{{ workspace_root }}",
-        &issue_run,
+        issue_run.as_render_context(),
       )
       .expect("issue run context renders");
 
@@ -312,28 +297,29 @@ mod tests {
       .next()
       .expect("stage matches issue state");
 
-    let context = serde_json::to_value(&stage).expect("issue stage serializes");
+    let context = serde_json::to_value(stage.as_render_context()).expect("issue stage serializes");
     assert_eq!(context["issue"]["stage"], "plan");
     assert!(context.get("stage").is_none());
     assert!(
-      serde_json::to_value(issue_run.as_ref()).expect("issue run serializes")["issue"]
+      serde_json::to_value(issue_run.as_render_context()).expect("issue run serializes")["issue"]
         .get("stage")
         .is_none()
     );
 
     let rendered = JinjaRenderer::new()
       .render(
-        "{{ issue.id }}|{{ issue.priority }}|{{ issue.stage }}|{{ issue.workdir }}|{{ workflow_path }}|{{ workspace_root }}",
-        &stage,
+        "{{ issue.id }}|{{ issue.priority }}|{{ issue.stage }}|{{ issue.workdir }}|{{ workflow_path }}|{{ workflow_dir }}|{{ workspace_root }}",
+        stage.as_render_context(),
       )
       .expect("issue stage context renders");
 
     assert_eq!(
       rendered,
       format!(
-        "ABC-1|high|plan|{}|{}|{}",
+        "ABC-1|high|plan|{}|{}|{}|{}",
         stage.workdir().display(),
         workflow.workflow_path().display(),
+        workflow.workflow_dir().display(),
         workflow.workspace().root().display()
       )
     );
@@ -360,12 +346,12 @@ mod tests {
       .next()
       .expect("stage matches issue state");
 
-    let context = serde_json::to_value(&stage).expect("issue stage serializes");
+    let context = serde_json::to_value(stage.as_render_context()).expect("issue stage serializes");
 
     assert_eq!(context["issue"]["stage"], "plan");
 
     let rendered = JinjaRenderer::new()
-      .render("{{ issue.stage }}", &stage)
+      .render("{{ issue.stage }}", stage.as_render_context())
       .expect("stage context renders");
 
     assert_eq!(rendered, "plan");

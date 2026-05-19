@@ -31,7 +31,7 @@ use tracing::Instrument;
 
 use crate::agent::{AgentAdapter, AgentCommand, AgentStdin, get_adapter};
 use crate::config::{AgentProfileSchema, IssueStagePromptSource};
-use crate::context::IssueStage;
+use crate::context::{IssueStage, RenderContext};
 use crate::shell::{Child, CommandExecError, CommandExt};
 use crate::template::{PromptRenderer, TemplateError};
 
@@ -541,7 +541,7 @@ impl Session {
       IssueStagePromptSource::Inline(prompt) => prompt.clone(),
     };
 
-    Ok(renderer.render(&template, &stage).await?)
+    Ok(renderer.render(&template, stage.as_render_context()).await?)
   }
 }
 

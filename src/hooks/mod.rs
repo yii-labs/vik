@@ -26,7 +26,7 @@ use serde::Serialize;
 use thiserror::Error;
 use tokio::process::Command;
 
-use crate::context::{IssueRun, IssueStage};
+use crate::context::{IssueRun, IssueStage, RenderContext};
 use crate::shell::{CommandExecError, CommandExt};
 use crate::template::{JinjaRenderer, TemplateError};
 
@@ -121,21 +121,36 @@ impl HookRunner {
   #[inline]
   pub async fn after_issue_workdir_created(&self, issue: &IssueRun, hook: &Option<String>) -> Result<(), HookError> {
     self
-      .schedule_inner(HookKind::AfterIssueWorkdirCreate, issue.workdir(), hook, issue)
+      .schedule_inner(
+        HookKind::AfterIssueWorkdirCreate,
+        issue.workdir(),
+        hook,
+        issue.as_render_context(),
+      )
       .await
   }
 
   #[inline]
   pub async fn before_issue_stage_run(&self, stage: &IssueStage, hook: &Option<String>) -> Result<(), HookError> {
     self
-      .schedule_inner(HookKind::BeforeIssueStageRun, stage.workdir(), hook, stage)
+      .schedule_inner(
+        HookKind::BeforeIssueStageRun,
+        stage.workdir(),
+        hook,
+        stage.as_render_context(),
+      )
       .await
   }
 
   #[inline]
   pub async fn after_issue_stage_run(&self, stage: &IssueStage, hook: &Option<String>) -> Result<(), HookError> {
     self
-      .schedule_inner(HookKind::AfterIssueStageRun, stage.workdir(), hook, stage)
+      .schedule_inner(
+        HookKind::AfterIssueStageRun,
+        stage.workdir(),
+        hook,
+        stage.as_render_context(),
+      )
       .await
   }
 
