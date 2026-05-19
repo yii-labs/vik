@@ -53,7 +53,8 @@ const VIK_HOME_ENV_NAME: &str = "VIK_HOME";
 pub fn default_home() -> PathBuf {
   env::var_os(VIK_HOME_ENV_NAME)
     .map(PathBuf::from)
-    .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from("~/.vik")))
+    .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from("~/")))
+    .join(".vik")
 }
 
 #[cfg(test)]
@@ -121,5 +122,31 @@ mod tests {
     let dir = PathBuf::from("/tmp/workflows");
     let out = resolve_from(&dir, "/etc/vik.yml").expect("absolute path resolves");
     assert_eq!(out, PathBuf::from("/etc/vik.yml"));
+  }
+
+  #[test]
+  fn tilde_expands_before_resolve() {
+    let dir = PathBuf::from("/tmp/workflows");
+    let expected = dirs::home_dir().expect("home dir available in test env").join(".vik");
+    dbg!(&expected);
+    let out = resolve_from(&dir, "~/.vik").expect("tilde expands before resolve");
+    assert_eq!(out, expected);
+  }
+
+  #[test]
+  fn default_home_uses_env_var() {
+    let temp = tempfile::Builder::new().prefix("vik-home-").tempdir().expect("tempdir");
+    let expected = temp.path().join(".vik");
+    unsafe { std::env::set_var(VIK_HOME_ENV_NAME, temp.path()) };
+    let out = default_home();
+    assert_eq!(out, expected);
+  }
+
+  #[test]
+  fn default_home_falls_back_to_user_home() {
+    let expected = dirs::home_dir().expect("home dir available in test env").join(".vik");
+    unsafe { std::env::remove_var(VIK_HOME_ENV_NAME) };
+    let out = default_home();
+    assert_eq!(out, expected);
   }
 }
