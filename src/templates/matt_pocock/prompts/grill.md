@@ -1,4 +1,4 @@
-# grill Stage
+# Stage `grill`
 
 Issue: `{{ issue.id }}`: `{{ issue.title }}`
 State: `{{ issue.state }}`
@@ -6,17 +6,18 @@ Workdir: `{{ issue.workdir }}`
 
 ## Start
 
-__TRACKER_READ__
+Use __TRACKER_SKILL__ to read current tracker detail before stage work.
 
 ## Work
 
 - Use __MATT_GRILL_SKILL__ to challenge the plan and expose missing decisions.
+- Use __MATT_GRILL_WITH_DOCS_SKILL__ when decisions should update durable docs.
 - Keep tracker comments current.
 - Move tracker state only after the grilling notes are clear.
 
 ## Tracker Operations
 
-__TRACKER_OPERATIONS__
+Use __TRACKER_SKILL__ for comments, state moves, and PR links.
 
 ## Finish
 

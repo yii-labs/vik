@@ -1,4 +1,0 @@
-- Read issue: Linear MCP `get_issue { id: "{{ issue.id }}" }`.
-- Comment: Linear MCP `create_comment { issueId: "{{ issue.id }}", body: "..." }`.
-- Move state: Linear MCP `update_issue`; first find the target state id with `get_workflow_states`.
-- Attach PR: Linear MCP `create_attachment { issueId: "{{ issue.id }}", url: "<pr-url>", title: "<pr-title>" }`.

@@ -42,17 +42,8 @@ impl WorkflowTemplate {
       .replace("__STAGES__", &self.render_stages())
   }
 
-  pub(crate) fn render_prompt(
-    self,
-    stage: StageTemplate,
-    tracker: TrackerTemplate,
-    skills: &[SkillNameBinding],
-  ) -> String {
-    let mut prompt = stage
-      .prompt
-      .replace("__TRACKER_READ__", tracker.read())
-      .replace("__TRACKER_OPERATIONS__", tracker.operations());
-
+  pub(crate) fn render_prompt(self, stage: StageTemplate, skills: &[SkillNameBinding]) -> String {
+    let mut prompt = stage.prompt.to_string();
     for skill in skills {
       prompt = prompt.replace(skill.placeholder, &format!("${}", skill.name));
     }
@@ -128,8 +119,7 @@ pub(crate) struct TrackerTemplate {
   script_name: &'static str,
   idle_sec: u64,
   script: TrackerScript,
-  read: &'static str,
-  operations: &'static str,
+  skill: SkillTemplate,
 }
 
 impl TrackerTemplate {
@@ -137,15 +127,13 @@ impl TrackerTemplate {
     script_name: &'static str,
     idle_sec: u64,
     script: &'static str,
-    read: &'static str,
-    operations: &'static str,
+    skill: SkillTemplate,
   ) -> Self {
     Self {
       script_name,
       idle_sec,
       script: TrackerScript::Linear(script),
-      read,
-      operations,
+      skill,
     }
   }
 
@@ -153,15 +141,13 @@ impl TrackerTemplate {
     script_name: &'static str,
     idle_sec: u64,
     script: &'static str,
-    read: &'static str,
-    operations: &'static str,
+    skill: SkillTemplate,
   ) -> Self {
     Self {
       script_name,
       idle_sec,
       script: TrackerScript::Github(script),
-      read,
-      operations,
+      skill,
     }
   }
 
@@ -169,15 +155,13 @@ impl TrackerTemplate {
     script_name: &'static str,
     idle_sec: u64,
     script: &'static str,
-    read: &'static str,
-    operations: &'static str,
+    skill: SkillTemplate,
   ) -> Self {
     Self {
       script_name,
       idle_sec,
       script: TrackerScript::GithubProjects(script),
-      read,
-      operations,
+      skill,
     }
   }
 
@@ -193,12 +177,8 @@ impl TrackerTemplate {
     self.idle_sec
   }
 
-  fn read(self) -> &'static str {
-    self.read
-  }
-
-  fn operations(self) -> &'static str {
-    self.operations
+  pub(crate) fn skill(self) -> SkillTemplate {
+    self.skill
   }
 
   pub(crate) fn render_script(self, stages: &[StageTemplate]) -> String {

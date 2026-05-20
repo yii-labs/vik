@@ -21,6 +21,12 @@ const SKILLS: &[SkillTemplate] = &[
     include_str!("skills/grill-me.md"),
   ),
   SkillTemplate::new(
+    "Grill with docs",
+    "grill-with-docs",
+    "__MATT_GRILL_WITH_DOCS_SKILL__",
+    include_str!("skills/grill-with-docs.md"),
+  ),
+  SkillTemplate::new(
     "Write PRD",
     "to-prd",
     "__MATT_PRD_SKILL__",

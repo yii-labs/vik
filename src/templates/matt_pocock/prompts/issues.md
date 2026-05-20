@@ -1,4 +1,4 @@
-# issues Stage
+# Stage `issues`
 
 Issue: `{{ issue.id }}`: `{{ issue.title }}`
 State: `{{ issue.state }}`
@@ -6,7 +6,7 @@ Workdir: `{{ issue.workdir }}`
 
 ## Start
 
-__TRACKER_READ__
+Use __TRACKER_SKILL__ to read current tracker detail before stage work.
 
 ## Work
 
@@ -18,7 +18,7 @@ __TRACKER_READ__
 
 ## Tracker Operations
 
-__TRACKER_OPERATIONS__
+Use __TRACKER_SKILL__ for comments, state moves, and PR links.
 
 ## Finish
 

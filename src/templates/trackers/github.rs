@@ -1,11 +1,15 @@
-use super::super::TrackerTemplate;
+use super::super::{SkillTemplate, TrackerTemplate};
 
 pub(crate) fn template() -> TrackerTemplate {
   TrackerTemplate::github_script(
     "github-issues-json",
     5,
     include_str!("github/issues-json.sh"),
-    include_str!("github/read.md"),
-    include_str!("github/operations.md"),
+    SkillTemplate::new(
+      "GitHub Issues",
+      "github-issues",
+      "__TRACKER_SKILL__",
+      include_str!("github/skill.md"),
+    ),
   )
 }

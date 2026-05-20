@@ -78,10 +78,13 @@ vik init --template simple --tracker linear ./workflow.yml
 ```
 
 The command refuses to overwrite generated files unless you pass
-`--force`. When a template needs bundled skills and the default skill
+`--force`. Each template also writes the skills its prompts reference,
+including one tracker issue-management skill. When a bundled skill
 folder already exists, interactive `vik init` asks for another skill
 name and updates generated prompt references. Non-interactive mode
-fails on that collision unless you pass `--force`.
+fails on that collision unless you pass `--force`. Rerun
+`vik init --force` when you intentionally want to refresh generated
+workflow, prompt, script, and skill templates.
 
 Open these generated files in your editor:
 
@@ -187,9 +190,10 @@ before pasting it into `issues.pull.command`:
 
 Then compare the generated `issues.pull` block with the tracker guide
 and edit the helper script under `scripts/` for your repo, team, view,
-labels, or states. `idle_sec` controls how long Vik waits between pull
-cycles. Start at `5` for GitHub, `10` for Linear or Feishu Base, then
-tune.
+labels, or states. The matching skill under `.agents/skills/` holds the
+commands for reading, commenting, changing state, and linking PRs.
+`idle_sec` controls how long Vik waits between pull cycles. Start at
+`5` for GitHub, `10` for Linear or Feishu Base, then tune.
 
 ## 5. Tell Vik what to do per state
 

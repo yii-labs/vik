@@ -1,5 +1,0 @@
-- View issue: `gh issue view {{ issue.id }} --json number,title,body,labels,comments,url`
-- Comment: `gh issue comment {{ issue.id }} --body "..."`
-- Move Project Status: `gh project item-edit --id {{ issue.project_item_id }} --project-id "$GITHUB_PROJECT_ID" --field-id "$GITHUB_PROJECT_STATUS_FIELD_ID" --single-select-option-id "$GITHUB_PROJECT_STATUS_OPTION_ID"`
-- Find Project handles: `gh project view "$GITHUB_PROJECT_NUMBER" --owner "$GITHUB_PROJECT_OWNER" --format json --jq .id` and `gh project field-list "$GITHUB_PROJECT_NUMBER" --owner "$GITHUB_PROJECT_OWNER" --format json`.
-- Link PR: include `Closes #{{ issue.id }}` in the PR body or run `gh pr edit <pr> --body-file <file>`.

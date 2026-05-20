@@ -94,10 +94,23 @@ fn init_generates_symphony_github_setup_and_doctor_accepts_it() {
 
   let prompt = std::fs::read_to_string(temp.path().join(".agents/prompts/work.md")).expect("read prompt");
   assert!(!prompt.contains("Template:"));
-  assert!(prompt.contains("gh issue view {{ issue.id }}"));
-  assert!(prompt.contains("gh issue comment {{ issue.id }}"));
-  assert!(prompt.contains("gh issue edit {{ issue.id }}"));
-  assert!(prompt.contains("Closes #{{ issue.id }}"));
+  assert!(prompt.contains("$github-issues"), "got: {prompt}");
+  assert!(prompt.contains("$symphony-workflow"), "got: {prompt}");
+  let tracker_skill =
+    std::fs::read_to_string(temp.path().join(".agents/skills/github-issues/SKILL.md")).expect("read skill");
+  assert!(
+    tracker_skill.contains("gh issue view {{ issue.id }}"),
+    "got: {tracker_skill}"
+  );
+  assert!(
+    tracker_skill.contains("gh issue comment {{ issue.id }}"),
+    "got: {tracker_skill}"
+  );
+  assert!(
+    tracker_skill.contains("gh issue edit {{ issue.id }}"),
+    "got: {tracker_skill}"
+  );
+  assert!(tracker_skill.contains("Closes #{{ issue.id }}"), "got: {tracker_skill}");
 
   let doctor = run_doctor(&workflow);
   assert!(
@@ -106,6 +119,31 @@ fn init_generates_symphony_github_setup_and_doctor_accepts_it() {
     String::from_utf8_lossy(&doctor.stdout),
     String::from_utf8_lossy(&doctor.stderr),
   );
+}
+
+#[test]
+fn init_generates_github_issue_management_skill_and_prompt_reference() {
+  let temp = tempfile::tempdir().expect("tempdir");
+  let workflow = temp.path().join("workflow.yml");
+
+  let output = run_init(&workflow, "simple", "github");
+  assert!(
+    output.status.success(),
+    "stdout: {}\nstderr: {}",
+    String::from_utf8_lossy(&output.stdout),
+    String::from_utf8_lossy(&output.stderr),
+  );
+
+  let prompt = std::fs::read_to_string(temp.path().join(".agents/prompts/work.md")).expect("read prompt");
+  assert!(prompt.contains("$github-issues"), "got: {prompt}");
+  assert!(!prompt.contains("gh issue view {{ issue.id }}"), "got: {prompt}");
+  assert!(!prompt.contains("__TRACKER_OPERATIONS__"), "got: {prompt}");
+
+  let skill = std::fs::read_to_string(temp.path().join(".agents/skills/github-issues/SKILL.md")).expect("read skill");
+  assert!(skill.contains("gh issue view {{ issue.id }}"), "got: {skill}");
+  assert!(skill.contains("gh issue comment {{ issue.id }}"), "got: {skill}");
+  assert!(skill.contains("gh issue edit {{ issue.id }}"), "got: {skill}");
+  assert!(skill.contains("vik init --force"), "got: {skill}");
 }
 
 #[test]
@@ -139,10 +177,22 @@ fn init_generates_simple_linear_setup_and_doctor_accepts_it() {
 
   let prompt = std::fs::read_to_string(temp.path().join(".agents/prompts/review.md")).expect("read prompt");
   assert!(!prompt.contains("Template:"));
-  assert!(prompt.contains("Linear MCP `get_issue"));
-  assert!(prompt.contains("Linear MCP `create_comment"));
-  assert!(prompt.contains("Linear MCP `update_issue"));
-  assert!(prompt.contains("Linear MCP `create_attachment"));
+  assert!(prompt.contains("$linear-issues"), "got: {prompt}");
+  let tracker_skill =
+    std::fs::read_to_string(temp.path().join(".agents/skills/linear-issues/SKILL.md")).expect("read skill");
+  assert!(tracker_skill.contains("Linear MCP `get_issue"), "got: {tracker_skill}");
+  assert!(
+    tracker_skill.contains("Linear MCP `create_comment"),
+    "got: {tracker_skill}"
+  );
+  assert!(
+    tracker_skill.contains("Linear MCP `update_issue"),
+    "got: {tracker_skill}"
+  );
+  assert!(
+    tracker_skill.contains("Linear MCP `create_attachment"),
+    "got: {tracker_skill}"
+  );
 
   let doctor = run_doctor(&workflow);
   assert!(
@@ -204,7 +254,13 @@ fn init_generates_matt_pocock_setup_with_skills_and_ready_hitl_issue_prompt() {
     );
   }
 
-  for skill in ["grill-me", "to-prd", "to-issues"] {
+  for skill in ["grill-me", "grill-with-docs", "to-prd", "to-issues"] {
+    let skill_body = std::fs::read_to_string(temp.path().join(".agents").join("skills").join(skill).join("SKILL.md"))
+      .expect("read skill");
+    assert!(
+      skill_body.contains("vik init --force"),
+      "missing refresh path in {skill}: {skill_body}",
+    );
     assert!(
       temp.path().join(".agents").join("skills").join(skill).join("SKILL.md").exists(),
       "missing skill {skill}",
@@ -213,6 +269,7 @@ fn init_generates_matt_pocock_setup_with_skills_and_ready_hitl_issue_prompt() {
 
   let grill_prompt = std::fs::read_to_string(temp.path().join(".agents/prompts/grill.md")).expect("read grill prompt");
   assert!(grill_prompt.contains("$grill-me"), "got: {grill_prompt}");
+  assert!(grill_prompt.contains("$grill-with-docs"), "got: {grill_prompt}");
   let prd_prompt = std::fs::read_to_string(temp.path().join(".agents/prompts/prd.md")).expect("read prd prompt");
   assert!(prd_prompt.contains("$to-prd"), "got: {prd_prompt}");
   let issues_prompt =
@@ -249,8 +306,14 @@ fn init_generates_github_projects_script_and_status_operations() {
   assert!(script_body.contains(". == \"work\" or . == \"review\""));
 
   let prompt = std::fs::read_to_string(temp.path().join(".agents/prompts/work.md")).expect("read prompt");
-  assert!(prompt.contains("gh project item-edit"));
-  assert!(prompt.contains("{{ issue.project_item_id }}"));
+  assert!(prompt.contains("$github-projects"), "got: {prompt}");
+  let tracker_skill =
+    std::fs::read_to_string(temp.path().join(".agents/skills/github-projects/SKILL.md")).expect("read skill");
+  assert!(tracker_skill.contains("gh project item-edit"), "got: {tracker_skill}");
+  assert!(
+    tracker_skill.contains("{{ issue.project_item_id }}"),
+    "got: {tracker_skill}"
+  );
 }
 
 #[test]
@@ -414,7 +477,7 @@ fn init_force_overwrites_existing_generated_files() {
   let workflow_yaml = std::fs::read_to_string(&workflow).expect("read workflow");
   let prompt_body = std::fs::read_to_string(&prompt).expect("read prompt");
   assert!(workflow_yaml.contains("command: sh ./scripts/github-issues-json"));
-  assert!(prompt_body.contains("# work Stage"));
+  assert!(prompt_body.contains("# Stage `work`"));
   assert!(!workflow_yaml.contains("old workflow"));
   assert!(!prompt_body.contains("old prompt"));
 }

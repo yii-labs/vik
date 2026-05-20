@@ -1,11 +1,15 @@
-use super::super::TrackerTemplate;
+use super::super::{SkillTemplate, TrackerTemplate};
 
 pub(crate) fn template() -> TrackerTemplate {
   TrackerTemplate::linear_script(
     "linear-issues-json",
     10,
     include_str!("linear/issues-json.sh"),
-    include_str!("linear/read.md"),
-    include_str!("linear/operations.md"),
+    SkillTemplate::new(
+      "Linear Issues",
+      "linear-issues",
+      "__TRACKER_SKILL__",
+      include_str!("linear/skill.md"),
+    ),
   )
 }

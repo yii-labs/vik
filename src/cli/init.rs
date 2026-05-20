@@ -149,8 +149,10 @@ impl InitGenerator {
   fn generate(&self) -> Result<InitReport, InitError> {
     let workflow_dir = workflow_dir(&self.workflow_path);
     let template = self.template.definition();
-    let skill_names = self.resolve_skill_names(&workflow_dir, template)?;
-    let files = self.files(&workflow_dir, template, &skill_names);
+    let tracker = self.tracker.definition();
+    let skills = required_skills(template, tracker);
+    let skill_names = self.resolve_skill_names(&workflow_dir, &skills)?;
+    let files = self.files(&workflow_dir, template, tracker, &skills, &skill_names);
     let existing = files
       .iter()
       .filter(|file| file.path.exists())
@@ -192,12 +194,13 @@ impl InitGenerator {
     &self,
     workflow_dir: &Path,
     template: WorkflowTemplate,
+    tracker: TrackerTemplate,
+    skills: &[SkillTemplate],
     skill_names: &[SkillNameBinding],
   ) -> Vec<GeneratedFile> {
     let prompt_dir = workflow_dir.join(".agents").join("prompts");
     let skill_dir = workflow_dir.join(".agents").join("skills");
     let scripts_dir = workflow_dir.join("scripts");
-    let tracker = self.tracker.definition();
 
     let mut files = vec![
       GeneratedFile::plain(self.workflow_path.clone(), template.render_workflow(tracker)),
@@ -210,11 +213,11 @@ impl InitGenerator {
     for stage in template.stages() {
       files.push(GeneratedFile::plain(
         prompt_dir.join(format!("{}.md", stage.name)),
-        template.render_prompt(*stage, tracker, skill_names),
+        template.render_prompt(*stage, skill_names),
       ));
     }
 
-    for (skill, binding) in template.skills().iter().zip(skill_names) {
+    for (skill, binding) in skills.iter().zip(skill_names) {
       files.push(GeneratedFile::plain(
         skill_dir.join(&binding.name).join("SKILL.md"),
         skill.render_contents(&binding.name),
@@ -227,14 +230,10 @@ impl InitGenerator {
   fn resolve_skill_names(
     &self,
     workflow_dir: &Path,
-    template: WorkflowTemplate,
+    skills: &[SkillTemplate],
   ) -> Result<Vec<SkillNameBinding>, InitError> {
     let skill_dir = workflow_dir.join(".agents").join("skills");
-    template
-      .skills()
-      .iter()
-      .map(|skill| self.resolve_skill_name(&skill_dir, *skill))
-      .collect()
+    skills.iter().map(|skill| self.resolve_skill_name(&skill_dir, *skill)).collect()
   }
 
   fn resolve_skill_name(&self, skill_dir: &Path, skill: SkillTemplate) -> Result<SkillNameBinding, InitError> {
@@ -279,6 +278,12 @@ fn workflow_dir(path: &Path) -> PathBuf {
     .filter(|parent| !parent.as_os_str().is_empty())
     .unwrap_or_else(|| Path::new("."))
     .to_path_buf()
+}
+
+fn required_skills(template: WorkflowTemplate, tracker: TrackerTemplate) -> Vec<SkillTemplate> {
+  let mut skills = template.skills().to_vec();
+  skills.push(tracker.skill());
+  skills
 }
 
 impl InitTemplate {
