@@ -108,6 +108,18 @@ impl Diagnostics {
     }
   }
 
+  pub fn error_if_invalid_ip_addr(&mut self, pointer: &str, value: &str) {
+    if value.trim().is_empty() {
+      return;
+    }
+    if value.parse::<std::net::IpAddr>().is_err() {
+      self.push(Diagnostic::error(
+        pointer,
+        DiagnosticCode::InvalidIpAddress(value.to_string()),
+      ));
+    }
+  }
+
   pub fn extend<I: IntoIterator<Item = Diagnostic>>(&mut self, diags: I) {
     for diag in diags {
       self.push(diag);
@@ -166,6 +178,7 @@ pub enum DiagnosticCode {
   EmptyStr,
   EmptyMap,
   UnknownAgent(String),
+  InvalidIpAddress(String),
 }
 
 impl Display for Diagnostic {
@@ -182,6 +195,9 @@ impl Display for Diagnostic {
         "agent profile '{}' set for '{}' is not defined in agents configuration section",
         agent, self.pointer
       ),
+      DiagnosticCode::InvalidIpAddress(value) => {
+        write!(f, "'{}' expected a valid IP address, got '{}'", self.pointer, value)
+      },
     }
   }
 }

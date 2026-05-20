@@ -5,16 +5,18 @@ This document describes current code. It is not a target design.
 ## Overview
 
 Vik is one Rust binary crate. CLI startup loads `workflow.yml` into
-`WorkflowSchema`, builds a `Workflow`, prepares the workflow-scoped workspace
-root, installs logging, writes daemon state, and runs the event-driven
-orchestrator.
+`WorkflowSchema`, builds a `Workflow`, and delegates `run` execution to the
+daemon layer. The daemon runner prepares the workflow-scoped workspace root,
+installs logging, binds the HTTP server, writes daemon state, and runs the
+daemon runtime.
 
 The orchestrator owns intake, shutdown, and drain. `StageSessionManager` owns
 running-stage state, issue setup, stage launch, session command senders, and
 hook execution behind its own typed channel.
 
-There is no `src/server/` module today. HTTP API docs describe planned work, not
-current runtime behavior.
+`src/server/` owns basic HTTP binding, `lxy` route construction, health/status
+routes, and URL construction. The daemon runner is its caller. State/control
+endpoints remain planned work.
 
 ## Folder Structure
 
@@ -31,8 +33,9 @@ src/
 |-- agent/           AgentAdapter trait, Codex and Claude Code adapters
 |-- session/         session command/state channels, snapshots, JSONL writer
 |-- hooks/           after_create, before_run, after_run shell hooks
-|-- orchestrator/    intake loop and stage-session manager
-|-- daemon/          detach, signals, lifecycle, state file
+|-- orchestrator/    intake loop, pull command execution, and stage-session manager
+|-- daemon/          run startup, detach, signals, lifecycle, runtime, state file
+|-- server/          basic HTTP server, health route, URL construction
 |-- context/         issue intake data and issue-run runtime context
 `-- utils/           shared path helpers
 ```
@@ -53,6 +56,7 @@ graph TD
     cli --> daemon[daemon]
     cli --> logging[logging]
     cli --> orchestrator[orchestrator]
+    cli --> server[server]
     cli --> workspace[workspace]
 
     workflow --> config[config]
@@ -65,6 +69,7 @@ graph TD
     orchestrator --> hooks
     orchestrator --> context[context]
     orchestrator --> logging
+    orchestrator --> shell
 
     session --> agent[agent]
     session --> config
@@ -85,17 +90,21 @@ graph TD
     agent --> config
     template --> shell
     daemon --> logging
+    server --> config
 ```
 
 Important current boundaries:
 
-- `orchestrator` does not import `agent` or `shell`.
+- `orchestrator` does not import `agent`.
+- `orchestrator` imports `shell` only for issue pull command execution.
 - `agent` adapters do not spawn subprocesses directly.
 - `SessionFactory` is the orchestrator-to-session spawn seam.
 - `Workflow` is the path/config carrier passed into runtime layers.
 - `Workspace` accessors produce logs, sessions, service, and issue paths.
 - `IssueRun` owns issue workspace preparation and `after_create`.
 - `IssueStage` carries issue run context, stage schema, and session log path.
+- `daemon::runtime` owns the orchestrator future plus optional server future as
+  generic futures, without importing either subsystem.
 
 ## Startup
 
@@ -107,24 +116,29 @@ sequenceDiagram
     participant Wf as Workflow
     participant Log as logging::init
     participant D as daemon
+    participant DRun as daemon::runner
+    participant S as server
     participant O as Orchestrator
 
     Op->>CLI: vik run [-d] [workflow.yml]
     CLI->>Loader: load(workflow path)
     Loader-->>CLI: LoadedWorkflowSchema
     CLI->>Wf: Workflow::try_from(loaded)
-    CLI->>Wf: workspace.ensure_root()
+    CLI->>DRun: run(workflow, detached)
+    DRun->>Wf: workspace.ensure_root()
     opt detached
-      CLI->>D: detach(log_dir)
-      D-->>CLI: parent exits, child continues
+      DRun->>D: detach(log_dir)
+      D-->>DRun: parent exits, child continues
     end
-    CLI->>Log: init(workspace.logs_dir)
-    CLI->>D: install_shutdown_handler()
-    CLI->>D: write state.json
-    CLI->>O: Orchestrator::new(workflow).run(shutdown)
+    DRun->>Log: init(workspace.logs_dir)
+    DRun->>D: install_shutdown_handler()
+    DRun->>S: bind server and read actual address
+    DRun->>D: write state.json
+    DRun->>D: runtime drives server and orchestrator futures
 ```
 
-`--port` resolves a socket address, but the server path is `todo!` today.
+Missing `server` uses default HTTP options. `server: {}` binds `127.0.0.1:0`,
+records the actual port, and serves `GET /health` and `GET /status`.
 
 ## Orchestrator Runtime
 
@@ -164,7 +178,9 @@ Dispatch flow:
 ## Intake
 
 `IntakeLoop` runs `issues.pull.command` from the workflow file directory, waits
-for command completion, and parses stdout as `Issues(Vec<Issue>)` JSON.
+for command completion, and parses stdout as `Issues(Vec<Issue>)` JSON. Pull
+command execution lives in `orchestrator` because intake owns the pull loop and
+its cancellation behavior.
 
 The sleep between intake cycles is `issues.pull.idle_sec`.
 
@@ -313,6 +329,8 @@ Daemon modules:
 
 - `detach/`: Unix detach and Windows unsupported stub.
 - `signals/`: SIGINT/SIGTERM/SIGHUP handling and pid liveness helpers.
+- `runner.rs`: `vik run` startup order, HTTP binding, state write, runtime handoff.
+- `runtime.rs`: drives orchestrator and optional HTTP server futures.
 - `state.rs`: atomic state JSON read/write/remove.
 - `lifecycle.rs`: status, stop, restart stop phase, uninstall.
 

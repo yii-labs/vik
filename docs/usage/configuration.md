@@ -102,6 +102,40 @@ All runtime paths below use the workflow-scoped workspace root:
 The issue id is used as a path segment. Pull commands must return safe issue
 ids. Do not return issue ids that start with `.` or contain path separators.
 
+## Server
+
+`server` is optional. If it is omitted, Vik uses the same defaults as
+`server: {}` and starts the basic HTTP server:
+
+```yaml
+server:
+  host: 127.0.0.1
+  port: 0
+  https: false
+  domain: null
+```
+
+Fields:
+
+- `host`: listen host. Default: `127.0.0.1`.
+- `port`: listen port. Default: `0`, which asks the OS for a free port.
+- `https`: URL construction scheme selector. Default: `false`.
+- `domain`: optional public host for URL construction. Default: `null`.
+
+When `port` is `0`, Vik binds first, reads the actual local port, then writes
+daemon state. `vik status` prints that actual port.
+
+URL construction uses:
+
+```text
+<scheme>://<domain-or-bound-host>[:port-for-ip-hosts]/<path>
+```
+
+Named `domain` values omit the port. IP hosts include the actual bound port.
+
+The current server serves `GET /health` and `GET /status`. State APIs and
+webhook intake are planned work and are not implemented by this section.
+
 ## Agents
 
 `agents` is a map of named profiles.
@@ -297,8 +331,8 @@ path. Current code does not expose root-level `stage`, `workflow`, `loop`, or
 ## Observation
 
 Current observation surfaces are logs, daemon state, and session JSONL files.
-The CLI parses `--port` and `--bind-address`, but the HTTP server is not
-implemented yet.
+Daemon state records the actual HTTP bind address and port. HTTP state APIs
+remain planned work.
 
 ## References
 

@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use crate::config::IssueStageSchema;
+use crate::config::ServerSchema;
 use crate::config::WorkflowSchema;
 
 use super::Workflow;
@@ -47,6 +48,11 @@ impl WorkflowBuilder {
 
   pub fn pull_command(mut self, pull_command: impl Into<String>) -> Self {
     self.schema.issues.pull.command = pull_command.into();
+    self
+  }
+
+  pub fn server(mut self, server: ServerSchema) -> Self {
+    self.schema.server = Some(server);
     self
   }
 

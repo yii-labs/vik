@@ -6,6 +6,7 @@
 
 mod event;
 mod intake;
+mod pull;
 mod session_manager;
 
 use std::sync::Arc;
@@ -113,16 +114,12 @@ impl Orchestrator {
 
 #[cfg(test)]
 mod tests {
-  use tracing_subscriber::{Registry, layer::SubscriberExt};
-
   use super::*;
-  use crate::logging::tests::{CaptureLayer, captured_event};
+  use crate::logging::tests::{capture_events, captured_event};
 
   #[test]
   fn intake_failure_logs_inside_intake_span() {
-    let (layer, events) = CaptureLayer::new();
-    let subscriber = Registry::default().with(layer);
-    let _default = tracing::subscriber::set_default(subscriber);
+    let (events, _capture) = capture_events();
 
     let mut orchestrator = Orchestrator::new(Workflow::builder().workspace_root("workspace").build());
 

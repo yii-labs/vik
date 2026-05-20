@@ -321,12 +321,9 @@ mod tests {
   #[cfg(not(windows))]
   #[test]
   fn unconfigured_hook_log_omits_phase_field() {
-    use crate::logging::tests::CaptureLayer;
-    use tracing_subscriber::{Registry, layer::SubscriberExt};
+    use crate::logging::tests::capture_events;
 
-    let (layer, events) = CaptureLayer::new();
-    let subscriber = Registry::default().with(layer);
-    let _default = tracing::subscriber::set_default(subscriber);
+    let (events, _capture) = capture_events();
 
     let runtime = tokio::runtime::Builder::new_current_thread()
       .enable_all()

@@ -1,36 +1,61 @@
 //! Unit tests for the logging module.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once};
 
 use serde_json::json;
 use tracing::field::{Field, Visit};
 use tracing::{Event, Subscriber};
 use tracing_subscriber::Layer;
+use tracing_subscriber::Registry;
 use tracing_subscriber::layer::Context;
+use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::LookupSpan;
 
 /// Shared buffer of captured events.
 pub(crate) type CapturedEvents = Arc<Mutex<Vec<serde_json::Value>>>;
 
+thread_local! {
+  static ACTIVE_CAPTURE: RefCell<Option<CapturedEvents>> = const { RefCell::new(None) };
+}
+
+static CAPTURE_SUBSCRIBER: Once = Once::new();
+
+pub(crate) struct CaptureGuard;
+
+pub(crate) fn capture_events() -> (CapturedEvents, CaptureGuard) {
+  install_capture_subscriber();
+
+  let events = Arc::new(Mutex::new(Vec::new()));
+  ACTIVE_CAPTURE.with(|active| {
+    let previous = active.borrow_mut().replace(Arc::clone(&events));
+    assert!(previous.is_none(), "tracing capture already active on this thread");
+  });
+  tracing::callsite::rebuild_interest_cache();
+
+  (events, CaptureGuard)
+}
+
+impl Drop for CaptureGuard {
+  fn drop(&mut self) {
+    ACTIVE_CAPTURE.with(|active| {
+      active.borrow_mut().take();
+    });
+  }
+}
+
+fn install_capture_subscriber() {
+  CAPTURE_SUBSCRIBER.call_once(|| {
+    let subscriber = Registry::default().with(CaptureLayer);
+    tracing::subscriber::set_global_default(subscriber).expect("install tracing capture subscriber");
+  });
+}
+
 /// Mirrors the production JSON layer's `flatten_event`: each event
 /// captures both event-level fields and every span field in the
 /// current scope, so test assertions match operator-visible logs.
-pub(crate) struct CaptureLayer {
-  buffer: CapturedEvents,
-}
-
-impl CaptureLayer {
-  pub(crate) fn new() -> (Self, CapturedEvents) {
-    let buffer = Arc::new(Mutex::new(Vec::new()));
-    (
-      Self {
-        buffer: Arc::clone(&buffer),
-      },
-      buffer,
-    )
-  }
-}
+struct CaptureLayer;
 
 pub(crate) fn captured_event<'event>(events: &'event [serde_json::Value], message: &str) -> &'event serde_json::Value {
   events
@@ -111,7 +136,11 @@ where
     }
 
     let payload = serde_json::Value::Object(merged.into_iter().collect());
-    self.buffer.lock().expect("buffer mutex").push(payload);
+    ACTIVE_CAPTURE.with(|active| {
+      if let Some(buffer) = active.borrow().as_ref() {
+        buffer.lock().expect("buffer mutex").push(payload);
+      }
+    });
   }
 }
 

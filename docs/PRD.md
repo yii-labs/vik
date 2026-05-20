@@ -39,7 +39,7 @@ when a run stalls, crashes, or restarts.
 - No resume of in-flight sessions across daemon restarts.
 - No workflow hot reload.
 - No multi-workflow daemon.
-- No HTTP API in current implementation.
+- No HTTP state/control API in current implementation.
 
 ## Core Concepts
 
@@ -67,6 +67,10 @@ when a run stalls, crashes, or restarts.
 - `--json` emits machine-readable diagnostics.
 - Current doctor does not check prompt file existence, external binaries, auth,
   or tracker access.
+
+Basic HTTP infrastructure starts by default. Optional `server:` config overrides
+the default bind options. Missing `server` means `server: {}` behavior:
+`127.0.0.1:0`; Vik records the actual bound port in daemon state.
 
 ## Intake
 
@@ -211,8 +215,8 @@ vik uninstall [WORKFLOW]
 vik --help
 ```
 
-`run` and `restart` parse `--port` and `--bind-address`, but the HTTP server is
-not implemented. Do not document HTTP endpoints as working behavior yet.
+HTTP host and port come from `workflow.yml` `server:` config. Do not document
+state/control HTTP endpoints as working behavior yet.
 
 ## Logging And Observation
 
@@ -232,19 +236,21 @@ not implemented. Do not document HTTP endpoints as working behavior yet.
 - State file records workflow path, cwd, pid, bind address, port, start time,
   log dir, sessions dir, and command.
 - `stop` sends SIGTERM and waits up to 30 seconds for daemon exit.
-- The daemon shutdown token cancels intake and running sessions.
+- The daemon shutdown token cancels intake, running sessions, and the HTTP
+  server when enabled.
 - SIGHUP is ignored.
 
 ## Planned HTTP API
 
-These endpoints remain planned design, not current behavior:
+These state/control endpoints remain planned design, not current behavior:
 
 - `GET /api/v1/state`
 - `GET /api/v1/issues/{issue_id}`
 - `POST /api/v1/refresh`
 - `POST /api/v1/issues/{issue_id}/cancel`
 
-No current CLI command depends on these planned routes.
+The current server only exposes `GET /health` and `GET /status`. No current CLI
+command depends on the planned state/control routes.
 
 ## Related Documents
 

@@ -6,9 +6,12 @@ Current Vik observation surfaces are files:
 - rolling daemon logs
 - daemon state JSON
 - decoded session `AgentEvent` JSONL
+- HTTP health and status checks
 
-The HTTP API is planned but not implemented. `vik run --port ...` currently
-parses the flag and then reaches the unimplemented server path.
+The HTTP state and control API is still planned. Basic server infrastructure
+starts by default, using `server:` options when present. It currently serves
+`GET /health` and `GET /status`, and does not serve issue state, refresh,
+cancel, or webhook routes.
 
 ## Logs
 
@@ -77,13 +80,13 @@ is not used as the filename.
 
 ## Planned HTTP API
 
-The intended HTTP surface is still useful design context, but it is not served
-by current code:
+The intended state/control surface is still useful design context, but it is
+not served by current code:
 
 - `GET /api/v1/state`
 - `GET /api/v1/issues/{issue_id}`
 - `POST /api/v1/refresh`
 - `POST /api/v1/issues/{issue_id}/cancel`
 
-Do not put `curl` calls to those endpoints in operator runbooks until the
-server module lands.
+Do not put `curl` calls to those endpoints in operator runbooks until those
+endpoint issues land.

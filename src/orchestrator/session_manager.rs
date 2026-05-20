@@ -461,11 +461,9 @@ enum StageLaunchError {
 
 #[cfg(test)]
 mod tests {
-  use tracing_subscriber::{Registry, layer::SubscriberExt};
-
   use super::*;
   use crate::context::Issue;
-  use crate::logging::tests::{CaptureLayer, captured_event, captured_message_exists};
+  use crate::logging::tests::{capture_events, captured_event, captured_message_exists};
 
   #[test]
   fn should_dispatch_preserves_author_order_and_respects_running_policy() {
@@ -523,10 +521,7 @@ mod tests {
 
   #[tokio::test]
   async fn dispatch_skip_reason_tracing_separates_no_match_concurrency_and_active_stage() {
-    let (layer, events) = CaptureLayer::new();
-    let subscriber = Registry::default().with(layer);
-
-    let _default = tracing::subscriber::set_default(subscriber);
+    let (events, _capture) = capture_events();
     let workflow = Arc::new(workflow_fixture(1, None));
     let mut no_match = StageSessionManager::new(Arc::clone(&workflow));
     no_match.try_run_issue(issue("ABC-3", "review"));
@@ -565,10 +560,7 @@ mod tests {
 
   #[tokio::test]
   async fn prepared_dispatch_logs_inside_issue_span() {
-    let (layer, events) = CaptureLayer::new();
-    let subscriber = Registry::default().with(layer);
-
-    let _default = tracing::subscriber::set_default(subscriber);
+    let (events, _capture) = capture_events();
     let workflow = Arc::new(workflow_fixture(1, None));
     let manager = StageSessionManager::new(Arc::clone(&workflow));
     let issue_run = Arc::new(IssueRun::new(Arc::clone(&workflow), issue("ABC-1", "todo")));

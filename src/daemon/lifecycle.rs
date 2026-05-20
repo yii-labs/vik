@@ -5,12 +5,11 @@
 //! functions spawn subprocesses — `restart` is implemented as
 //! "stop, then call `cli::run::execute` again," wired in `cli/`.
 
-use std::path::Path;
 use std::time::{Duration, Instant};
 
 use thiserror::Error;
 
-use super::state::{State, StateError};
+use super::state::{State, StateError, StateManager};
 
 /// Matches the daemon-side graceful-shutdown budget. Mismatch would
 /// mean `vik stop` either hangs past the daemon's exit or gives up
@@ -79,92 +78,94 @@ pub enum RestartOutcome {
   NotRunning,
 }
 
-pub fn status(state_path: &Path) -> Result<StatusReport, LifecycleError> {
-  match State::try_read(state_path)? {
-    Some(state) => {
-      let alive = pid_alive(state.pid);
-      let status = if alive {
-        StatusState::Running
-      } else {
-        StatusState::Stale
-      };
-      Ok(StatusReport {
-        status,
-        state_path: state_path.to_path_buf(),
-        state: Some(state),
-      })
-    },
-    None => Ok(StatusReport {
-      status: StatusState::NotInstalled,
-      state_path: state_path.to_path_buf(),
-      state: None,
-    }),
-  }
-}
-
-pub fn stop(state_path: &Path, deadline: Duration) -> Result<(), LifecycleError> {
-  let state = match State::try_read(state_path)? {
-    Some(s) => s,
-    None => {
-      return Err(LifecycleError::NotInstalled {
-        path: state_path.to_path_buf(),
-      });
-    },
-  };
-  stop_with_state(&state, state_path, deadline)
-}
-
-/// Shared between `stop` and `restart` so we do not re-read the state
-/// file twice during a restart.
-fn stop_with_state(state: &State, state_path: &Path, deadline: Duration) -> Result<(), LifecycleError> {
-  if !pid_alive(state.pid) {
-    // Stale path: clean up the file so future `status` calls see a
-    // truthful "not installed" rather than the zombie record.
-    State::remove(state_path)?;
-    return Ok(());
+impl StateManager {
+  pub fn status(&self) -> Result<StatusReport, LifecycleError> {
+    match self.read()? {
+      Some(state) => {
+        let alive = pid_alive(state.pid);
+        let status = if alive {
+          StatusState::Running
+        } else {
+          StatusState::Stale
+        };
+        Ok(StatusReport {
+          status,
+          state_path: self.path().to_path_buf(),
+          state: Some(state),
+        })
+      },
+      None => Ok(StatusReport {
+        status: StatusState::NotInstalled,
+        state_path: self.path().to_path_buf(),
+        state: None,
+      }),
+    }
   }
 
-  send_sigterm(state.pid)?;
+  pub fn stop(&self, deadline: Duration) -> Result<(), LifecycleError> {
+    let state = match self.read()? {
+      Some(s) => s,
+      None => {
+        return Err(LifecycleError::NotInstalled {
+          path: self.path().to_path_buf(),
+        });
+      },
+    };
+    self.stop_with_state(&state, deadline)
+  }
 
-  let started = Instant::now();
-  while started.elapsed() < deadline {
+  /// Shared between `stop` and `restart` so we do not re-read the state
+  /// file twice during a restart.
+  fn stop_with_state(&self, state: &State, deadline: Duration) -> Result<(), LifecycleError> {
     if !pid_alive(state.pid) {
-      State::remove(state_path)?;
+      // Stale path: clean up the file so future `status` calls see a
+      // truthful "not installed" rather than the zombie record.
+      self.remove()?;
       return Ok(());
     }
-    std::thread::sleep(POLL_INTERVAL);
-  }
 
-  Err(LifecycleError::StopTimedOut {
-    pid: state.pid,
-    timeout_ms: deadline.as_millis(),
-  })
-}
+    send_sigterm(state.pid)?;
 
-pub fn restart_stop_phase(state_path: &Path, deadline: Duration) -> Result<RestartOutcome, LifecycleError> {
-  let state = match State::try_read(state_path)? {
-    Some(s) => s,
-    None => return Ok(RestartOutcome::NotRunning),
-  };
-  if !pid_alive(state.pid) {
-    State::remove(state_path)?;
-    return Ok(RestartOutcome::NotRunning);
-  }
-  stop_with_state(&state, state_path, deadline)?;
-  Ok(RestartOutcome::Stopped)
-}
-
-/// No-op when the file is missing — operator scripts can call
-/// `vik uninstall` unconditionally during teardown.
-pub fn uninstall(state_path: &Path, deadline: Duration) -> Result<(), LifecycleError> {
-  if let Some(state) = State::try_read(state_path)? {
-    if pid_alive(state.pid) {
-      stop_with_state(&state, state_path, deadline)?;
-    } else {
-      State::remove(state_path)?;
+    let started = Instant::now();
+    while started.elapsed() < deadline {
+      if !pid_alive(state.pid) {
+        self.remove()?;
+        return Ok(());
+      }
+      std::thread::sleep(POLL_INTERVAL);
     }
+
+    Err(LifecycleError::StopTimedOut {
+      pid: state.pid,
+      timeout_ms: deadline.as_millis(),
+    })
   }
-  Ok(())
+
+  pub fn restart_stop_phase(&self, deadline: Duration) -> Result<RestartOutcome, LifecycleError> {
+    let state = match self.read()? {
+      Some(s) => s,
+      None => return Ok(RestartOutcome::NotRunning),
+    };
+    if !pid_alive(state.pid) {
+      self.remove()?;
+      return Ok(RestartOutcome::NotRunning);
+    }
+    self.stop_with_state(&state, deadline)?;
+    Ok(RestartOutcome::Stopped)
+  }
+
+  /// No-op when the file is missing — operator scripts can call
+  /// `vik uninstall` unconditionally during teardown.
+  pub fn uninstall(&self, deadline: Duration) -> Result<(), LifecycleError> {
+    if let Some(state) = self.read()? {
+      if pid_alive(state.pid) {
+        self.stop_with_state(&state, deadline)?;
+      } else {
+        self.remove()?;
+      }
+    }
+    Ok(())
+  }
 }
 
 fn send_sigterm(pid: u32) -> Result<(), LifecycleError> {
@@ -179,6 +180,10 @@ pub fn pid_alive(pid: u32) -> bool {
 mod tests {
   use super::*;
   use tempfile::TempDir;
+
+  fn manager(path: impl Into<std::path::PathBuf>) -> StateManager {
+    StateManager::new(path.into())
+  }
 
   fn sample_state(pid: u32) -> State {
     State {
@@ -198,7 +203,7 @@ mod tests {
   fn status_reports_not_installed_when_file_missing() {
     let dir = TempDir::new().expect("tmpdir");
     let path = dir.path().join("state.json");
-    let report = status(&path).expect("status ok");
+    let report = manager(path).status().expect("status ok");
     assert_eq!(report.status, StatusState::NotInstalled);
     assert!(report.state.is_none());
   }
@@ -211,7 +216,7 @@ mod tests {
     // be flaky because init is always alive.
     let dead = 2_147_483_646u32;
     sample_state(dead).write(&path).expect("write");
-    let report = status(&path).expect("status ok");
+    let report = manager(path).status().expect("status ok");
     assert_eq!(report.status, StatusState::Stale);
     assert_eq!(report.state.unwrap().pid, dead);
   }
@@ -223,7 +228,7 @@ mod tests {
     let path = dir.path().join("state.json");
     let me = std::process::id();
     sample_state(me).write(&path).expect("write");
-    let report = status(&path).expect("status ok");
+    let report = manager(path).status().expect("status ok");
     assert_eq!(report.status, StatusState::Running);
   }
 
@@ -231,7 +236,7 @@ mod tests {
   fn stop_returns_not_installed_on_missing_file() {
     let dir = TempDir::new().expect("tmpdir");
     let path = dir.path().join("state.json");
-    let err = stop(&path, Duration::from_millis(50)).expect_err("must fail");
+    let err = manager(path).stop(Duration::from_millis(50)).expect_err("must fail");
     assert!(matches!(err, LifecycleError::NotInstalled { .. }));
   }
 
@@ -241,7 +246,7 @@ mod tests {
     let path = dir.path().join("state.json");
     let dead = 2_147_483_646u32;
     sample_state(dead).write(&path).expect("write");
-    stop(&path, Duration::from_millis(50)).expect("stale cleans up");
+    manager(&path).stop(Duration::from_millis(50)).expect("stale cleans up");
     assert!(!path.exists());
   }
 
@@ -249,7 +254,7 @@ mod tests {
   fn uninstall_is_noop_when_missing() {
     let dir = TempDir::new().expect("tmpdir");
     let path = dir.path().join("state.json");
-    uninstall(&path, Duration::from_millis(50)).expect("noop ok");
+    manager(path).uninstall(Duration::from_millis(50)).expect("noop ok");
   }
 
   #[test]
@@ -258,7 +263,7 @@ mod tests {
     let path = dir.path().join("state.json");
     let dead = 2_147_483_646u32;
     sample_state(dead).write(&path).expect("write");
-    uninstall(&path, Duration::from_millis(50)).expect("ok");
+    manager(&path).uninstall(Duration::from_millis(50)).expect("ok");
     assert!(!path.exists());
   }
 
@@ -266,7 +271,7 @@ mod tests {
   fn restart_stop_phase_reports_not_running_when_missing() {
     let dir = TempDir::new().expect("tmpdir");
     let path = dir.path().join("state.json");
-    let outcome = restart_stop_phase(&path, Duration::from_millis(50)).expect("ok");
+    let outcome = manager(path).restart_stop_phase(Duration::from_millis(50)).expect("ok");
     assert!(matches!(outcome, RestartOutcome::NotRunning));
   }
 
@@ -276,7 +281,7 @@ mod tests {
     let path = dir.path().join("state.json");
     let dead = 2_147_483_646u32;
     sample_state(dead).write(&path).expect("write");
-    let outcome = restart_stop_phase(&path, Duration::from_millis(50)).expect("ok");
+    let outcome = manager(&path).restart_stop_phase(Duration::from_millis(50)).expect("ok");
     assert!(matches!(outcome, RestartOutcome::NotRunning));
     assert!(!path.exists(), "stale file removed by restart stop phase");
   }
