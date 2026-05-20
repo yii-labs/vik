@@ -1,5 +1,6 @@
 //! `vik init [WORKFLOW]` - generate a starter workflow setup.
 
+use std::collections::HashSet;
 use std::fmt::{self, Display};
 use std::fs;
 use std::io::{self, Write};
@@ -233,11 +234,31 @@ impl InitGenerator {
     skills: &[SkillTemplate],
   ) -> Result<Vec<SkillNameBinding>, InitError> {
     let skill_dir = workflow_dir.join(".agents").join("skills");
-    skills.iter().map(|skill| self.resolve_skill_name(&skill_dir, *skill)).collect()
+    let default_names = skills.iter().map(|skill| skill.default_name).collect::<HashSet<_>>();
+    let mut chosen_names = HashSet::new();
+    let mut bindings = Vec::with_capacity(skills.len());
+
+    for skill in skills {
+      bindings.push(self.resolve_skill_name(&skill_dir, *skill, &default_names, &mut chosen_names)?);
+    }
+
+    Ok(bindings)
   }
 
-  fn resolve_skill_name(&self, skill_dir: &Path, skill: SkillTemplate) -> Result<SkillNameBinding, InitError> {
+  fn resolve_skill_name(
+    &self,
+    skill_dir: &Path,
+    skill: SkillTemplate,
+    default_names: &HashSet<&'static str>,
+    chosen_names: &mut HashSet<String>,
+  ) -> Result<SkillNameBinding, InitError> {
     if self.force || !skill_dir.join(skill.default_name).exists() {
+      if !chosen_names.insert(skill.default_name.to_string()) {
+        return Err(InitError::SkillNameCollision {
+          name: skill.default_name.to_string(),
+        });
+      }
+
       return Ok(SkillNameBinding {
         placeholder: skill.placeholder,
         name: skill.default_name.to_string(),
@@ -260,7 +281,13 @@ impl InitGenerator {
         })?;
       validate_skill_name(&name)?;
 
+      if chosen_names.contains(&name) || (name != skill.default_name && default_names.contains(name.as_str())) {
+        let _ = writeln!(io::stderr(), "skill name already reserved for this init run: {name}");
+        continue;
+      }
+
       if !skill_dir.join(&name).exists() {
+        chosen_names.insert(name.clone());
         return Ok(SkillNameBinding {
           placeholder: skill.placeholder,
           name,

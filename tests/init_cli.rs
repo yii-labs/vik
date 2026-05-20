@@ -479,6 +479,48 @@ fn init_prompts_for_alternate_skill_name_when_default_skill_exists() {
 }
 
 #[test]
+#[cfg(unix)]
+fn init_rejects_alternate_skill_name_reserved_by_current_run() {
+  use expectrl::{Eof, Expect, Session};
+
+  let temp = tempfile::tempdir().expect("tempdir");
+  let workflow = temp.path().join("workflow.yml");
+  let existing_skill = temp.path().join(".agents/skills/grill-me/SKILL.md");
+  std::fs::create_dir_all(existing_skill.parent().expect("skill parent")).expect("create skill dir");
+  std::fs::write(&existing_skill, "keep existing skill").expect("write skill");
+
+  let mut command = Command::new(vik_bin());
+  command.arg("init").arg("--template").arg("matt-pocock").arg(&workflow);
+
+  let mut session = Session::spawn(command).expect("spawn vik init");
+  session.set_expect_timeout(Some(Duration::from_secs(20)));
+  session.expect("Issue tracker?").expect("tracker prompt");
+  session.send("\r").expect("select github tracker");
+  session.expect("Skill name for Grill the plan?").expect("skill rename prompt");
+  session.send("to-prd\r").expect("enter reserved skill name");
+  session
+    .expect("skill name already reserved for this init run: to-prd")
+    .expect("reserved name warning");
+  session
+    .expect("Skill name for Grill the plan?")
+    .expect("skill rename prompt repeats");
+  session.send("grill-local\r").expect("enter alternate skill name");
+  session.expect("Created Vik workflow setup").expect("created setup");
+  session.expect(Eof).expect("vik init exits");
+
+  let existing_skill_body = std::fs::read_to_string(&existing_skill).expect("read existing skill");
+  let grill_skill = temp.path().join(".agents/skills/grill-local/SKILL.md");
+  let prd_skill = temp.path().join(".agents/skills/to-prd/SKILL.md");
+  let grill_prompt = std::fs::read_to_string(temp.path().join(".agents/prompts/grill.md")).expect("read prompt");
+  let prd_prompt = std::fs::read_to_string(temp.path().join(".agents/prompts/prd.md")).expect("read prompt");
+  assert_eq!(existing_skill_body, "keep existing skill");
+  assert!(grill_skill.exists(), "missing renamed grill skill");
+  assert!(prd_skill.exists(), "missing to-prd skill");
+  assert!(grill_prompt.contains("$grill-local"), "got: {grill_prompt}");
+  assert!(prd_prompt.contains("$to-prd"), "got: {prd_prompt}");
+}
+
+#[test]
 fn init_refuses_to_overwrite_existing_workflow_without_force() {
   let temp = tempfile::tempdir().expect("tempdir");
   let workflow = temp.path().join("workflow.yml");
