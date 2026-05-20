@@ -23,8 +23,19 @@ Use an explicit workflow path when managing another workflow:
 vik run -d /path/to/workflow.yml
 ```
 
-`--port` and `--bind-address` are parsed today, but the HTTP server is not
-implemented. Do not use them for normal daemon runs yet.
+Use `--port` to enable the HTTP server. Today it only serves generic webhook
+intake routes, and those routes exist only when `issues.webhook` is configured:
+
+```sh
+vik run -d --port 8123
+```
+
+`--bind-address` defaults to `127.0.0.1`. Set it only when another host must
+send webhook requests:
+
+```sh
+vik run -d --port 8123 --bind-address 0.0.0.0
+```
 
 ## Status
 

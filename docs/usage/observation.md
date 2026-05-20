@@ -7,8 +7,14 @@ Current Vik observation surfaces are files:
 - daemon state JSON
 - decoded session `AgentEvent` JSONL
 
-The HTTP API is planned but not implemented. `vik run --port ...` currently
-parses the flag and then reaches the unimplemented server path.
+`vik run --port ...` does not enable a full observation API. Current HTTP
+behavior is limited to generic webhook intake:
+
+- `POST /intake/issue`
+- `POST /intake/issues`
+
+Those routes exist only when `issues.webhook` is configured. Other observation
+surfaces are still file based.
 
 ## Logs
 
@@ -75,15 +81,16 @@ do not update the session snapshot fields used for operator status.
 The provider session id, when reported, appears inside events and snapshots. It
 is not used as the filename.
 
-## Planned HTTP API
+## HTTP API
 
-The intended HTTP surface is still useful design context, but it is not served
-by current code:
+Current working endpoints are only the webhook intake endpoints listed above.
+The intended observation/control surface is still design context, but it is not
+served by current code:
 
 - `GET /api/v1/state`
 - `GET /api/v1/issues/{issue_id}`
 - `POST /api/v1/refresh`
 - `POST /api/v1/issues/{issue_id}/cancel`
 
-Do not put `curl` calls to those endpoints in operator runbooks until the
-server module lands.
+Do not put `curl` calls to those planned endpoints in operator runbooks until
+they exist in code.

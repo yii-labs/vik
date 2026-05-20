@@ -118,8 +118,9 @@ issue:
     assert_eq!(schema.loop_.max_issue_concurrency, 2);
     assert_eq!(schema.loop_.wait_ms, 100);
     assert_eq!(schema.workspace.root.as_deref(), Some(Path::new("workspace")));
-    assert_eq!(schema.issues.pull.command, "./scripts/issues-json");
-    assert_eq!(schema.issues.pull.idle_sec, 5);
+    let pull = schema.issues.pull.as_ref().expect("pull schema");
+    assert_eq!(pull.command, "./scripts/issues-json");
+    assert_eq!(pull.idle_sec, 5);
     assert_eq!(
       schema
         .issue
@@ -136,6 +137,80 @@ issue:
   }
 
   #[test]
+  fn workflow_schema_accepts_webhook_only_issue_intake() {
+    let schema = parse_schema(
+      r#"
+loop:
+  max_issue_concurrency: 1
+  wait_ms: 100
+workspace:
+  root: workspace
+agents:
+  codex:
+    runtime: codex
+    model: gpt-5.5
+issues:
+  webhook:
+    x-event-signature: shared-secret
+issue:
+  stages:
+    plan:
+      when:
+        state: todo
+      agent: codex
+      prompt_file: ./prompts/plan.md
+"#,
+    );
+
+    let diagnostics = schema.diagnose();
+
+    assert!(schema.issues.pull.is_none());
+    assert_eq!(
+      schema
+        .issues
+        .webhook
+        .as_ref()
+        .and_then(|webhook| webhook.x_event_signature.as_deref()),
+      Some("shared-secret")
+    );
+    assert!(!diagnostics.has_errors(), "{diagnostics}");
+  }
+
+  #[test]
+  fn workflow_schema_requires_an_issue_intake_source() {
+    let schema = parse_schema(
+      r#"
+loop:
+  max_issue_concurrency: 1
+  wait_ms: 100
+workspace:
+  root: workspace
+agents:
+  codex:
+    runtime: codex
+    model: gpt-5.5
+issues: {}
+issue:
+  stages:
+    plan:
+      when:
+        state: todo
+      agent: codex
+      prompt_file: ./prompts/plan.md
+"#,
+    );
+
+    let diagnostics = schema.diagnose();
+
+    assert!(
+      diagnostics
+        .errors
+        .iter()
+        .any(|diag| { diag.pointer == "issues" && matches!(diag.code, DiagnosticCode::EmptyMap) })
+    );
+  }
+
+  #[test]
   fn diagnostics_include_nested_pointers_for_invalid_schema() {
     let mut schema = WorkflowSchema::default();
     schema.loop_.max_issue_concurrency = 0;
@@ -146,8 +221,8 @@ issue:
       "codex".to_string(),
       AgentProfileSchema::new(AgentRuntime::Codex, String::new()),
     );
-    schema.issues.pull.command = String::new();
-    schema.issues.pull.idle_sec = 0;
+    schema.issues.pull = Some(IssuePullSchema::default());
+    schema.issues.pull.as_mut().expect("pull schema").idle_sec = 0;
 
     let mut stage = IssueStageSchema::new("").with_name("plan");
     stage.agent = "missing".to_string();

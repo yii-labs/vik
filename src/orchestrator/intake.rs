@@ -52,11 +52,12 @@ impl IntakeLoop {
   async fn run(self, shutdown: CancellationToken) {
     let max_iterations = self.workflow.schema().loop_.max_iterations;
     let mut iterations = 0_u64;
+    let Some(pull) = self.workflow.schema().issues.pull.clone() else {
+      self.producer.intake_stopped().await;
+      return;
+    };
 
-    let command = match self.renderer.render(
-      &self.workflow.schema().issues.pull.command,
-      self.workflow.as_render_context(),
-    ) {
+    let command = match self.renderer.render(&pull.command, self.workflow.as_render_context()) {
       Ok(command) => command,
       Err(error) => {
         self.producer.intake_failed(IntakeError::PullCommandTemplate(error)).await;
@@ -78,7 +79,7 @@ impl IntakeLoop {
         Err(error) => self.producer.intake_failed(error).await,
       }
 
-      let wait = Duration::from_secs(self.workflow.schema().issues.pull.idle_sec);
+      let wait = Duration::from_secs(pull.idle_sec);
       tokio::select! {
         _ = shutdown.cancelled() => break,
         _ = tokio::time::sleep(wait) => {},

@@ -1,7 +1,7 @@
 //! `issues:` and `issue:` sections of the Workflow Definition.
 //!
 //! Two separate top-level keys map to two separate concerns. `issues`
-//! (plural) holds the intake pull command. `issue` (singular) holds
+//! (plural) holds intake sources. `issue` (singular) holds
 //! per-issue handling: hooks and the named stages the orchestrator
 //! dispatches against `issue.state`. Splitting them keeps intake config
 //! editable without touching the stage map.
@@ -17,7 +17,10 @@ use super::diagnose::*;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IssueIntakeSchema {
-  pub pull: IssuePullSchema,
+  #[serde(default)]
+  pub pull: Option<IssuePullSchema>,
+  #[serde(default)]
+  pub webhook: Option<IssueWebhookSchema>,
 
   #[serde(flatten)]
   unknown_fields: serde_yaml::Mapping,
@@ -46,6 +49,15 @@ impl Default for IssuePullSchema {
       unknown_fields: serde_yaml::Mapping::new(),
     }
   }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IssueWebhookSchema {
+  #[serde(default, rename = "x-event-signature")]
+  pub x_event_signature: Option<String>,
+
+  #[serde(flatten)]
+  unknown_fields: serde_yaml::Mapping,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -187,7 +199,15 @@ impl Diagnose for IssueIntakeSchema {
   fn diagnose(&self, schema: &WorkflowSchema) -> Diagnostics {
     let mut diagnostics = Diagnostics::new();
 
-    diagnose_fields!(diagnostics, self, schema, "pull" => pull);
+    if self.pull.is_none() && self.webhook.is_none() {
+      diagnostics.error_if_empty_map_here(true);
+    }
+    if let Some(pull) = &self.pull {
+      diagnostics.extends_with_pointer("pull", pull.diagnose(schema));
+    }
+    if let Some(webhook) = &self.webhook {
+      diagnostics.extends_with_pointer("webhook", webhook.diagnose(schema));
+    }
     diagnostics.warn_unknown_fields(&self.unknown_fields);
 
     diagnostics
@@ -200,6 +220,19 @@ impl Diagnose for IssuePullSchema {
 
     diagnostics.error_if_empty_str("command", &self.command);
     diagnostics.error_if_non_positive("idle_sec", self.idle_sec as usize);
+    diagnostics.warn_unknown_fields(&self.unknown_fields);
+
+    diagnostics
+  }
+}
+
+impl Diagnose for IssueWebhookSchema {
+  fn diagnose(&self, _: &WorkflowSchema) -> Diagnostics {
+    let mut diagnostics = Diagnostics::new();
+
+    if let Some(signature) = &self.x_event_signature {
+      diagnostics.error_if_empty_str("x-event-signature", signature);
+    }
     diagnostics.warn_unknown_fields(&self.unknown_fields);
 
     diagnostics
@@ -343,6 +376,94 @@ command: ./scripts/issues-json
     assert_eq!(pull.command, "./scripts/issues-json");
     assert_eq!(pull.idle_sec, 5);
     assert!(!diagnostics.has_errors());
+  }
+
+  #[test]
+  fn issue_intake_accepts_pull_only() {
+    let intake: IssueIntakeSchema = serde_yaml::from_str(
+      r#"
+pull:
+  command: ./scripts/issues-json
+"#,
+    )
+    .expect("intake schema parses");
+
+    let diagnostics = intake.diagnose(&WorkflowSchema::default());
+
+    assert!(intake.pull.is_some());
+    assert!(intake.webhook.is_none());
+    assert!(!diagnostics.has_errors(), "{diagnostics}");
+  }
+
+  #[test]
+  fn issue_intake_accepts_webhook_only_with_signature() {
+    let intake: IssueIntakeSchema = serde_yaml::from_str(
+      r#"
+webhook:
+  x-event-signature: shared-secret
+"#,
+    )
+    .expect("intake schema parses");
+
+    let diagnostics = intake.diagnose(&WorkflowSchema::default());
+
+    assert!(intake.pull.is_none());
+    assert_eq!(
+      intake.webhook.as_ref().and_then(|webhook| webhook.x_event_signature.as_deref()),
+      Some("shared-secret")
+    );
+    assert!(!diagnostics.has_errors(), "{diagnostics}");
+  }
+
+  #[test]
+  fn issue_intake_accepts_pull_and_webhook_together() {
+    let intake: IssueIntakeSchema = serde_yaml::from_str(
+      r#"
+pull:
+  command: ./scripts/issues-json
+webhook: {}
+"#,
+    )
+    .expect("intake schema parses");
+
+    let diagnostics = intake.diagnose(&WorkflowSchema::default());
+
+    assert!(intake.pull.is_some());
+    assert!(intake.webhook.is_some());
+    assert!(!diagnostics.has_errors(), "{diagnostics}");
+  }
+
+  #[test]
+  fn issue_intake_requires_pull_or_webhook() {
+    let intake: IssueIntakeSchema = serde_yaml::from_str("{}").expect("intake schema parses");
+
+    let diagnostics = intake.diagnose(&WorkflowSchema::default());
+
+    assert!(
+      diagnostics
+        .errors
+        .iter()
+        .any(|diag| { diag.pointer.is_empty() && matches!(diag.code, DiagnosticCode::EmptyMap) })
+    );
+  }
+
+  #[test]
+  fn issue_webhook_reports_empty_signature() {
+    let webhook: IssueWebhookSchema = serde_yaml::from_str(
+      r#"
+x-event-signature: ''
+"#,
+    )
+    .expect("webhook schema parses");
+
+    let diagnostics = webhook.diagnose(&WorkflowSchema::default());
+
+    assert!(
+      diagnostics
+        .errors
+        .iter()
+        .any(|diag| { diag.pointer == "x-event-signature" && matches!(diag.code, DiagnosticCode::EmptyStr) })
+    );
   }
 
   #[test]
