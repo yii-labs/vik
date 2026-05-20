@@ -43,6 +43,7 @@ impl Diagnose for ServerSchema {
     let mut diagnostics = Diagnostics::new();
 
     diagnostics.error_if_empty_str("host", &self.host);
+    diagnostics.error_if_invalid_ip_addr("host", &self.host);
     if let Some(domain) = &self.domain {
       diagnostics.error_if_empty_str("domain", domain);
     }
@@ -146,6 +147,20 @@ issue:
         .errors
         .iter()
         .any(|diag| diag.pointer == "server.domain" && matches!(diag.code, DiagnosticCode::EmptyStr))
+    );
+  }
+
+  #[test]
+  fn server_diagnoses_host_that_is_not_an_ip_address() {
+    let schema = parse_workflow(&format!("{MINIMAL_WORKFLOW}\nserver:\n  host: localhost\n"));
+
+    let diagnostics = schema.diagnose();
+
+    assert!(
+      diagnostics
+        .errors
+        .iter()
+        .any(|diag| diag.pointer == "server.host" && matches!(diag.code, DiagnosticCode::InvalidIpAddress(_)))
     );
   }
 

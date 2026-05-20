@@ -24,6 +24,12 @@ pub struct StateManager {
   path: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StaleState {
+  pub pid: u32,
+  pub path: PathBuf,
+}
+
 impl StateManager {
   pub fn new(path: impl Into<PathBuf>) -> Self {
     Self { path: path.into() }
@@ -43,6 +49,20 @@ impl StateManager {
 
   pub fn remove(&self) -> Result<(), StateError> {
     State::remove(&self.path)
+  }
+
+  pub fn assert_not_running(&self) -> Result<Option<StaleState>, StateError> {
+    match self.read()? {
+      Some(state) if super::signals::pid_alive(state.pid) => Err(StateError::AlreadyRunning {
+        pid: state.pid,
+        path: self.path.clone(),
+      }),
+      Some(state) => Ok(Some(StaleState {
+        pid: state.pid,
+        path: self.path.clone(),
+      })),
+      None => Ok(None),
+    }
   }
 
   /// `command` is captured verbatim so an operator looking at a stale
@@ -136,6 +156,9 @@ pub enum StateError {
     #[source]
     source: std::io::Error,
   },
+
+  #[error("daemon already running (pid {pid}, state file {path})")]
+  AlreadyRunning { pid: u32, path: PathBuf },
 }
 
 impl State {
@@ -317,6 +340,22 @@ mod tests {
     let event = captured_event(&events, "daemon state file written");
     assert_eq!(event["spans"][0]["name"], "daemon");
     assert!(event.get("phase").is_none());
+  }
+
+  #[test]
+  fn assert_not_running_returns_stale_state_for_dead_pid() {
+    let dir = TempDir::new().expect("tmpdir");
+    let path = dir.path().join("state.json");
+    let dead = 2_147_483_646u32;
+    let mut state = sample(&dir.path().join("workflow.yml"), dir.path());
+    state.pid = dead;
+    state.write(&path).expect("write");
+    let manager = StateManager::new(&path);
+
+    let stale = manager.assert_not_running().expect("check ok").expect("stale state");
+
+    assert_eq!(stale.pid, dead);
+    assert_eq!(stale.path, path);
   }
 
   #[test]

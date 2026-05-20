@@ -11,9 +11,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::state::StateManager;
 use super::{detach, runtime, signals};
-use crate::logging::{self, LoggingGuard};
+use crate::logging;
 use crate::orchestrator::Orchestrator;
-use crate::server::{PreparedServer, ServerAddress};
+use crate::server::ServerConfig;
 use crate::workflow::Workflow;
 
 pub fn run(workflow: Workflow, detached: bool) -> anyhow::Result<()> {
@@ -24,41 +24,38 @@ pub fn run(workflow: Workflow, detached: bool) -> anyhow::Result<()> {
 
   let state_manager = StateManager::new(workflow.workspace().service_state_file().to_path_buf());
 
+  let shutdown = CancellationToken::new();
+
   // Stale-state findings have to bridge the log-init boundary: the
   // pre-flight check must run before detach (the operator is still
   // looking at the foreground process), but the structured warn
   // belongs in the file appender that does not exist yet.
-  let mut stale_state_note: Option<(u32, std::path::PathBuf)> = None;
-
-  let shutdown = CancellationToken::new();
-
-  if detached {
-    // Reject double-detach against a live daemon before forking. Once
-    // the parent `_exit`s, the operator has no foreground stderr
-    // left to read; write directly to stderr here, no tracing yet.
-    match state_manager.read() {
-      Ok(Some(state)) if signals::pid_alive(state.pid) => {
+  let stale_state_note = if detached {
+    match state_manager.assert_not_running() {
+      Ok(stale) => stale.map(|stale| (stale.pid, stale.path)),
+      Err(crate::daemon::StateError::AlreadyRunning { pid, path }) => {
         let _ = writeln!(
           io::stderr(),
           "vik run -d: daemon already running (pid {}, state file {})",
-          state.pid,
-          state_manager.path().display(),
+          pid,
+          path.display(),
         );
         std::process::exit(1);
       },
-      Ok(Some(state)) => {
-        stale_state_note = Some((state.pid, state_manager.path().to_path_buf()));
-      },
-      Ok(None) => {},
       Err(err) => {
         return Err(
           anyhow::Error::new(err).context(format!("read daemon state file {}", state_manager.path().display())),
         );
       },
     }
+  } else {
+    None
+  };
 
-    let server = prepare_server(&workflow, shutdown.clone())?;
+  let (server_config, server_future) =
+    crate::server::run(&workflow, shutdown.clone()).with_context(|| "prepare HTTP server")?;
 
+  if detached {
     // Detach must happen before the tracing subscriber is installed.
     // The grandchild reinstalls it below so its rolling appenders are
     // owned by the surviving process; the original parent has already
@@ -68,23 +65,44 @@ pub fn run(workflow: Workflow, detached: bool) -> anyhow::Result<()> {
       let _ = writeln!(io::stderr(), "failed to prepare log dir {}: {err}", log_dir.display());
     }
     detach(&log_dir).with_context(|| "detach daemon")?;
-    run_runtime(workflow, detached, shutdown, server, stale_state_note, state_manager)?;
+    run_runtime(
+      workflow,
+      detached,
+      shutdown,
+      server_config,
+      server_future,
+      stale_state_note,
+      state_manager,
+    )?;
     return Ok(());
   }
 
-  let server = prepare_server(&workflow, shutdown.clone())?;
-  run_runtime(workflow, detached, shutdown, server, stale_state_note, state_manager)
+  run_runtime(
+    workflow,
+    detached,
+    shutdown,
+    server_config,
+    server_future,
+    stale_state_note,
+    state_manager,
+  )
 }
 
-fn run_runtime(
+fn run_runtime<S>(
   workflow: Workflow,
   detached: bool,
   shutdown: CancellationToken,
-  server: PreparedServer,
+  server_config: ServerConfig,
+  server: S,
   stale_state_note: Option<(u32, std::path::PathBuf)>,
   state_manager: StateManager,
-) -> anyhow::Result<()> {
-  let _guard = init_logging(&workflow, !detached)?;
+) -> anyhow::Result<()>
+where
+  S: std::future::Future<Output = Result<(), crate::server::ServerError>>,
+{
+  let log_dir = workflow.workspace().logs_dir();
+  let _guard = logging::init(log_dir, !detached)
+    .with_context(|| format!("install logging subscriber writing to {}", log_dir.display()))?;
 
   if let Some((stale_pid, stale_path)) = stale_state_note {
     tracing::info_span!("daemon").in_scope(|| {
@@ -116,7 +134,7 @@ fn run_runtime(
           "starting vik",
       );
     }
-    trace_http_enabled(server.address());
+    trace_http_enabled(&server_config);
 
     // State file goes down before the orchestrator spins up so
     // lifecycle commands can already address us. Foreground runs
@@ -125,8 +143,8 @@ fn run_runtime(
     state_manager
       .write_runtime_state(
         &workflow,
-        server.address().port(),
-        server.address().bind_address(),
+        server_config.port(),
+        server_config.bind_address(),
         format_command(&workflow, detached),
       )
       .with_context(|| format!("write daemon state file to {}", state_manager.path().display()))?;
@@ -154,11 +172,10 @@ fn run_runtime(
   Ok(())
 }
 
-async fn drive_runtime(
-  orchestrator: &mut Orchestrator,
-  server: PreparedServer,
-  shutdown: CancellationToken,
-) -> anyhow::Result<()> {
+async fn drive_runtime<S>(orchestrator: &mut Orchestrator, server: S, shutdown: CancellationToken) -> anyhow::Result<()>
+where
+  S: std::future::Future<Output = Result<(), crate::server::ServerError>>,
+{
   let orch_token = shutdown.clone();
   let orch_future = async move {
     orchestrator
@@ -167,17 +184,12 @@ async fn drive_runtime(
       .map_err(|err| anyhow!("orchestrator loop: {err:#}"))
   };
 
-  let server_future = async move { crate::server::run(server).await.map_err(|err| anyhow!("HTTP server: {err:#}")) };
+  let server_future = async move { server.await.map_err(|err| anyhow!("HTTP server: {err:#}")) };
 
   runtime::drive(shutdown, orch_future, Some(server_future)).await
 }
 
-fn prepare_server(workflow: &Workflow, shutdown: CancellationToken) -> anyhow::Result<PreparedServer> {
-  let config = workflow.schema().server.clone().unwrap_or_default();
-  PreparedServer::bind(&config, shutdown).with_context(|| "prepare HTTP server")
-}
-
-fn trace_http_enabled(address: &ServerAddress) {
+fn trace_http_enabled(address: &ServerConfig) {
   tracing::info_span!("server").in_scope(|| {
     tracing::info!(
       bind_address = %address.bound_addr(),
@@ -185,12 +197,6 @@ fn trace_http_enabled(address: &ServerAddress) {
       "HTTP API enabled",
     );
   });
-}
-
-fn init_logging(workflow: &Workflow, enable_stdout: bool) -> anyhow::Result<LoggingGuard> {
-  let log_dir = workflow.workspace().logs_dir();
-  logging::init(log_dir, enable_stdout)
-    .with_context(|| format!("install logging subscriber writing to {}", log_dir.display()))
 }
 
 fn format_command(workflow: &Workflow, detached: bool) -> String {
@@ -205,7 +211,6 @@ fn format_command(workflow: &Workflow, detached: bool) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::config::ServerSchema;
   use crate::logging::tests::{capture_events, captured_event};
 
   #[test]
@@ -219,51 +224,10 @@ mod tests {
   }
 
   #[test]
-  fn prepare_server_uses_default_config_when_server_is_missing() {
-    let workflow = Workflow::builder().build();
-    let shutdown = CancellationToken::new();
-
-    let server = prepare_server(&workflow, shutdown.clone()).expect("server enabled");
-
-    assert_eq!(server.address().bind_address(), "127.0.0.1");
-    assert_ne!(server.address().port(), 0);
-    shutdown.cancel();
-  }
-
-  #[test]
-  fn prepare_server_uses_workflow_server() {
-    let mut config = ServerSchema::default();
-    config.https = true;
-    config.domain = Some("example.local".into());
-    let workflow = Workflow::builder().server(config).build();
-    let shutdown = CancellationToken::new();
-
-    let server = prepare_server(&workflow, shutdown.clone()).expect("server enabled");
-
-    assert_eq!(server.address().url().build("/status"), "https://example.local/status");
-    shutdown.cancel();
-  }
-
-  #[test]
-  fn prepare_server_reports_bind_error_before_runtime_start() {
-    let occupied = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("occupy port");
-    let mut server = ServerSchema::default();
-    server.port = occupied.local_addr().expect("occupied addr").port();
-    let workflow = Workflow::builder().server(server).build();
-
-    let err = match prepare_server(&workflow, CancellationToken::new()) {
-      Ok(_) => panic!("bind must fail"),
-      Err(err) => err,
-    };
-
-    assert!(format!("{err:#}").contains("prepare HTTP server"));
-  }
-
-  #[test]
   fn http_status_logs_inside_server_span() {
     let (events, _capture) = capture_events();
 
-    let address = ServerAddress::new(false, None, "127.0.0.1:9000".parse().expect("socket address"));
+    let address = ServerConfig::new(false, None, "127.0.0.1:9000".parse().expect("socket address"));
     trace_http_enabled(&address);
 
     let events = events.lock().expect("events mutex");

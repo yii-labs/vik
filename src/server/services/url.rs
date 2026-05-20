@@ -1,49 +1,72 @@
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{AddrParseError, IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ServerAddress {
-  config: ServerConfig,
-}
+use thiserror::Error;
 
-impl ServerAddress {
-  pub(crate) fn new(https: bool, domain: Option<String>, bound_addr: SocketAddr) -> Self {
-    Self {
-      config: ServerConfig::new(https, domain, bound_addr),
-    }
-  }
-
-  pub(crate) fn bound_addr(&self) -> SocketAddr {
-    self.config.bound_addr
-  }
-
-  pub(crate) fn bind_address(&self) -> String {
-    self.config.bound_addr.ip().to_string()
-  }
-
-  pub(crate) fn port(&self) -> u16 {
-    self.config.bound_addr.port()
-  }
-
-  pub(crate) fn url(&self) -> UrlService {
-    UrlService::new(self.config.clone())
-  }
-}
+use crate::config::ServerSchema;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ServerConfig {
   https: bool,
   domain: Option<String>,
-  bound_addr: SocketAddr,
+  addr: SocketAddr,
 }
 
 impl ServerConfig {
-  pub(crate) fn new(https: bool, domain: Option<String>, bound_addr: SocketAddr) -> Self {
-    Self {
-      https,
-      domain,
-      bound_addr,
-    }
+  pub(crate) fn new(https: bool, domain: Option<String>, addr: SocketAddr) -> Self {
+    Self { https, domain, addr }
   }
+
+  pub(crate) fn bind_addr(&self) -> SocketAddr {
+    self.addr
+  }
+
+  pub(crate) fn with_bound_addr(mut self, bound_addr: SocketAddr) -> Self {
+    self.addr = bound_addr;
+    self
+  }
+
+  pub(crate) fn bound_addr(&self) -> SocketAddr {
+    self.addr
+  }
+
+  pub(crate) fn bind_address(&self) -> String {
+    self.addr.ip().to_string()
+  }
+
+  pub(crate) fn port(&self) -> u16 {
+    self.addr.port()
+  }
+
+  pub(crate) fn url(&self) -> UrlService {
+    UrlService::new(self.clone())
+  }
+}
+
+impl TryFrom<ServerSchema> for ServerConfig {
+  type Error = ServerConfigError;
+
+  fn try_from(schema: ServerSchema) -> Result<Self, Self::Error> {
+    let host = schema.host.parse::<IpAddr>().map_err(|source| ServerConfigError::InvalidHost {
+      host: schema.host.clone(),
+      source,
+    })?;
+
+    Ok(Self::new(
+      schema.https,
+      schema.domain,
+      SocketAddr::new(host, schema.port),
+    ))
+  }
+}
+
+#[derive(Debug, Error)]
+pub(crate) enum ServerConfigError {
+  #[error("invalid server.host `{host}`: {source}")]
+  InvalidHost {
+    host: String,
+    #[source]
+    source: AddrParseError,
+  },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,12 +90,12 @@ impl UrlService {
   fn authority(&self) -> String {
     if let Some(domain) = self.config.domain.as_deref() {
       return match domain.parse::<IpAddr>() {
-        Ok(ip) => SocketAddr::new(ip, self.config.bound_addr.port()).to_string(),
+        Ok(ip) => SocketAddr::new(ip, self.config.bound_addr().port()).to_string(),
         Err(_) => domain.to_string(),
       };
     }
 
-    client_addr(self.config.bound_addr).to_string()
+    client_addr(self.config.bound_addr()).to_string()
   }
 }
 
@@ -98,11 +121,31 @@ mod tests {
   use super::*;
 
   fn url(https: bool, domain: Option<&str>, bound_addr: &str) -> UrlService {
-    UrlService::new(ServerConfig::new(
-      https,
-      domain.map(str::to_string),
-      bound_addr.parse().expect("socket"),
-    ))
+    ServerConfig::new(https, domain.map(str::to_string), bound_addr.parse().expect("socket")).url()
+  }
+
+  #[test]
+  fn server_config_parses_schema_host_as_ip_address() {
+    let mut schema = ServerSchema::default();
+    schema.host = "0.0.0.0".into();
+    schema.port = 8080;
+    schema.https = true;
+    schema.domain = Some("example.local".into());
+
+    let config = ServerConfig::try_from(schema).expect("valid server config");
+
+    assert_eq!(config.bind_addr(), "0.0.0.0:8080".parse().expect("socket"));
+    assert_eq!(config.url().build("/status"), "https://example.local/status");
+  }
+
+  #[test]
+  fn server_config_rejects_host_that_is_not_an_ip_address() {
+    let mut schema = ServerSchema::default();
+    schema.host = "localhost".into();
+
+    let err = ServerConfig::try_from(schema).expect_err("host must be IP address");
+
+    assert!(matches!(err, ServerConfigError::InvalidHost { .. }));
   }
 
   #[test]

@@ -1,3 +1,3 @@
 pub mod url;
 
-pub(crate) use url::ServerAddress;
+pub(crate) use url::{ServerConfig, ServerConfigError};
