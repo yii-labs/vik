@@ -98,19 +98,22 @@ fn init_generates_symphony_github_setup_and_doctor_accepts_it() {
   assert!(prompt.contains("$symphony-workflow"), "got: {prompt}");
   let tracker_skill =
     std::fs::read_to_string(temp.path().join(".agents/skills/github-issues/SKILL.md")).expect("read skill");
+  assert!(tracker_skill.contains("ISSUE_ID"), "got: {tracker_skill}");
   assert!(
-    tracker_skill.contains("gh issue view {{ issue.id }}"),
+    tracker_skill.contains("gh issue view \"$ISSUE_ID\""),
     "got: {tracker_skill}"
   );
   assert!(
-    tracker_skill.contains("gh issue comment {{ issue.id }}"),
+    tracker_skill.contains("gh issue comment \"$ISSUE_ID\""),
     "got: {tracker_skill}"
   );
   assert!(
-    tracker_skill.contains("gh issue edit {{ issue.id }}"),
+    tracker_skill.contains("gh issue edit \"$ISSUE_ID\""),
     "got: {tracker_skill}"
   );
-  assert!(tracker_skill.contains("Closes #{{ issue.id }}"), "got: {tracker_skill}");
+  assert!(tracker_skill.contains("Closes #$ISSUE_ID"), "got: {tracker_skill}");
+  assert!(!tracker_skill.contains("!`exec("), "got: {tracker_skill}");
+  assert!(!tracker_skill.contains("{{"), "got: {tracker_skill}");
 
   let doctor = run_doctor(&workflow);
   assert!(
@@ -140,10 +143,12 @@ fn init_generates_github_issue_management_skill_and_prompt_reference() {
   assert!(!prompt.contains("__TRACKER_OPERATIONS__"), "got: {prompt}");
 
   let skill = std::fs::read_to_string(temp.path().join(".agents/skills/github-issues/SKILL.md")).expect("read skill");
-  assert!(skill.contains("gh issue view {{ issue.id }}"), "got: {skill}");
-  assert!(skill.contains("gh issue comment {{ issue.id }}"), "got: {skill}");
-  assert!(skill.contains("gh issue edit {{ issue.id }}"), "got: {skill}");
+  assert!(skill.contains("gh issue view \"$ISSUE_ID\""), "got: {skill}");
+  assert!(skill.contains("gh issue comment \"$ISSUE_ID\""), "got: {skill}");
+  assert!(skill.contains("gh issue edit \"$ISSUE_ID\""), "got: {skill}");
   assert!(skill.contains("vik init --force"), "got: {skill}");
+  assert!(!skill.contains("!`exec("), "got: {skill}");
+  assert!(!skill.contains("{{"), "got: {skill}");
 }
 
 #[test]
@@ -174,12 +179,22 @@ fn init_generates_simple_linear_setup_and_doctor_accepts_it() {
   assert!(script_body.contains("STATES='[\"work\",\"review\"]'"));
   assert!(script_body.contains("state: { name: { in: $states } }"));
   assert!(script_body.contains("variables: {teamKey: $teamKey, states: $states}"));
+  assert!(
+    script_body.contains("response=$(curl -sS https://api.linear.app/graphql"),
+    "got: {script_body}"
+  );
+  assert!(script_body.contains(") || exit $?"), "got: {script_body}");
+  assert!(
+    script_body.contains("printf '%s\\n' \"$response\""),
+    "got: {script_body}"
+  );
 
   let prompt = std::fs::read_to_string(temp.path().join(".agents/prompts/review.md")).expect("read prompt");
   assert!(!prompt.contains("Template:"));
   assert!(prompt.contains("$linear-issues"), "got: {prompt}");
   let tracker_skill =
     std::fs::read_to_string(temp.path().join(".agents/skills/linear-issues/SKILL.md")).expect("read skill");
+  assert!(tracker_skill.contains("LINEAR_ISSUE_ID"), "got: {tracker_skill}");
   assert!(tracker_skill.contains("Linear MCP `get_issue"), "got: {tracker_skill}");
   assert!(
     tracker_skill.contains("Linear MCP `create_comment"),
@@ -193,6 +208,7 @@ fn init_generates_simple_linear_setup_and_doctor_accepts_it() {
     tracker_skill.contains("Linear MCP `create_attachment"),
     "got: {tracker_skill}"
   );
+  assert!(!tracker_skill.contains("{{"), "got: {tracker_skill}");
 
   let doctor = run_doctor(&workflow);
   assert!(
@@ -310,10 +326,13 @@ fn init_generates_github_projects_script_and_status_operations() {
   let tracker_skill =
     std::fs::read_to_string(temp.path().join(".agents/skills/github-projects/SKILL.md")).expect("read skill");
   assert!(tracker_skill.contains("gh project item-edit"), "got: {tracker_skill}");
+  assert!(tracker_skill.contains("PROJECT_ITEM_ID"), "got: {tracker_skill}");
   assert!(
-    tracker_skill.contains("{{ issue.project_item_id }}"),
+    tracker_skill.contains("--id \"$PROJECT_ITEM_ID\""),
     "got: {tracker_skill}"
   );
+  assert!(!tracker_skill.contains("!`exec("), "got: {tracker_skill}");
+  assert!(!tracker_skill.contains("{{"), "got: {tracker_skill}");
 }
 
 #[test]

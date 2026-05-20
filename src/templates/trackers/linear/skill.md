@@ -18,10 +18,12 @@ latest template copy.
 
 ## Commands
 
-- Read issue: Linear MCP `get_issue { id: "{{ issue.id }}" }`.
-- Comment: Linear MCP `create_comment { issueId: "{{ issue.id }}", body: "..." }`.
+Set `LINEAR_ISSUE_ID` to the issue id shown in the stage prompt.
+
+- Read issue: Linear MCP `get_issue { id: "$LINEAR_ISSUE_ID" }`.
+- Comment: Linear MCP `create_comment { issueId: "$LINEAR_ISSUE_ID", body: "..." }`.
 - Move state: Linear MCP `update_issue`; first find the target state id with `get_workflow_states`.
-- Attach PR: Linear MCP `create_attachment { issueId: "{{ issue.id }}", url: "<pr-url>", title: "<pr-title>" }`.
+- Attach PR: Linear MCP `create_attachment { issueId: "$LINEAR_ISSUE_ID", url: "<pr-url>", title: "<pr-title>" }`.
 
 ## Read Before Work
 

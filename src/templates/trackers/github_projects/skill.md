@@ -19,14 +19,16 @@ latest template copy.
 
 ## Commands
 
-- View issue: `gh issue view {{ issue.id }} --json number,title,body,labels,comments,url`
-- Comment: `gh issue comment {{ issue.id }} --body "..."`
-- Move Project Status: `gh project item-edit --id {{ issue.project_item_id }} --project-id "$GITHUB_PROJECT_ID" --field-id "$GITHUB_PROJECT_STATUS_FIELD_ID" --single-select-option-id "$GITHUB_PROJECT_STATUS_OPTION_ID"`
+Set `ISSUE_ID` and `PROJECT_ITEM_ID` from the stage prompt.
+
+- View issue: `gh issue view "$ISSUE_ID" --json number,title,body,labels,comments,url`
+- Comment: `gh issue comment "$ISSUE_ID" --body "..."`
+- Move Project Status: `gh project item-edit --id "$PROJECT_ITEM_ID" --project-id "$GITHUB_PROJECT_ID" --field-id "$GITHUB_PROJECT_STATUS_FIELD_ID" --single-select-option-id "$GITHUB_PROJECT_STATUS_OPTION_ID"`
 - Find Project handles: `gh project view "$GITHUB_PROJECT_NUMBER" --owner "$GITHUB_PROJECT_OWNER" --format json --jq .id` and `gh project field-list "$GITHUB_PROJECT_NUMBER" --owner "$GITHUB_PROJECT_OWNER" --format json`.
-- Link PR: include `Closes #{{ issue.id }}` in the PR body or run `gh pr edit <pr> --body-file <file>`.
+- Link PR: include `Closes #$ISSUE_ID` in the PR body or run `gh pr edit <pr> --body-file <file>`.
 
 ## Read Before Work
 
 Fetch current GitHub issue detail before changing code or Status:
 
-!`exec(gh issue view {{ issue.id }} --json number,title,body,state,labels,comments,url,updatedAt)`
+`gh issue view "$ISSUE_ID" --json number,title,body,state,labels,comments,url,updatedAt`

@@ -20,10 +20,12 @@ query ($teamKey: String!, $states: [String!]!) {
   }
 }'
 
-curl -sS https://api.linear.app/graphql \
+response=$(curl -sS https://api.linear.app/graphql \
   -H "Authorization: $LINEAR_API_KEY" \
   -H "Content-Type: application/json" \
-  -d "$(jq -n --arg q "$QUERY" --arg teamKey "$TEAM_KEY" --argjson states "$STATES" '{query: $q, variables: {teamKey: $teamKey, states: $states}}')" \
+  -d "$(jq -n --arg q "$QUERY" --arg teamKey "$TEAM_KEY" --argjson states "$STATES" '{query: $q, variables: {teamKey: $teamKey, states: $states}}')") || exit $?
+
+printf '%s\n' "$response" \
 | jq '
     [
       .data.issues.nodes[]
