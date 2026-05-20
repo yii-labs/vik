@@ -7,7 +7,6 @@
 pub mod doctor;
 pub mod lifecycle;
 pub mod run;
-pub mod shutdown;
 
 use std::path::PathBuf;
 use std::process::ExitCode;

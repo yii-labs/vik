@@ -23,8 +23,12 @@ Use an explicit workflow path when managing another workflow:
 vik run -d /path/to/workflow.yml
 ```
 
-`--port` and `--bind-address` are parsed today, but the HTTP server is not
-implemented. Do not use them for normal daemon runs yet.
+HTTP stays disabled unless the workflow has a top-level `server:` section.
+`server: {}` binds `127.0.0.1:0`, so the OS picks a free port. The actual bound
+port is recorded in daemon state and printed by `vik status`.
+
+`--port` and `--bind-address` override `server.port` and `server.host`. They
+require a `server:` section in `workflow.yml`.
 
 ## Status
 
@@ -90,8 +94,9 @@ If no daemon is running, it starts one.
 Current code:
 
 1. Sends SIGTERM to the daemon pid.
-2. The daemon shutdown token cancels intake and running sessions.
-3. The orchestrator returns after cancellation.
+2. The daemon shutdown token cancels intake, running sessions, and the HTTP
+   server when enabled.
+3. The orchestrator and HTTP server return after cancellation.
 4. The daemon removes its state file and exits.
 5. `vik stop` waits up to 30 seconds for the daemon process to exit.
 

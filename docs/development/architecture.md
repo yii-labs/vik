@@ -6,15 +6,15 @@ This document describes current code. It is not a target design.
 
 Vik is one Rust binary crate. CLI startup loads `workflow.yml` into
 `WorkflowSchema`, builds a `Workflow`, prepares the workflow-scoped workspace
-root, installs logging, writes daemon state, and runs the event-driven
-orchestrator.
+root, installs logging, optionally binds the HTTP server, writes daemon state,
+and runs the daemon runtime.
 
 The orchestrator owns intake, shutdown, and drain. `StageSessionManager` owns
 running-stage state, issue setup, stage launch, session command senders, and
 hook execution behind its own typed channel.
 
-There is no `src/server/` module today. HTTP API docs describe planned work, not
-current runtime behavior.
+`src/server/` owns basic HTTP binding, `lxy` route construction, health route,
+and URL construction. State/control endpoints remain planned work.
 
 ## Folder Structure
 
@@ -32,7 +32,8 @@ src/
 |-- session/         session command/state channels, snapshots, JSONL writer
 |-- hooks/           after_create, before_run, after_run shell hooks
 |-- orchestrator/    intake loop and stage-session manager
-|-- daemon/          detach, signals, lifecycle, state file
+|-- daemon/          detach, signals, lifecycle, runtime, state file
+|-- server/          basic HTTP server, health route, URL construction
 |-- context/         issue intake data and issue-run runtime context
 `-- utils/           shared path helpers
 ```
@@ -53,6 +54,7 @@ graph TD
     cli --> daemon[daemon]
     cli --> logging[logging]
     cli --> orchestrator[orchestrator]
+    cli --> server[server]
     cli --> workspace[workspace]
 
     workflow --> config[config]
@@ -85,6 +87,7 @@ graph TD
     agent --> config
     template --> shell
     daemon --> logging
+    server --> config
 ```
 
 Important current boundaries:
@@ -96,6 +99,8 @@ Important current boundaries:
 - `Workspace` accessors produce logs, sessions, service, and issue paths.
 - `IssueRun` owns issue workspace preparation and `after_create`.
 - `IssueStage` carries issue run context, stage schema, and session log path.
+- `daemon::runtime` owns the orchestrator future plus optional server future as
+  generic futures, without importing either subsystem.
 
 ## Startup
 
@@ -107,6 +112,7 @@ sequenceDiagram
     participant Wf as Workflow
     participant Log as logging::init
     participant D as daemon
+    participant S as server
     participant O as Orchestrator
 
     Op->>CLI: vik run [-d] [workflow.yml]
@@ -120,11 +126,15 @@ sequenceDiagram
     end
     CLI->>Log: init(workspace.logs_dir)
     CLI->>D: install_shutdown_handler()
+    opt server configured
+      CLI->>S: bind server and read actual address
+    end
     CLI->>D: write state.json
-    CLI->>O: Orchestrator::new(workflow).run(shutdown)
+    CLI->>D: runtime drives server and orchestrator futures
 ```
 
-`--port` resolves a socket address, but the server path is `todo!` today.
+Missing `server` keeps HTTP disabled. `server: {}` binds `127.0.0.1:0`, records
+the actual port, and serves `GET /health`.
 
 ## Orchestrator Runtime
 
@@ -313,6 +323,7 @@ Daemon modules:
 
 - `detach/`: Unix detach and Windows unsupported stub.
 - `signals/`: SIGINT/SIGTERM/SIGHUP handling and pid liveness helpers.
+- `runtime.rs`: drives orchestrator and optional HTTP server futures.
 - `state.rs`: atomic state JSON read/write/remove.
 - `lifecycle.rs`: status, stop, restart stop phase, uninstall.
 

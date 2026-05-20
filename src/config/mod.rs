@@ -8,6 +8,7 @@ pub mod agent;
 pub mod diagnose;
 pub mod issue;
 pub mod loop_;
+pub mod server;
 pub mod workspace;
 
 use serde::{Deserialize, Serialize};
@@ -16,6 +17,7 @@ pub use agent::*;
 use diagnose::*;
 pub use issue::*;
 pub use loop_::*;
+pub use server::*;
 pub use workspace::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,6 +27,8 @@ pub struct WorkflowSchema {
   pub loop_: LoopSchema,
   #[serde(default)]
   pub workspace: WorkspaceSchema,
+  #[serde(default)]
+  pub server: Option<ServerSchema>,
   pub agents: AgentProfilesSchema,
   pub issues: IssueIntakeSchema,
   pub issue: IssueHandlingSchema,
@@ -50,6 +54,9 @@ impl WorkflowSchema {
       "issues" => issues,
       "issue" => issue,
     );
+    if let Some(server) = &self.server {
+      diagnostics.extends_with_pointer("server", server.diagnose(self));
+    }
     diagnostics.warn_unknown_fields(&self.unknown_fields);
 
     diagnostics
@@ -61,6 +68,7 @@ impl Default for WorkflowSchema {
     Self {
       loop_: LoopSchema::default(),
       workspace: WorkspaceSchema::default(),
+      server: None,
       agents: AgentProfilesSchema::default(),
       issues: IssueIntakeSchema::default(),
       issue: IssueHandlingSchema::default(),
