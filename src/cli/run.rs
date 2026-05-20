@@ -340,6 +340,7 @@ mod tests {
   fn write_state_file_logs_inside_daemon_span() {
     let (layer, events) = CaptureLayer::new();
     let subscriber = Registry::default().with(layer);
+    let _default = tracing::subscriber::set_default(subscriber);
 
     let temp = tempfile::tempdir().expect("tempdir");
     let workflow = Workflow::builder()
@@ -349,9 +350,7 @@ mod tests {
     let args = RunArgs { detached: false };
     let state_path = temp.path().join("state.json");
 
-    tracing::subscriber::with_default(subscriber, || {
-      write_state_file(&workflow, &args, None, &state_path).expect("state file written");
-    });
+    write_state_file(&workflow, &args, None, &state_path).expect("state file written");
 
     let events = events.lock().expect("events mutex");
     let event = captured_event(&events, "daemon state file written");
@@ -388,12 +387,11 @@ mod tests {
   fn http_status_logs_inside_server_span() {
     let (layer, events) = CaptureLayer::new();
     let subscriber = Registry::default().with(layer);
+    let _default = tracing::subscriber::set_default(subscriber);
 
     let address = ServerAddress::new(false, None, "127.0.0.1:9000".parse().expect("socket address"));
-    tracing::subscriber::with_default(subscriber, || {
-      trace_http_enabled(&address);
-      trace_http_disabled();
-    });
+    trace_http_enabled(&address);
+    trace_http_disabled();
 
     let events = events.lock().expect("events mutex");
     let enabled = captured_event(&events, "HTTP API enabled");
