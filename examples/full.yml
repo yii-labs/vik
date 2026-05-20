@@ -7,19 +7,22 @@
 # `vik doctor` validates YAML shape and schema diagnostics. It does not verify
 # prompt file existence, external CLI auth, tracker access, hook effects, or
 # whether provider binaries are installed.
+#
+# Rendered hook snippets and prompt commands can inject their context values,
+# for example `{{ issue.id }}` or `{{ workflow_dir }}`, before shell execution.
 
 loop:
   # Distinct issue ids allowed to run at once. Multiple matching stages for
   # one issue still count as one active issue.
   max_issue_concurrency: 2
-  # Parsed today. Intake scheduling currently sleeps through issues.pull.idle_sec.
-  wait_ms: 5000
-  # Omit this in a real daemon to poll until shutdown.
+  # Set a finite cap for demos. Omit this in a real daemon, or set it to null,
+  # to keep polling until shutdown.
   max_iterations: 100
 
 workspace:
   # Workspace home. Vik creates a per-workflow root below this path:
   # <workspace.root>/workflows/<absolute-workflow-path-with-slashes-replaced>/.
+  # If root is omitted or null, Vik uses VIK_HOME when set, otherwise ~/.vik.
   root: ../.vik-example
 
 agents:
@@ -41,7 +44,8 @@ issues:
   pull:
     # Vik runs this shell command from the workflow file directory and parses
     # stdout as one JSON array. Each item must include id or identifier, title,
-    # and state. Optional fields are preserved under the prompt/hook `issue`.
+    # and state or status. Description is optional and may also be sent as desc.
+    # Other fields are preserved under the prompt/hook `issue`.
     #
     # This GitHub example treats exactly one state label as the issue state and
     # skips blocked issues. State matching later is exact and case-sensitive.
@@ -56,11 +60,11 @@ issue:
   hooks:
     # Runs only when Vik first creates <workflow-workspace-root>/issues/<issue.id>/.
     # Existing issue workdirs skip this hook. Hook cwd is the issue workdir.
-    # Hook templates receive issue, workspace_root, workflow_path, and env.
+    # Hook templates receive issue, workflow_dir, workspace_root, workflow_path,
+    # and env.
     # Hooks do not run prompt command expansion.
     after_create: |
       git clone --depth 1 git@github.com:yii-labs/vik .
-      git checkout -B "vik/{{ issue.id }}"
 
   stages:
     plan:
@@ -83,9 +87,9 @@ issue:
         after_run: |
           git status --short
       # Inline prompts and prompt_file prompts share the same MiniJinja context.
-      # Current prompt context includes issue.*, workspace_root, workflow_path,
-      # and env. Vik does not expose root-level stage, workflow, loop, or profile
-      # template objects.
+      # Current prompt context includes issue.*, workflow_dir, workspace_root,
+      # workflow_path, and env. Stage prompts also include issue.stage. Vik does
+      # not expose root-level stage, workflow, loop, or profile template objects.
       #
       # Prompt command expansion runs after MiniJinja render. Source prompt
       # commands like !`exec(...)` execute through the shell, inject stdout, trim
