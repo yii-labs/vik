@@ -71,12 +71,16 @@ work.
 `workspace` is optional. If it is omitted, Vik uses `.vik` as the workspace
 home.
 
-If `workspace` is present, `workspace.root` is optional. It names the workspace
-home. Relative values resolve from the workflow file directory. If
-`workspace.root` is omitted or null, Vik uses `VIK_HOME` when set; otherwise it
-uses the OS home directory.
+`workspace.root` names the workspace home. Relative values resolve from the
+workflow file directory.
 
-Vik creates a workflow-scoped workspace root under that home:
+When the `workspace` section is present but empty (`workspace: {}`), or when
+`workspace.root` is null, Vik chooses the workspace home from fallback state:
+it uses a non-empty `VIK_HOME` directly when set; otherwise it uses the user
+home `.vik` directory.
+
+After choosing the workspace home, Vik creates a workflow-scoped workspace root
+under that home:
 
 ```text
 <workspace.root>/workflows/<workflow-path-key>/
