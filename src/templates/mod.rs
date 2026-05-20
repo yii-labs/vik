@@ -42,8 +42,13 @@ impl WorkflowTemplate {
       .replace("__STAGES__", &self.render_stages())
   }
 
-  pub(crate) fn render_prompt(self, stage: StageTemplate, skills: &[SkillNameBinding]) -> String {
-    let mut prompt = stage.prompt.to_string();
+  pub(crate) fn render_prompt(
+    self,
+    stage: StageTemplate,
+    tracker: TrackerTemplate,
+    skills: &[SkillNameBinding],
+  ) -> String {
+    let mut prompt = stage.prompt.replace("__TRACKER_CONTEXT__", tracker.prompt_context());
     for skill in skills {
       prompt = prompt.replace(skill.placeholder, &format!("${}", skill.name));
     }
@@ -119,6 +124,7 @@ pub(crate) struct TrackerTemplate {
   script_name: &'static str,
   idle_sec: u64,
   script: TrackerScript,
+  prompt_context: &'static str,
   skill: SkillTemplate,
 }
 
@@ -127,12 +133,14 @@ impl TrackerTemplate {
     script_name: &'static str,
     idle_sec: u64,
     script: &'static str,
+    prompt_context: &'static str,
     skill: SkillTemplate,
   ) -> Self {
     Self {
       script_name,
       idle_sec,
       script: TrackerScript::Linear(script),
+      prompt_context,
       skill,
     }
   }
@@ -141,12 +149,14 @@ impl TrackerTemplate {
     script_name: &'static str,
     idle_sec: u64,
     script: &'static str,
+    prompt_context: &'static str,
     skill: SkillTemplate,
   ) -> Self {
     Self {
       script_name,
       idle_sec,
       script: TrackerScript::Github(script),
+      prompt_context,
       skill,
     }
   }
@@ -155,12 +165,14 @@ impl TrackerTemplate {
     script_name: &'static str,
     idle_sec: u64,
     script: &'static str,
+    prompt_context: &'static str,
     skill: SkillTemplate,
   ) -> Self {
     Self {
       script_name,
       idle_sec,
       script: TrackerScript::GithubProjects(script),
+      prompt_context,
       skill,
     }
   }
@@ -175,6 +187,10 @@ impl TrackerTemplate {
 
   fn idle_sec(self) -> u64 {
     self.idle_sec
+  }
+
+  fn prompt_context(self) -> &'static str {
+    self.prompt_context
   }
 
   pub(crate) fn skill(self) -> SkillTemplate {

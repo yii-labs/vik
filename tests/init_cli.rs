@@ -323,6 +323,14 @@ fn init_generates_github_projects_script_and_status_operations() {
 
   let prompt = std::fs::read_to_string(temp.path().join(".agents/prompts/work.md")).expect("read prompt");
   assert!(prompt.contains("$github-projects"), "got: {prompt}");
+  assert!(
+    prompt.contains("Project item id: `{{ issue.project_item_id }}`"),
+    "got: {prompt}"
+  );
+  assert!(
+    prompt.contains("Project owner: `{{ issue.project_owner }}`"),
+    "got: {prompt}"
+  );
   let tracker_skill =
     std::fs::read_to_string(temp.path().join(".agents/skills/github-projects/SKILL.md")).expect("read skill");
   assert!(tracker_skill.contains("gh project item-edit"), "got: {tracker_skill}");

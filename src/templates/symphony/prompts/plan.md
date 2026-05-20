@@ -3,6 +3,7 @@
 Issue: `{{ issue.id }}`: `{{ issue.title }}`
 State: `{{ issue.state }}`
 Workdir: `{{ issue.workdir }}`
+__TRACKER_CONTEXT__
 
 ## Start
 

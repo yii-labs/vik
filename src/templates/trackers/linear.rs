@@ -5,6 +5,7 @@ pub(crate) fn template() -> TrackerTemplate {
     "linear-issues-json",
     10,
     include_str!("linear/issues-json.sh"),
+    "",
     SkillTemplate::new(
       "Linear Issues",
       "linear-issues",

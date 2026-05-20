@@ -213,7 +213,7 @@ impl InitGenerator {
     for stage in template.stages() {
       files.push(GeneratedFile::plain(
         prompt_dir.join(format!("{}.md", stage.name)),
-        template.render_prompt(*stage, skill_names),
+        template.render_prompt(*stage, tracker, skill_names),
       ));
     }
 
