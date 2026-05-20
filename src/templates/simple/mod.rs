@@ -10,5 +10,5 @@ const STAGES: &[StageTemplate] = &[
 ];
 
 pub(crate) fn template() -> WorkflowTemplate {
-  WorkflowTemplate::new(workflow::TEMPLATE, STAGES)
+  WorkflowTemplate::new(workflow::TEMPLATE, STAGES, &[])
 }

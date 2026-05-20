@@ -2,7 +2,7 @@ pub(crate) mod prompts;
 
 mod workflow;
 
-use super::{StageTemplate, WorkflowTemplate};
+use super::{SkillTemplate, StageTemplate, WorkflowTemplate};
 
 const STAGES: &[StageTemplate] = &[
   StageTemplate::new("plan", "plan", prompts::PLAN),
@@ -12,6 +12,13 @@ const STAGES: &[StageTemplate] = &[
   StageTemplate::new("merge", "merge", prompts::MERGE),
 ];
 
+const SKILLS: &[SkillTemplate] = &[SkillTemplate::new(
+  "Symphony workflow",
+  "symphony-workflow",
+  "__SYMPHONY_SKILL__",
+  include_str!("skills/symphony-workflow.md"),
+)];
+
 pub(crate) fn template() -> WorkflowTemplate {
-  WorkflowTemplate::new(workflow::TEMPLATE, STAGES)
+  WorkflowTemplate::new(workflow::TEMPLATE, STAGES, SKILLS)
 }

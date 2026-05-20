@@ -1,5 +1,6 @@
 //! Static setup templates used by `vik init`.
 
+pub(crate) mod matt_pocock;
 pub(crate) mod simple;
 pub(crate) mod symphony;
 
@@ -9,15 +10,28 @@ mod trackers;
 pub(crate) struct WorkflowTemplate {
   workflow: &'static str,
   stages: &'static [StageTemplate],
+  skills: &'static [SkillTemplate],
 }
 
 impl WorkflowTemplate {
-  pub(super) const fn new(workflow: &'static str, stages: &'static [StageTemplate]) -> Self {
-    Self { workflow, stages }
+  pub(super) const fn new(
+    workflow: &'static str,
+    stages: &'static [StageTemplate],
+    skills: &'static [SkillTemplate],
+  ) -> Self {
+    Self {
+      workflow,
+      stages,
+      skills,
+    }
   }
 
   pub(crate) fn stages(self) -> &'static [StageTemplate] {
     self.stages
+  }
+
+  pub(crate) fn skills(self) -> &'static [SkillTemplate] {
+    self.skills
   }
 
   pub(crate) fn render_workflow(self, tracker: TrackerTemplate) -> String {
@@ -28,11 +42,22 @@ impl WorkflowTemplate {
       .replace("__STAGES__", &self.render_stages())
   }
 
-  pub(crate) fn render_prompt(self, stage: StageTemplate, tracker: TrackerTemplate) -> String {
-    stage
+  pub(crate) fn render_prompt(
+    self,
+    stage: StageTemplate,
+    tracker: TrackerTemplate,
+    skills: &[SkillNameBinding],
+  ) -> String {
+    let mut prompt = stage
       .prompt
       .replace("__TRACKER_READ__", tracker.read())
-      .replace("__TRACKER_OPERATIONS__", tracker.operations())
+      .replace("__TRACKER_OPERATIONS__", tracker.operations());
+
+    for skill in skills {
+      prompt = prompt.replace(skill.placeholder, &format!("${}", skill.name));
+    }
+
+    prompt
   }
 
   fn render_stages(self) -> String {
@@ -61,6 +86,41 @@ impl StageTemplate {
   pub(super) const fn new(name: &'static str, state: &'static str, prompt: &'static str) -> Self {
     Self { name, state, prompt }
   }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct SkillTemplate {
+  pub(crate) display_name: &'static str,
+  pub(crate) default_name: &'static str,
+  pub(crate) placeholder: &'static str,
+  contents: &'static str,
+}
+
+impl SkillTemplate {
+  pub(super) const fn new(
+    display_name: &'static str,
+    default_name: &'static str,
+    placeholder: &'static str,
+    contents: &'static str,
+  ) -> Self {
+    Self {
+      display_name,
+      default_name,
+      placeholder,
+      contents,
+    }
+  }
+
+  pub(crate) fn render_contents(self, name: &str) -> String {
+    self
+      .contents
+      .replace(&format!("name: {}", self.default_name), &format!("name: {name}"))
+  }
+}
+
+pub(crate) struct SkillNameBinding {
+  pub(crate) placeholder: &'static str,
+  pub(crate) name: String,
 }
 
 #[derive(Clone, Copy)]
@@ -105,6 +165,22 @@ impl TrackerTemplate {
     }
   }
 
+  pub(super) const fn github_projects_script(
+    script_name: &'static str,
+    idle_sec: u64,
+    script: &'static str,
+    read: &'static str,
+    operations: &'static str,
+  ) -> Self {
+    Self {
+      script_name,
+      idle_sec,
+      script: TrackerScript::GithubProjects(script),
+      read,
+      operations,
+    }
+  }
+
   pub(crate) fn script_name(self) -> &'static str {
     self.script_name
   }
@@ -128,6 +204,7 @@ impl TrackerTemplate {
   pub(crate) fn render_script(self, stages: &[StageTemplate]) -> String {
     match self.script {
       TrackerScript::Github(script) => render_github_script(script, stages),
+      TrackerScript::GithubProjects(script) => render_github_script(script, stages),
       TrackerScript::Linear(script) => render_linear_script(script, stages),
     }
   }
@@ -136,11 +213,16 @@ impl TrackerTemplate {
 #[derive(Clone, Copy)]
 enum TrackerScript {
   Github(&'static str),
+  GithubProjects(&'static str),
   Linear(&'static str),
 }
 
 pub(crate) fn github_tracker() -> TrackerTemplate {
   trackers::github::template()
+}
+
+pub(crate) fn github_projects_tracker() -> TrackerTemplate {
+  trackers::github_projects::template()
 }
 
 pub(crate) fn linear_tracker() -> TrackerTemplate {

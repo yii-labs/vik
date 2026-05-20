@@ -10,6 +10,7 @@ __TRACKER_READ__
 
 ## Work
 
+- Use __SYMPHONY_SKILL__ for Symphony stage rules.
 - Do only the work for this stage.
 - Keep tracker comments current.
 - Move tracker state only after this stage is complete.

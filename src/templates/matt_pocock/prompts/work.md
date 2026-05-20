@@ -1,4 +1,4 @@
-# plan Stage
+# work Stage
 
 Issue: `{{ issue.id }}`: `{{ issue.title }}`
 State: `{{ issue.state }}`
@@ -10,10 +10,9 @@ __TRACKER_READ__
 
 ## Work
 
-- Use __SYMPHONY_SKILL__ for Symphony stage rules.
-- Do only the work for this stage.
+- Implement only scoped issue work.
 - Keep tracker comments current.
-- Move tracker state only after this stage is complete.
+- Move tracker state only after validation passes.
 
 ## Tracker Operations
 
@@ -21,6 +20,5 @@ __TRACKER_OPERATIONS__
 
 ## Finish
 
-- Record what changed.
+- Record changed files.
 - Record validation commands and results.
-- Move state to the next workflow state when complete.

@@ -48,6 +48,8 @@ fn init_help_shows_non_interactive_flags() {
   assert!(stdout.contains("--template"), "got: {stdout}");
   assert!(stdout.contains("--tracker"), "got: {stdout}");
   assert!(stdout.contains("--force"), "got: {stdout}");
+  assert!(stdout.contains("matt-pocock"), "got: {stdout}");
+  assert!(stdout.contains("github-projects"), "got: {stdout}");
 }
 
 #[test]
@@ -152,6 +154,153 @@ fn init_generates_simple_linear_setup_and_doctor_accepts_it() {
 }
 
 #[test]
+fn init_generates_all_template_tracker_pairs_and_doctor_accepts_them() {
+  for template in ["simple", "symphony", "matt-pocock"] {
+    for tracker in ["github", "github-projects", "linear"] {
+      let temp = tempfile::tempdir().expect("tempdir");
+      let workflow = temp.path().join("workflow.yml");
+
+      let output = run_init(&workflow, template, tracker);
+      assert!(
+        output.status.success(),
+        "template={template} tracker={tracker}\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+      );
+
+      let doctor = run_doctor(&workflow);
+      assert!(
+        doctor.status.success(),
+        "template={template} tracker={tracker}\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&doctor.stdout),
+        String::from_utf8_lossy(&doctor.stderr),
+      );
+    }
+  }
+}
+
+#[test]
+fn init_generates_matt_pocock_setup_with_skills_and_ready_hitl_issue_prompt() {
+  let temp = tempfile::tempdir().expect("tempdir");
+  let workflow = temp.path().join("workflow.yml");
+
+  let output = run_init(&workflow, "matt-pocock", "github");
+  assert!(
+    output.status.success(),
+    "stdout: {}\nstderr: {}",
+    String::from_utf8_lossy(&output.stdout),
+    String::from_utf8_lossy(&output.stderr),
+  );
+
+  let workflow_yaml = std::fs::read_to_string(&workflow).expect("read workflow");
+  for stage in ["grill", "prd", "issues", "work", "review", "merge"] {
+    assert!(
+      workflow_yaml.contains(&format!("    {stage}:")),
+      "missing stage {stage} in {workflow_yaml}"
+    );
+    assert!(
+      temp.path().join(".agents").join("prompts").join(format!("{stage}.md")).exists(),
+      "missing prompt for {stage}",
+    );
+  }
+
+  for skill in ["grill-me", "to-prd", "to-issues"] {
+    assert!(
+      temp.path().join(".agents").join("skills").join(skill).join("SKILL.md").exists(),
+      "missing skill {skill}",
+    );
+  }
+
+  let grill_prompt = std::fs::read_to_string(temp.path().join(".agents/prompts/grill.md")).expect("read grill prompt");
+  assert!(grill_prompt.contains("$grill-me"), "got: {grill_prompt}");
+  let prd_prompt = std::fs::read_to_string(temp.path().join(".agents/prompts/prd.md")).expect("read prd prompt");
+  assert!(prd_prompt.contains("$to-prd"), "got: {prd_prompt}");
+  let issues_prompt =
+    std::fs::read_to_string(temp.path().join(".agents/prompts/issues.md")).expect("read issues prompt");
+  assert!(issues_prompt.contains("$to-issues"), "got: {issues_prompt}");
+  assert!(issues_prompt.contains("ready"), "got: {issues_prompt}");
+  assert!(issues_prompt.contains("HITL"), "got: {issues_prompt}");
+}
+
+#[test]
+fn init_generates_github_projects_script_and_status_operations() {
+  let temp = tempfile::tempdir().expect("tempdir");
+  let workflow = temp.path().join("workflow.yml");
+
+  let output = run_init(&workflow, "simple", "github-projects");
+  assert!(
+    output.status.success(),
+    "stdout: {}\nstderr: {}",
+    String::from_utf8_lossy(&output.stdout),
+    String::from_utf8_lossy(&output.stderr),
+  );
+
+  let workflow_yaml = std::fs::read_to_string(&workflow).expect("read workflow");
+  assert!(workflow_yaml.contains("command: sh ./scripts/github-project-items-json"));
+
+  let script = temp.path().join("scripts").join("github-project-items-json");
+  let script_body = std::fs::read_to_string(&script).expect("read script");
+  assert!(script_body.contains("gh project item-list"));
+  assert!(script_body.contains("GITHUB_PROJECT_OWNER"));
+  assert!(script_body.contains("GITHUB_PROJECT_NUMBER"));
+  assert!(script_body.contains("state: .status"));
+  assert!(script_body.contains("project_item_id: .id"));
+  assert!(script_body.contains(". == \"work\" or . == \"review\""));
+
+  let prompt = std::fs::read_to_string(temp.path().join(".agents/prompts/work.md")).expect("read prompt");
+  assert!(prompt.contains("gh project item-edit"));
+  assert!(prompt.contains("{{ issue.project_item_id }}"));
+}
+
+#[test]
+fn init_fails_on_non_interactive_skill_name_collision_without_force() {
+  let temp = tempfile::tempdir().expect("tempdir");
+  let workflow = temp.path().join("workflow.yml");
+  let skill = temp.path().join(".agents/skills/grill-me/SKILL.md");
+  std::fs::create_dir_all(skill.parent().expect("skill parent")).expect("create skill dir");
+  std::fs::write(&skill, "existing skill").expect("write skill");
+
+  let output = run_init(&workflow, "matt-pocock", "github");
+  assert!(
+    !output.status.success(),
+    "expected non-zero; stdout={} stderr={}",
+    String::from_utf8_lossy(&output.stdout),
+    String::from_utf8_lossy(&output.stderr),
+  );
+
+  let stderr = String::from_utf8(output.stderr).expect("utf-8 stderr");
+  assert!(stderr.contains("bundled skill name already exists"), "got: {stderr}");
+  assert!(stderr.contains("grill-me"), "got: {stderr}");
+  assert!(
+    !workflow.exists(),
+    "workflow must not be generated after skill collision"
+  );
+}
+
+#[test]
+fn init_force_overwrites_existing_skill_files() {
+  let temp = tempfile::tempdir().expect("tempdir");
+  let workflow = temp.path().join("workflow.yml");
+  let skill = temp.path().join(".agents/skills/grill-me/SKILL.md");
+  std::fs::create_dir_all(skill.parent().expect("skill parent")).expect("create skill dir");
+  std::fs::write(&skill, "old skill").expect("write skill");
+
+  let output = run_init_force(&workflow, "matt-pocock", "github");
+  assert!(
+    output.status.success(),
+    "stdout: {}\nstderr: {}",
+    String::from_utf8_lossy(&output.stdout),
+    String::from_utf8_lossy(&output.stderr),
+  );
+
+  let skill_body = std::fs::read_to_string(&skill).expect("read skill");
+  let prompt_body = std::fs::read_to_string(temp.path().join(".agents/prompts/grill.md")).expect("read prompt");
+  assert!(skill_body.contains("Grill the plan"), "got: {skill_body}");
+  assert!(prompt_body.contains("$grill-me"), "got: {prompt_body}");
+  assert!(!skill_body.contains("old skill"));
+}
+
+#[test]
 #[cfg(unix)]
 fn init_prompts_for_missing_choices() {
   use expectrl::{Eof, Expect, Session};
@@ -165,20 +314,64 @@ fn init_prompts_for_missing_choices() {
   let mut session = Session::spawn(command).expect("spawn vik init");
   session.set_expect_timeout(Some(Duration::from_secs(20)));
   session.expect("Templates?").expect("template prompt");
+  session.expect("Simple: work -> review").expect("simple choice label");
   session
     .expect("Symphony: plan(rework) -> work -> review -> merge")
     .expect("symphony choice label");
-  session.send("\x1b[B\r").expect("select simple template");
+  session
+    .expect("Matt Pocock: grill -> prd -> issues(ready/HITL) -> work -> review -> merge")
+    .expect("matt pocock choice label");
+  session.send("\x1b[B\x1b[B\r").expect("select matt pocock template");
   session.expect("Issue tracker?").expect("tracker prompt");
-  session.send("\x1b[B\r").expect("select linear tracker");
+  session.expect("GitHub Issue").expect("github issue choice label");
+  session.expect("GitHub Projects").expect("github projects choice label");
+  session.expect("Linear").expect("linear choice label");
+  session.send("\x1b[B\r").expect("select github projects tracker");
   session.expect("Created Vik workflow setup").expect("created setup");
   session.expect(Eof).expect("vik init exits");
 
   let workflow_yaml = std::fs::read_to_string(&workflow).expect("read workflow");
-  assert!(workflow_yaml.contains("command: sh ./scripts/linear-issues-json"));
-  assert!(workflow_yaml.contains("    work:"), "got: {workflow_yaml}");
-  assert!(workflow_yaml.contains("    review:"), "got: {workflow_yaml}");
-  assert!(!workflow_yaml.contains("    plan:"), "got: {workflow_yaml}");
+  assert!(workflow_yaml.contains("command: sh ./scripts/github-project-items-json"));
+  assert!(workflow_yaml.contains("    grill:"), "got: {workflow_yaml}");
+  assert!(workflow_yaml.contains("    issues:"), "got: {workflow_yaml}");
+  assert!(workflow_yaml.contains("    merge:"), "got: {workflow_yaml}");
+}
+
+#[test]
+#[cfg(unix)]
+fn init_prompts_for_alternate_skill_name_when_default_skill_exists() {
+  use expectrl::{Eof, Expect, Session};
+
+  let temp = tempfile::tempdir().expect("tempdir");
+  let workflow = temp.path().join("workflow.yml");
+  let existing_skill = temp.path().join(".agents/skills/symphony-workflow/SKILL.md");
+  std::fs::create_dir_all(existing_skill.parent().expect("skill parent")).expect("create skill dir");
+  std::fs::write(&existing_skill, "keep existing skill").expect("write skill");
+
+  let mut command = Command::new(vik_bin());
+  command.arg("init").arg(&workflow);
+
+  let mut session = Session::spawn(command).expect("spawn vik init");
+  session.set_expect_timeout(Some(Duration::from_secs(20)));
+  session.expect("Templates?").expect("template prompt");
+  session.send("\x1b[B\r").expect("select symphony template");
+  session.expect("Issue tracker?").expect("tracker prompt");
+  session.send("\r").expect("select github tracker");
+  session
+    .expect("Skill name for Symphony workflow?")
+    .expect("skill rename prompt");
+  session.send("symphony-local\r").expect("enter alternate skill name");
+  session.expect("Created Vik workflow setup").expect("created setup");
+  session.expect(Eof).expect("vik init exits");
+
+  let existing_skill_body = std::fs::read_to_string(&existing_skill).expect("read existing skill");
+  let prompt_body = std::fs::read_to_string(temp.path().join(".agents/prompts/work.md")).expect("read prompt");
+  assert_eq!(existing_skill_body, "keep existing skill");
+  assert!(
+    temp.path().join(".agents/skills/symphony-local/SKILL.md").exists(),
+    "missing renamed skill",
+  );
+  assert!(prompt_body.contains("$symphony-local"), "got: {prompt_body}");
 }
 
 #[test]

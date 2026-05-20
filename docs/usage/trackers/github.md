@@ -88,25 +88,41 @@ What this does, step by step:
 ### Pattern: state from a project field
 
 If you use GitHub Projects (v2), pull from there instead so the
-project board is the source of truth:
+project board is the source of truth. `vik init --tracker github-projects`
+generates this pattern as an editable script under `scripts/`:
 
 ```sh
-gh project item-list <project-number> --owner <org> --format json --limit 100 \
-  | jq '
+GITHUB_PROJECT_OWNER=<org>
+GITHUB_PROJECT_NUMBER=<project-number>
+GITHUB_PROJECT_QUERY="repo:owner/name is:issue"
+
+gh project item-list "$GITHUB_PROJECT_NUMBER" \
+  --owner "$GITHUB_PROJECT_OWNER" \
+  --limit 50 \
+  --format json \
+  --query "$GITHUB_PROJECT_QUERY" \
+  --jq '
     [
       .items[]
       | select(.content.type == "Issue")
+      | select(.status == "work" or .status == "review")
       | {
           id: (.content.number | tostring),
           title: .content.title,
-          state: .status
+          state: .status,
+          project_status: .status,
+          project_item_id: .id
         }
     ]
   '
 ```
 
-Replace `.status` with whatever the field is called in your project.
-You can find the exact key name with `gh project field-list <number> --owner <org>`.
+The generated prompt operations use `project_item_id` with
+`gh project item-edit`. Set `GITHUB_PROJECT_ID`,
+`GITHUB_PROJECT_STATUS_FIELD_ID`, and the target
+`GITHUB_PROJECT_STATUS_OPTION_ID` before moving Status. You can find
+those values with `gh project view <number> --owner <org> --format json`
+and `gh project field-list <number> --owner <org> --format json`.
 
 ### Tips for any pull command
 

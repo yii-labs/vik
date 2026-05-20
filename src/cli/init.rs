@@ -7,10 +7,10 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, ValueEnum};
-use inquire::Select;
+use inquire::{Select, Text};
 use thiserror::Error;
 
-use crate::templates::{self, TrackerTemplate, WorkflowTemplate};
+use crate::templates::{self, SkillNameBinding, SkillTemplate, TrackerTemplate, WorkflowTemplate};
 
 #[derive(Debug, Parser)]
 pub struct InitArgs {
@@ -29,17 +29,21 @@ pub struct InitArgs {
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum InitTemplate {
-  /// Plan, work, rework, review, and merge stages.
-  Symphony,
   /// Work and review stages only.
   Simple,
+  /// Plan, work, rework, review, and merge stages.
+  Symphony,
+  /// Grill, PRD, issues, work, review, and merge stages.
+  MattPocock,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum InitTracker {
   /// GitHub Issue workflow using the GitHub CLI.
   Github,
-  /// Linear workflow using Linear API intake and MCP prompt operations.
+  /// GitHub Projects workflow using Project Status.
+  GithubProjects,
+  /// Linear workflow using Linear API intake and explicit prompt operations.
   Linear,
 }
 
@@ -59,11 +63,13 @@ pub fn execute(workflow_path: PathBuf, args: InitArgs) -> ExitCode {
 fn execute_inner(workflow_path: PathBuf, args: InitArgs) -> Result<InitReport, InitError> {
   let template = choose_template(args.template)?;
   let tracker = choose_tracker(args.tracker)?;
+  let interactive = args.template.is_none() || args.tracker.is_none();
   let generator = InitGenerator {
     workflow_path,
     template,
     tracker,
     force: args.force,
+    interactive,
   };
 
   generator.generate()
@@ -75,11 +81,15 @@ fn choose_template(choice: Option<InitTemplate>) -> Result<InitTemplate, InitErr
     None => prompt_choice(
       "Templates?",
       &[
+        Choice::new("Simple: work -> review", InitTemplate::Simple),
         Choice::new(
           "Symphony: plan(rework) -> work -> review -> merge",
           InitTemplate::Symphony,
         ),
-        Choice::new("Simple(oneshot): work -> review", InitTemplate::Simple),
+        Choice::new(
+          "Matt Pocock: grill -> prd -> issues(ready/HITL) -> work -> review -> merge",
+          InitTemplate::MattPocock,
+        ),
       ],
       "--template",
     ),
@@ -93,6 +103,7 @@ fn choose_tracker(choice: Option<InitTracker>) -> Result<InitTracker, InitError>
       "Issue tracker?",
       &[
         Choice::new("GitHub Issue", InitTracker::Github),
+        Choice::new("GitHub Projects", InitTracker::GithubProjects),
         Choice::new("Linear", InitTracker::Linear),
       ],
       "--tracker",
@@ -131,12 +142,15 @@ struct InitGenerator {
   template: InitTemplate,
   tracker: InitTracker,
   force: bool,
+  interactive: bool,
 }
 
 impl InitGenerator {
   fn generate(&self) -> Result<InitReport, InitError> {
     let workflow_dir = workflow_dir(&self.workflow_path);
-    let files = self.files(&workflow_dir);
+    let template = self.template.definition();
+    let skill_names = self.resolve_skill_names(&workflow_dir, template)?;
+    let files = self.files(&workflow_dir, template, &skill_names);
     let existing = files
       .iter()
       .filter(|file| file.path.exists())
@@ -174,10 +188,15 @@ impl InitGenerator {
     })
   }
 
-  fn files(&self, workflow_dir: &Path) -> Vec<GeneratedFile> {
+  fn files(
+    &self,
+    workflow_dir: &Path,
+    template: WorkflowTemplate,
+    skill_names: &[SkillNameBinding],
+  ) -> Vec<GeneratedFile> {
     let prompt_dir = workflow_dir.join(".agents").join("prompts");
+    let skill_dir = workflow_dir.join(".agents").join("skills");
     let scripts_dir = workflow_dir.join("scripts");
-    let template = self.template.definition();
     let tracker = self.tracker.definition();
 
     let mut files = vec![
@@ -191,11 +210,66 @@ impl InitGenerator {
     for stage in template.stages() {
       files.push(GeneratedFile::plain(
         prompt_dir.join(format!("{}.md", stage.name)),
-        template.render_prompt(*stage, tracker),
+        template.render_prompt(*stage, tracker, skill_names),
+      ));
+    }
+
+    for (skill, binding) in template.skills().iter().zip(skill_names) {
+      files.push(GeneratedFile::plain(
+        skill_dir.join(&binding.name).join("SKILL.md"),
+        skill.render_contents(&binding.name),
       ));
     }
 
     files
+  }
+
+  fn resolve_skill_names(
+    &self,
+    workflow_dir: &Path,
+    template: WorkflowTemplate,
+  ) -> Result<Vec<SkillNameBinding>, InitError> {
+    let skill_dir = workflow_dir.join(".agents").join("skills");
+    template
+      .skills()
+      .iter()
+      .map(|skill| self.resolve_skill_name(&skill_dir, *skill))
+      .collect()
+  }
+
+  fn resolve_skill_name(&self, skill_dir: &Path, skill: SkillTemplate) -> Result<SkillNameBinding, InitError> {
+    if self.force || !skill_dir.join(skill.default_name).exists() {
+      return Ok(SkillNameBinding {
+        placeholder: skill.placeholder,
+        name: skill.default_name.to_string(),
+      });
+    }
+
+    if !self.interactive {
+      return Err(InitError::SkillNameCollision {
+        name: skill.default_name.to_string(),
+      });
+    }
+
+    loop {
+      let name = Text::new(&format!("Skill name for {}?", skill.display_name))
+        .with_default(&format!("{}-local", skill.default_name))
+        .prompt()
+        .map_err(|source| InitError::Prompt {
+          flag: "--template",
+          source,
+        })?;
+      validate_skill_name(&name)?;
+
+      if !skill_dir.join(&name).exists() {
+        return Ok(SkillNameBinding {
+          placeholder: skill.placeholder,
+          name,
+        });
+      }
+
+      let _ = writeln!(io::stderr(), "skill name already exists: {name}");
+    }
   }
 }
 
@@ -210,8 +284,9 @@ fn workflow_dir(path: &Path) -> PathBuf {
 impl InitTemplate {
   fn definition(self) -> WorkflowTemplate {
     match self {
-      InitTemplate::Symphony => templates::symphony::template(),
       InitTemplate::Simple => templates::simple::template(),
+      InitTemplate::Symphony => templates::symphony::template(),
+      InitTemplate::MattPocock => templates::matt_pocock::template(),
     }
   }
 }
@@ -220,6 +295,7 @@ impl InitTracker {
   fn definition(self) -> TrackerTemplate {
     match self {
       InitTracker::Github => templates::github_tracker(),
+      InitTracker::GithubProjects => templates::github_projects_tracker(),
       InitTracker::Linear => templates::linear_tracker(),
     }
   }
@@ -268,6 +344,14 @@ enum InitError {
   #[error("refusing to overwrite existing file(s): {paths}", paths = display_paths(.paths))]
   WouldOverwrite { paths: Vec<PathBuf> },
 
+  #[error(
+    "bundled skill name already exists: {name}; rerun interactively to choose another name or pass --force to overwrite it"
+  )]
+  SkillNameCollision { name: String },
+
+  #[error("invalid skill name `{name}`; use letters, numbers, dot, dash, or underscore")]
+  InvalidSkillName { name: String },
+
   #[error("failed to create directory {path}: {source}")]
   CreateDir {
     path: PathBuf,
@@ -289,4 +373,16 @@ fn display_paths(paths: &[PathBuf]) -> String {
     .map(|path| path.display().to_string())
     .collect::<Vec<_>>()
     .join(", ")
+}
+
+fn validate_skill_name(name: &str) -> Result<(), InitError> {
+  if !name.is_empty()
+    && name
+      .chars()
+      .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_'))
+  {
+    return Ok(());
+  }
+
+  Err(InitError::InvalidSkillName { name: name.to_string() })
 }

@@ -56,7 +56,7 @@ If any of these fail, install the missing tool before continuing.
 ## 1. Generate starter files
 
 Pick (or create) a folder where you want to work from, then generate
-the workflow, prompt files, and tracker helper script:
+the workflow, prompt files, bundled skills, and tracker helper script:
 
 ```sh
 mkdir -p hello-vik
@@ -66,24 +66,29 @@ vik init ./workflow.yml
 
 `vik init` asks for:
 
-- template: `Symphony` or `Simple`
-- tracker: `GitHub Issue` or `Linear`
+- template: `Simple`, `Symphony`, or `Matt Pocock`
+- tracker: `GitHub Issue`, `GitHub Projects`, or `Linear`
 
 For scripts or CI, pass choices directly:
 
 ```sh
 vik init --template symphony --tracker github ./workflow.yml
+vik init --template matt-pocock --tracker github-projects ./workflow.yml
 vik init --template simple --tracker linear ./workflow.yml
 ```
 
 The command refuses to overwrite generated files unless you pass
-`--force`.
+`--force`. When a template needs bundled skills and the default skill
+folder already exists, interactive `vik init` asks for another skill
+name and updates generated prompt references. Non-interactive mode
+fails on that collision unless you pass `--force`.
 
 Open these generated files in your editor:
 
 ```text
 workflow.yml
 .agents/prompts/
+.agents/skills/
 scripts/
 ```
 
@@ -159,11 +164,12 @@ Pick the tracker you use and follow its dedicated guide for full
 setup, sample pull commands, and the prompt-side commands you will
 need later (read details, leave comments, change state, etc.).
 
-| Tracker     | Auth                            | Setup guide                                    |
-| ----------- | ------------------------------- | ---------------------------------------------- |
-| GitHub      | `gh auth login` (or `GH_TOKEN`) | [GitHub Issue Source](trackers/github.md)      |
-| Linear      | `export LINEAR_API_KEY=...`     | [Linear Issue Source](trackers/linear.md)      |
-| Feishu Base | `lark-cli auth login`           | [Feishu Base Issue Source](trackers/feishu.md) |
+| Tracker         | Auth                            | Setup guide                                    |
+| --------------- | ------------------------------- | ---------------------------------------------- |
+| GitHub Issues   | `gh auth login` (or `GH_TOKEN`) | [GitHub Issue Source](trackers/github.md)      |
+| GitHub Projects | `gh auth login` with project scope | [GitHub Issue Source](trackers/github.md)   |
+| Linear          | `export LINEAR_API_KEY=...`     | [Linear Issue Source](trackers/linear.md)      |
+| Feishu Base     | `lark-cli auth login`           | [Feishu Base Issue Source](trackers/feishu.md) |
 
 Whichever you pick, every issue your pull command emits must include
 at least:
