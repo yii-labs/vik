@@ -1,0 +1,127 @@
+# Full workflow.yml example for current Vik behavior.
+#
+# Relative paths resolve from this workflow file's directory, not from the
+# shell cwd used to start Vik. This example lives in examples/, so ../ paths
+# point back at the repository root.
+#
+# `vik doctor` validates YAML shape and schema diagnostics. It does not verify
+# prompt file existence, external CLI auth, tracker access, hook effects, or
+# whether provider binaries are installed.
+#
+# Rendered hook snippets and prompt commands can inject their context values,
+# for example `{{ issue.id }}` or `{{ workflow_dir }}`, before shell execution.
+
+loop:
+  # Distinct issue ids allowed to run at once. Multiple matching stages for
+  # one issue still count as one active issue.
+  max_issue_concurrency: 2
+  # Set a finite cap for demos. Omit this in a real daemon, or set it to null,
+  # to keep polling until shutdown.
+  max_iterations: 100
+
+workspace:
+  # Workspace home. Vik creates a per-workflow root below this path:
+  # <workspace.root>/workflows/<absolute-workflow-path-with-slashes-replaced>/.
+  # If the whole workspace section is omitted, Vik uses .vik relative to this
+  # workflow file. If workspace.root is omitted or null inside this section,
+  # Vik uses VIK_HOME when set, otherwise ~/.vik.
+  root: ~/.vik
+
+agents:
+  codex-high:
+    runtime: codex
+    model: gpt-5.5
+    args:
+      # Runtime args are forwarded to the provider CLI. Vik does not validate
+      # provider-specific flag names.
+      --config:
+        - model_reasoning_effort=high
+  claude-sonnet:
+    runtime: claude_code
+    model: claude-sonnet-4-6
+    args:
+      --permission-mode: acceptEdits
+
+issues:
+  pull:
+    # Vik runs this shell command from the workflow file directory and parses
+    # stdout as one JSON array. Each item must include id or identifier, title,
+    # and state or status. Description is optional and may also be sent as desc.
+    # Other fields are preserved under the prompt/hook `issue`.
+    #
+    # This GitHub example treats exactly one state label as the issue state and
+    # skips blocked issues. State matching later is exact and case-sensitive.
+    command: >-
+      gh issue list --state open --limit 50
+      --json number,title,body,labels,url
+      --jq '[.[] | [.labels[].name] as $labels | ($labels | map(select(. == "todo" or . == "work" or . == "review"))) as $states | select(($states | length == 1) and ($labels | index("blocked") | not)) | {id: (.number | tostring), title, description: (.body // ""), state: $states[0], url, labels: $labels}]'
+    # Sleep after each pull cycle completes.
+    idle_sec: 30
+
+issue:
+  hooks:
+    # Runs only when Vik first creates <workflow-workspace-root>/issues/<issue.id>/.
+    # Existing issue workdirs skip this hook. Hook cwd is the issue workdir.
+    # Hook templates receive issue, workflow_dir, workspace_root, workflow_path,
+    # and env.
+    # Hooks do not run prompt command expansion.
+    after_create: |
+      git clone --depth 1 git@github.com:yii-labs/vik .
+
+  stages:
+    plan:
+      # Dispatch requires exact equality: issue.state == "todo".
+      when:
+        state: todo
+      agent: codex-high
+      # Prompt files resolve from the workflow file directory.
+      prompt_file: ../.agents/prompts/plan.md
+
+    implement:
+      when:
+        state: work
+      agent: codex-high
+      hooks:
+        # Runs before the agent session starts. Failure aborts this stage.
+        before_run: |
+          git status --short
+        # Runs after terminal session state, except cancelled sessions.
+        after_run: |
+          git status --short
+      # Inline prompts and prompt_file prompts share the same MiniJinja context.
+      # Current prompt context includes issue.*, workflow_dir, workspace_root,
+      # workflow_path, and env. Stage prompts also include issue.stage. Vik does
+      # not expose root-level stage, workflow, loop, or profile template objects.
+      #
+      # Prompt command expansion runs after MiniJinja render. Source prompt
+      # commands like !`exec(...)` execute through the shell, inject stdout, trim
+      # one trailing newline, and fail the render on non-zero exit.
+      #
+      # Vik never mutates tracker state by itself. If this stage should advance
+      # the tracker, the prompt must tell the agent to run the tracker command.
+      prompt: |
+        Issue: {{ issue.id }} - {{ issue.title }}
+        State: {{ issue.state }}
+        Workdir: {{ issue.workdir }}
+        Workflow: {{ workflow_path }}
+
+        Latest tracker payload:
+        !`exec(gh issue view {{ issue.id }} --json title,body,labels,url)`
+
+        Implement the requested change in this workdir. When validation passes,
+        update tracker state explicitly, for example:
+
+        ```sh
+        gh issue edit {{ issue.id }} --remove-label work --add-label review
+        ```
+
+    review:
+      when:
+        state: review
+      agent: claude-sonnet
+      prompt_file: ../.agents/prompts/merge.md
+      hooks:
+        before_run: |
+          git status --short
+        after_run: |
+          git status --short
