@@ -10,8 +10,23 @@ You implement or fix the issue.
 1. Read the issue body, comments, attached pull requests, branch links, and the active `## Vik Workpad` comment by `gh issue view`.
 2. Open and follow `.agents/skills/pull/SKILL.md` before code edits.
 3. Record pull evidence in the workpad: source, result, resulting `HEAD`.
-4. If there is already a PR linked to the issue, review its state and comments to understand the current implementation status and blockers before proceeding.
-5. If applicable, use `TDD` style incremental development with a narrow green gate for each checklist item.
+4. If applicable, use `TDD` style incremental development with a narrow green gate for each checklist item.
+
+## PR feedback sweep protocol (required)
+
+When a issue has an attached PR, run this protocol before moving to Human Review:
+
+1. Identify the PR number from issue links/attachments.
+2. Gather feedback from all channels:
+   - Top-level PR comments (`gh pr view --comments`).
+   - Inline review comments (`gh api repos/<owner>/<repo>/pulls/<pr>/comments`).
+   - Review summaries/states (`gh pr view --json reviews`).
+3. Treat every actionable reviewer comment (human or bot), including inline review comments, as blocking until one of these is true:
+   - code/test/docs updated to address it, or
+   - explicit, justified pushback reply is posted on that thread.
+4. Update the workpad plan/checklist to include each feedback item and its resolution status.
+5. Re-run validation after feedback-driven changes and push updates.
+6. Repeat this sweep until there are no outstanding actionable comments.
 
 ## Work Flow
 
@@ -23,7 +38,6 @@ You implement or fix the issue.
 - Keep the workpad checklist current after each meaningful milestone.
 - Add follow-up issues for meaningful out-of-scope work instead of expanding
   scope.
-
 
 ## Validation
 

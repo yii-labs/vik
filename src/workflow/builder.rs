@@ -181,6 +181,7 @@ mod tests {
 
   #[test]
   fn workflow_without_workspace_root_defaults_to_home_vik_and_workflow_namespace() {
+    let _guard = utils::paths::VIK_HOME_TEST_LOCK.lock().expect("VIK_HOME lock");
     let temp = tempfile::tempdir().expect("tempdir");
     let workflow_path = temp.path().join("workflow.yml");
     let workflow = Workflow::builder()
