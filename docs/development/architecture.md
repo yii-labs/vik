@@ -33,7 +33,7 @@ src/
 |-- agent/           AgentAdapter trait, Codex and Claude Code adapters
 |-- session/         session command/state channels, snapshots, JSONL writer
 |-- hooks/           after_create, before_run, after_run shell hooks
-|-- orchestrator/    intake loop and stage-session manager
+|-- orchestrator/    intake loop, pull command execution, and stage-session manager
 |-- daemon/          run startup, detach, signals, lifecycle, runtime, state file
 |-- server/          basic HTTP server, health route, URL construction
 |-- context/         issue intake data and issue-run runtime context
@@ -69,6 +69,7 @@ graph TD
     orchestrator --> hooks
     orchestrator --> context[context]
     orchestrator --> logging
+    orchestrator --> shell
 
     session --> agent[agent]
     session --> config
@@ -94,7 +95,8 @@ graph TD
 
 Important current boundaries:
 
-- `orchestrator` does not import `agent` or `shell`.
+- `orchestrator` does not import `agent`.
+- `orchestrator` imports `shell` only for issue pull command execution.
 - `agent` adapters do not spawn subprocesses directly.
 - `SessionFactory` is the orchestrator-to-session spawn seam.
 - `Workflow` is the path/config carrier passed into runtime layers.
@@ -176,7 +178,9 @@ Dispatch flow:
 ## Intake
 
 `IntakeLoop` runs `issues.pull.command` from the workflow file directory, waits
-for command completion, and parses stdout as `Issues(Vec<Issue>)` JSON.
+for command completion, and parses stdout as `Issues(Vec<Issue>)` JSON. Pull
+command execution lives in `orchestrator` because intake owns the pull loop and
+its cancellation behavior.
 
 The sleep between intake cycles is `issues.pull.idle_sec`.
 

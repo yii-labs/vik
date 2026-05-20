@@ -6,6 +6,7 @@
 
 mod event;
 mod intake;
+mod pull;
 mod session_manager;
 
 use std::sync::Arc;

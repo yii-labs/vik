@@ -1,12 +1,10 @@
 mod intake;
-mod pull;
 mod run;
 
 use serde::Serialize;
 use serde_json::{Map, Value};
 
 pub use intake::{Issue, Issues};
-pub(crate) use pull::{IssuePullError, parse_issues_output, run_pull_command};
 pub use run::{IssueRun, IssueStage, IssueStageKey};
 
 pub struct Context {

@@ -9,7 +9,7 @@ Run:
 
 ```sh
 rg -n "crate::agent" src/orchestrator src/template src/workspace src/logging
-rg -n "crate::shell" src/orchestrator src/config src/workflow src/logging src/workspace
+rg -n "crate::shell" src/config src/workflow src/logging src/workspace
 rg -n "crate::orchestrator" src/agent src/session src/hooks src/template src/workflow src/workspace src/daemon
 ```
 
@@ -20,6 +20,7 @@ Allowed edges:
 - `session -> agent`
 - `session -> shell`
 - `session -> template`
+- `orchestrator -> shell`
 - `agent -> config`
 - `template -> shell`
 - `hooks -> shell`

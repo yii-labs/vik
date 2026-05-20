@@ -14,11 +14,12 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
-use crate::context::{IssuePullError, RenderContext, parse_issues_output, run_pull_command};
+use crate::context::RenderContext;
 use crate::template::{JinjaRenderer, TemplateError};
 use crate::workflow::Workflow;
 
 use super::event::EventProducer;
+use super::pull::{IssuePullError, parse_issues_output, run_pull_command};
 
 #[derive(Clone)]
 pub(super) struct IntakeLoop {

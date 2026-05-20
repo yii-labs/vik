@@ -16,7 +16,7 @@ use crate::workflow::Workflow;
 const PULL_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 const STDERR_TAIL_BYTES: usize = 4096;
 
-pub(crate) async fn run_pull_command(
+pub(super) async fn run_pull_command(
   workflow: &Workflow,
   command: &str,
   shutdown: &CancellationToken,
@@ -59,7 +59,7 @@ pub(crate) async fn run_pull_command(
   String::from_utf8(output.stdout).map_err(IssuePullError::PullCommandStdout)
 }
 
-pub(crate) fn parse_issues_output(output: &str) -> Result<Issues, IssuePullError> {
+pub(super) fn parse_issues_output(output: &str) -> Result<Issues, IssuePullError> {
   serde_json::from_str(output).map_err(IssuePullError::ParseIssues)
 }
 
@@ -88,7 +88,7 @@ fn shell_command(command: &str) -> Command {
 }
 
 #[derive(Debug, Error)]
-pub(crate) enum IssuePullError {
+pub(super) enum IssuePullError {
   #[error(transparent)]
   PullCommand(#[from] CommandExecError),
   #[error("issue pull command exited with code {code}: {stderr_tail}")]
