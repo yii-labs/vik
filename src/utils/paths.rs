@@ -50,6 +50,10 @@ pub fn resolve_from<P: AsRef<Path>>(from: &Path, to_resolve: P) -> Option<PathBu
 }
 
 const VIK_HOME_ENV_NAME: &str = "VIK_HOME";
+
+#[cfg(test)]
+pub(crate) static VIK_HOME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub fn default_home() -> PathBuf {
   if let Some(vik_home) = env::var_os(VIK_HOME_ENV_NAME).filter(|home| !home.is_empty()) {
     return PathBuf::from(vik_home);
@@ -63,6 +67,15 @@ pub fn default_home() -> PathBuf {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  fn restore_vik_home(original: Option<std::ffi::OsString>) {
+    unsafe {
+      match original {
+        Some(value) => std::env::set_var(VIK_HOME_ENV_NAME, value),
+        None => std::env::remove_var(VIK_HOME_ENV_NAME),
+      }
+    }
+  }
 
   #[test]
   fn test_canonicalize() {
@@ -138,25 +151,34 @@ mod tests {
 
   #[test]
   fn default_home_uses_env_var() {
+    let _guard = VIK_HOME_TEST_LOCK.lock().expect("VIK_HOME lock");
+    let original = std::env::var_os(VIK_HOME_ENV_NAME);
     let temp = tempfile::Builder::new().prefix("vik-home-").tempdir().expect("tempdir");
     unsafe { std::env::set_var(VIK_HOME_ENV_NAME, temp.path()) };
     let out = default_home();
     assert_eq!(out, temp.path());
+    restore_vik_home(original);
   }
 
   #[test]
   fn default_home_falls_back_to_user_home() {
+    let _guard = VIK_HOME_TEST_LOCK.lock().expect("VIK_HOME lock");
+    let original = std::env::var_os(VIK_HOME_ENV_NAME);
     let expected = dirs::home_dir().expect("home dir available in test env").join(".vik");
     unsafe { std::env::remove_var(VIK_HOME_ENV_NAME) };
     let out = default_home();
     assert_eq!(out, expected);
+    restore_vik_home(original);
   }
 
   #[test]
   fn default_home_ignores_empty_env_var() {
+    let _guard = VIK_HOME_TEST_LOCK.lock().expect("VIK_HOME lock");
+    let original = std::env::var_os(VIK_HOME_ENV_NAME);
     let expected = dirs::home_dir().expect("home dir available in test env").join(".vik");
     unsafe { std::env::set_var(VIK_HOME_ENV_NAME, "") };
     let out = default_home();
     assert_eq!(out, expected);
+    restore_vik_home(original);
   }
 }
