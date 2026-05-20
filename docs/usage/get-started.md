@@ -174,6 +174,14 @@ need later (read details, leave comments, change state, etc.).
 | Linear          | `export LINEAR_API_KEY=...`     | [Linear Issue Source](trackers/linear.md)      |
 | Feishu Base     | `lark-cli auth login`           | [Feishu Base Issue Source](trackers/feishu.md) |
 
+`vik init` generates editable tracker scripts. GitHub Projects scripts read
+`GITHUB_PROJECT_OWNER`, `GITHUB_PROJECT_NUMBER`, and optional
+`GITHUB_PROJECT_LIMIT`; Linear scripts read `LINEAR_API_KEY` and optional
+`LINEAR_TEAM_KEY`. Keep these in the environment of the process that starts
+Vik. If you need to pass them through `workflow.yml`, `issues.pull.command` is
+rendered before intake runs, so values can be injected with `{{ env.VAR_NAME }}`
+instead of shell-specific `VAR=value command` prefixes.
+
 Whichever you pick, every issue your pull command emits must include
 at least:
 

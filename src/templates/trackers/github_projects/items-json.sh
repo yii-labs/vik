@@ -1,6 +1,3 @@
-: "${GITHUB_PROJECT_OWNER:?GITHUB_PROJECT_OWNER is required}"
-: "${GITHUB_PROJECT_NUMBER:?GITHUB_PROJECT_NUMBER is required}"
-
 gh project item-list "$GITHUB_PROJECT_NUMBER" \
   --owner "$GITHUB_PROJECT_OWNER" \
   --limit "${GITHUB_PROJECT_LIMIT:-50}" \

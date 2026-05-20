@@ -7,15 +7,6 @@ description: Manage Linear issues for a Vik workflow with explicit Linear operat
 
 Use this skill for Linear issue reads, comments, state moves, and PR links.
 
-## Intake
-
-The generated workflow runs `sh ./scripts/linear-issues-json`. Set
-`LINEAR_API_KEY` and `LINEAR_TEAM_KEY`, then edit the script for your Linear
-team and workflow states.
-
-Refresh this bundled tracker skill with `vik init --force` when you want the
-latest template copy.
-
 ## Commands
 
 Set `LINEAR_ISSUE_ID` to the issue id shown in the stage prompt.

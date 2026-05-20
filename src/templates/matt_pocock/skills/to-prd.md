@@ -12,4 +12,3 @@ Write a short product requirements document from the current issue context.
 - State problem, user outcome, scope, non-goals, acceptance criteria, and validation.
 - Keep requirements testable.
 - Link source issue and important decisions.
-- Refresh this bundled skill with `vik init --force` when you want the latest template copy.

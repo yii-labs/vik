@@ -13,4 +13,3 @@ Split PRD work into small implementation issues.
 - Mark automation-ready issues as `ready`.
 - Mark decision-blocked issues as `HITL`.
 - Include acceptance criteria and validation on every issue.
-- Refresh this bundled skill with `vik init --force` when you want the latest template copy.

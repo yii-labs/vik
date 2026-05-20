@@ -34,6 +34,13 @@ fn run_doctor(workflow: &Path) -> std::process::Output {
     .expect("spawn vik doctor")
 }
 
+fn assert_skill_has_no_user_setup_text(skill: &str) {
+  assert!(!skill.contains("## Intake"), "got: {skill}");
+  assert!(!skill.contains("The generated workflow runs"), "got: {skill}");
+  assert!(!skill.contains("vik init --force"), "got: {skill}");
+  assert!(!skill.contains("edit the script"), "got: {skill}");
+}
+
 #[test]
 fn init_help_shows_non_interactive_flags() {
   let output = Command::new(vik_bin()).args(["init", "--help"]).output().expect("spawn vik");
@@ -96,6 +103,9 @@ fn init_generates_symphony_github_setup_and_doctor_accepts_it() {
   assert!(!prompt.contains("Template:"));
   assert!(prompt.contains("$github-issues"), "got: {prompt}");
   assert!(prompt.contains("$symphony-workflow"), "got: {prompt}");
+  let workflow_skill =
+    std::fs::read_to_string(temp.path().join(".agents/skills/symphony-workflow/SKILL.md")).expect("read skill");
+  assert_skill_has_no_user_setup_text(&workflow_skill);
   let tracker_skill =
     std::fs::read_to_string(temp.path().join(".agents/skills/github-issues/SKILL.md")).expect("read skill");
   assert!(tracker_skill.contains("ISSUE_ID"), "got: {tracker_skill}");
@@ -112,6 +122,7 @@ fn init_generates_symphony_github_setup_and_doctor_accepts_it() {
     "got: {tracker_skill}"
   );
   assert!(tracker_skill.contains("Closes #$ISSUE_ID"), "got: {tracker_skill}");
+  assert_skill_has_no_user_setup_text(&tracker_skill);
   assert!(!tracker_skill.contains("!`exec("), "got: {tracker_skill}");
   assert!(!tracker_skill.contains("{{"), "got: {tracker_skill}");
 
@@ -146,7 +157,7 @@ fn init_generates_github_issue_management_skill_and_prompt_reference() {
   assert!(skill.contains("gh issue view \"$ISSUE_ID\""), "got: {skill}");
   assert!(skill.contains("gh issue comment \"$ISSUE_ID\""), "got: {skill}");
   assert!(skill.contains("gh issue edit \"$ISSUE_ID\""), "got: {skill}");
-  assert!(skill.contains("vik init --force"), "got: {skill}");
+  assert_skill_has_no_user_setup_text(&skill);
   assert!(!skill.contains("!`exec("), "got: {skill}");
   assert!(!skill.contains("{{"), "got: {skill}");
 }
@@ -175,6 +186,7 @@ fn init_generates_simple_linear_setup_and_doctor_accepts_it() {
   let script = temp.path().join("scripts").join("linear-issues-json");
   let script_body = std::fs::read_to_string(&script).expect("read script");
   assert!(script_body.contains("LINEAR_API_KEY"));
+  assert!(!script_body.contains(":?"), "got: {script_body}");
   assert!(script_body.contains("https://api.linear.app/graphql"));
   assert!(script_body.contains("STATES='[\"work\",\"review\"]'"));
   assert!(script_body.contains("state: { name: { in: $states } }"));
@@ -208,6 +220,7 @@ fn init_generates_simple_linear_setup_and_doctor_accepts_it() {
     tracker_skill.contains("Linear MCP `create_attachment"),
     "got: {tracker_skill}"
   );
+  assert_skill_has_no_user_setup_text(&tracker_skill);
   assert!(!tracker_skill.contains("{{"), "got: {tracker_skill}");
 
   let doctor = run_doctor(&workflow);
@@ -273,10 +286,7 @@ fn init_generates_matt_pocock_setup_with_skills_and_ready_hitl_issue_prompt() {
   for skill in ["grill-me", "grill-with-docs", "to-prd", "to-issues"] {
     let skill_body = std::fs::read_to_string(temp.path().join(".agents").join("skills").join(skill).join("SKILL.md"))
       .expect("read skill");
-    assert!(
-      skill_body.contains("vik init --force"),
-      "missing refresh path in {skill}: {skill_body}",
-    );
+    assert_skill_has_no_user_setup_text(&skill_body);
     assert!(
       temp.path().join(".agents").join("skills").join(skill).join("SKILL.md").exists(),
       "missing skill {skill}",
@@ -316,6 +326,7 @@ fn init_generates_github_projects_script_and_status_operations() {
   assert!(script_body.contains("gh project item-list"));
   assert!(script_body.contains("GITHUB_PROJECT_OWNER"));
   assert!(script_body.contains("GITHUB_PROJECT_NUMBER"));
+  assert!(!script_body.contains(":?"), "got: {script_body}");
   assert!(!script_body.contains("--query"));
   assert!(script_body.contains("state: .status"));
   assert!(script_body.contains("project_item_id: .id"));
@@ -339,6 +350,8 @@ fn init_generates_github_projects_script_and_status_operations() {
     tracker_skill.contains("--id \"$PROJECT_ITEM_ID\""),
     "got: {tracker_skill}"
   );
+  assert_skill_has_no_user_setup_text(&tracker_skill);
+  assert!(!tracker_skill.contains("GITHUB_PROJECT_OWNER"), "got: {tracker_skill}");
   assert!(!tracker_skill.contains("!`exec("), "got: {tracker_skill}");
   assert!(!tracker_skill.contains("{{"), "got: {tracker_skill}");
 }

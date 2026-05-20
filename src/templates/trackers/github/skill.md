@@ -7,14 +7,6 @@ description: Manage GitHub Issues for a Vik workflow with explicit gh commands.
 
 Use this skill for GitHub issue reads, comments, state labels, and PR links.
 
-## Intake
-
-The generated workflow runs `sh ./scripts/github-issues-json`. Edit that script
-for your repository labels, blocked label, limit, and sort order.
-
-Refresh this bundled tracker skill with `vik init --force` when you want the
-latest template copy.
-
 ## Commands
 
 Set `ISSUE_ID` to the issue id shown in the stage prompt.

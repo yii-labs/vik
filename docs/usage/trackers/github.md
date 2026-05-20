@@ -92,12 +92,9 @@ project board is the source of truth. `vik init --tracker github-projects`
 generates this pattern as an editable script under `scripts/`:
 
 ```sh
-GITHUB_PROJECT_OWNER=<org>
-GITHUB_PROJECT_NUMBER=<project-number>
-
 gh project item-list "$GITHUB_PROJECT_NUMBER" \
   --owner "$GITHUB_PROJECT_OWNER" \
-  --limit 50 \
+  --limit "${GITHUB_PROJECT_LIMIT:-50}" \
   --format json \
   --jq '
     [
@@ -109,11 +106,16 @@ gh project item-list "$GITHUB_PROJECT_NUMBER" \
           title: .content.title,
           state: .status,
           project_status: .status,
-          project_item_id: .id
+          project_item_id: .id,
+          project_owner: env.GITHUB_PROJECT_OWNER,
+          project_number: env.GITHUB_PROJECT_NUMBER
         }
     ]
   '
 ```
+
+The script expects `GITHUB_PROJECT_OWNER` and `GITHUB_PROJECT_NUMBER` in the
+environment. `GITHUB_PROJECT_LIMIT` is optional and defaults to `50`.
 
 The generated prompt operations use `project_item_id` with
 `gh project item-edit`. Set `GITHUB_PROJECT_ID`,
