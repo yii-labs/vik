@@ -156,7 +156,7 @@ Agent subprocess cwd is the issue workspace.
 
 - `workspace` is optional. If omitted, the workspace home defaults to `.vik`.
 - If `workspace` is present, `workspace.root` is optional. It uses
-  `VIK_HOME` when set; otherwise it uses `~/.vik`.
+  `VIK_HOME` when set; otherwise it uses the OS home directory.
 - Relative `workspace.root` values resolve from the workflow file directory.
 - Vik appends `workflows/<workflow-path-key>/` to build one
   workflow-scoped workspace root per workflow file.
