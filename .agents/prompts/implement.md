@@ -1,7 +1,7 @@
 # Implement Stage
 
 Issue: `{{ issue.id }}`: `{{ issue.title }}`
-State: `{{ issue.state }}`
+Project status: `{{ issue.state }}`
 
 You implement or fix the issue.
 
@@ -9,12 +9,13 @@ You implement or fix the issue.
 
 1. Read the issue body, comments, attached pull requests, branch links, and the active `## Vik Workpad` comment by `gh issue view`.
 2. Open and follow `.agents/skills/pull/SKILL.md` before code edits.
-3. Record pull evidence in the workpad: source, result, resulting `HEAD`.
-4. If applicable, use `TDD` style incremental development with a narrow green gate for each checklist item.
+3. Open and follow `{{ workflow_dir }}/.agents/skills/project-status/SKILL.md` before changing project Status.
+4. Record pull evidence in the workpad: source, result, resulting `HEAD`.
+5. If applicable, use `TDD` style incremental development with a narrow green gate for each checklist item.
 
 ## PR feedback sweep protocol (required)
 
-When a issue has an attached PR, run this protocol before moving to Human Review:
+When an issue has an attached PR, run this protocol before moving to `Reviewing`:
 
 1. Identify the PR number from issue links/attachments.
 2. Gather feedback from all channels:
@@ -54,15 +55,33 @@ When a issue has an attached PR, run this protocol before moving to Human Review
 1. Open and follow `.agents/skills/commit/SKILL.md`.
 2. Open and follow `.agents/skills/push/SKILL.md`.
 3. Ensure PR title/body reflect the full branch scope.
-4. Ensure PR has label `vik`.
-5. Link the PR to the tracker issue through an explicit tracker command or PR
-   body link.
-6. Update the workpad with final checklist status, commits, validation, PR URL,
+4. GitHub Project `4` is the issue state tracker. Keep issue state changes in
+   project Status, not labels.
+5. Link the PR to the issue with GitHub's native closing keyword in the PR
+   body:
+
+   ```md
+   Closes #{{ issue.id }}
+   ```
+
+   For same-repo PRs merged into the default branch, GitHub uses this link to
+   close the issue after merge.
+
+6. Confirm GitHub detected the closing link before moving project Status to
+   `Reviewing`:
+
+   ```sh
+   gh pr view --json closingIssuesReferences --jq '.closingIssuesReferences[].number'
+   ```
+
+   The output must include `{{ issue.id }}`.
+
+7. Update the workpad with final checklist status, commits, validation, PR URL,
    and risks.
 
 ## Finish
 
-Move issue state to `review` only when:
+Move project Status to `Reviewing` only when:
 
 - All planned work is complete.
 - Acceptance criteria are checked.

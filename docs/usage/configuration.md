@@ -31,7 +31,7 @@ issues:
 issue:
   hooks:
     after_create: |
-      git clone --depth 1 git@github.com:yii-labs/vik .
+      git clone --depth 1 <your-repo-url> .
   stages:
     plan:
       when:
@@ -241,7 +241,8 @@ wrapper. Hooks do not support prompt command expansion.
 
 Hook contexts:
 
-- `after_create`: `issue`, `workspace_root`, `workflow_path`, and `env`.
+- `after_create`: `issue`, `workspace_root`, `workflow_path`, `workflow_dir`,
+  and `env`.
 - stage hooks: same context as `after_create`, plus `issue.stage`.
 
 `issue` contains `id`, `title`, `description`, `state`, `workdir`, and optional

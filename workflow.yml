@@ -20,37 +20,37 @@ agents:
 issues:
   pull:
     command: >-
-      gh issue list --state "open" --limit 50
-      --json number,title,labels
-      --jq '[.[] | [.labels[].name] as $labels | ($labels | map(select(. == "todo" or . == "work" or . == "merging" or . == "rework"))) as $states | select(($states | length == 1) and ($labels | index("blocked") | not)) | {id: (.number | tostring), title, state: $states[0]}]'
-    idle_sec: 60
+      gh project item-list 4 --owner yii-labs --limit 200 --format json
+      --query 'repo:yii-labs/vik is:issue is:open status:Digging,Rework,"In Progress",Merging'
+      --jq '[.items[] | select((.content.type // .type) == "Issue") | select((.content.repository // .content.repository.nameWithOwner? // .repository // "") == "yii-labs/vik") | (.status // "") as $status | select($status == "Digging" or $status == "Rework" or $status == "In Progress" or $status == "Merging") | {id: ((.content.number? // .number? // ((.content.url // .url // "") | split("/")[-1])) | tostring), title: (.title // .content.title), state: $status, url: (.content.url // .url), project_status: $status, project_item_id: .id}]'
+    idle_sec: 120
 
 issue:
   hooks:
     after_create: |
-      git clone --depth 1 git@github.com:yii-labs/vik .
+      git clone --depth=1 git@github.com:yii-labs/vik.git .
 
   stages:
-    plan:
+    dig:
       when:
-        state: todo
+        state: Digging
       agent: codex
       prompt_file: ./.agents/prompts/plan.md
 
     rework:
       when:
-        state: rework
+        state: Rework
       agent: codex
       prompt_file: ./.agents/prompts/plan.md
 
     implement:
       when:
-        state: work
+        state: In Progress
       agent: codex
       prompt_file: ./.agents/prompts/implement.md
 
     merge:
       when:
-        state: merging
+        state: Merging
       agent: codex-medium
       prompt_file: ./.agents/prompts/merge.md

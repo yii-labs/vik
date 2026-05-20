@@ -1,53 +1,45 @@
 # Prepare Stage
 
 Issue: `{{ issue.id }}`: `{{ issue.title }}`
-State: `{{ issue.state }}`
+Project status: `{{ issue.state }}`
 
-You prepare the issue for implementation.
+You run a grill and context collection session for the issue.
 Do not write production code in this stage.
 
-The only successful state transition from this stage is `work`. If blocked before a safe plan exists, keep
-the issue in its current state and record the blocker in the workpad.
+This stage starts only from project Status `Digging`.
+The successful state transitions from this stage are `In Progress` and `HITL`.
 
-## Start for `todo` State
+## Start
 
 1. Read the issue body, comments, attached pull requests, branch links, and any existing `## Vik Workpad` comment
    by `gh issue view`.
 2. Create one `## Vik Workpad` comment if none exists. Reuse and update the existing active workpad if present.
 3. Do not create extra progress comments.
 4. Update the same comment for every plan change.
-5. Move issue state to `work` only after the workpad is complete.
+5. Open and follow `{{ workflow_dir }}/.agents/skills/project-status/SKILL.md` before changing project Status.
 
-## Start for `rework` State
+## Grill and Context Collection
 
-When `{{ issue.state }}` is `rework`, treat the task as a full approach reset:
-
-1. Reread the issue, workpad, PR comments, inline review comments, and CI state.
-2. Identify what must change this attempt.
-3. Close the PR linked to close the issue,
-  do not read and reuse any piece of code from that PR.
-4. Rewind all workpad edits and plan from the very beginning. Take the previous workpad for reference only.
-5. Create or switch to a fresh issue branch from `origin/main` when the old
-  branch is not reusable.
-6. Run the normal implementation flow after the reset.
-
-## Additional Context
-
-- If the skill `grill-me` or `grill-with-docs` is available, use it to tighten
-  the plan before moving the issue to `work`.
-- Vik workflow stages are usually one-shot runs. Do not block only because a
-  grill skill asks interactive questions.
-- Answer any codebase-checkable grill questions by reading the issue, workpad,
-  linked PRs, docs, source, tests, workflow files, and CI state.
-- Ask the user only when missing information makes a safe plan impossible.
-- If missing information blocks the plan, keep the issue in its current state
-  and record the blocker in the active workpad.
-- If the skill `handoff` is available, use it only as a planning aid. The
-  durable handoff is the active `## Vik Workpad` comment.
+- Collect current facts before writing the plan: issue body, comments, active
+  workpad, linked pull requests, branch links, review comments, CI state, docs,
+  source, tests.
+- If the skill `grill-me` or `grill-with-docs` is available, use its challenge
+  style as a non-interactive self-grill. Do not enter interactive interview
+  mode.
+- Ask the important grill questions yourself. Answer them from collected
+  context when the repo or tracker gives enough evidence.
+- Choose the recommended answer when evidence makes it safe. Record important
+  assumptions in `Notes`.
+- If a safe answer cannot be inferred, record the question in `Confusions`,
+  move project Status to `HITL`, and explain the blocker in the workpad.
+- If `grill-with-docs` finds a domain term or documented-decision mismatch,
+  record the mismatch in the workpad. Do not edit repo docs unless the issue
+  asks for that doc change.
+- If the skill `handoff` is available, use it only as a context compression aid.
+  The durable handoff is the active `## Vik Workpad` comment.
 - Do not rely on temp files or generated handoff files as the source of truth
-  for the next stage.
-- Summarize any useful `handoff` output back into the workpad before the state
-  transition.
+  for the next stage. Summarize any useful handoff output back into the workpad
+  before the state transition.
 
 ## Workpad Template
 
@@ -89,12 +81,15 @@ Keep this exact structure and update it in place:
 
 ## Finish
 
-Move issue state to `work` only when:
+Move project Status to `In Progress` only when:
 
 - Workpad exists and is current.
 - Plan is actionable.
 - Acceptance criteria are explicit.
 - Validation checklist is explicit.
 - No required information is missing.
+
+Move project Status to `HITL` when a human decision is required, context is
+missing, or proceeding would risk using private or ambiguous context.
 
 Final response: completed actions and blockers only.

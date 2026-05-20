@@ -1,6 +1,7 @@
 # Merge Stage
 
 Issue: `{{ issue.id }}`: `{{ issue.title }}`
+Project status: `{{ issue.state }}`
 
 You are landing an approved PR.
 
@@ -24,7 +25,9 @@ You are landing an approved PR.
 
 After successful merge:
 
-- Move tracker issue to done or close it using explicit tracker commands.
+- Do not move project Status to `Done` manually. GitHub Project automation sets
+  `Done` when the linked PR merges.
+- Confirm issue `#{{ issue.id }}` is closed and project Status is `Done`.
 - Update the workpad with merge commit or PR merge evidence.
 - Do not delete remote branches unless repo policy or land skill says to.
 - Remove the local `{{ issue.workdir }}` workspace.
