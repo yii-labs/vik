@@ -60,8 +60,13 @@ impl ShutdownSignals {
   }
 }
 
+#[allow(dead_code)]
 pub fn install_shutdown_handler() -> Result<ShutdownSignals, SignalError> {
   let token = CancellationToken::new();
+  install_shutdown_handler_with_token(token)
+}
+
+pub fn install_shutdown_handler_with_token(token: CancellationToken) -> Result<ShutdownSignals, SignalError> {
   #[cfg(unix)]
   {
     unix::install(token.clone())?;

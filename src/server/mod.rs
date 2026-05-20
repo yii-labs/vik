@@ -6,7 +6,6 @@ mod services;
 use axum::ServiceExt;
 use lxy::routing::RouterService;
 use thiserror::Error;
-use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::ServerSchema;
@@ -14,23 +13,22 @@ use crate::config::ServerSchema;
 pub(crate) use services::ServerAddress;
 
 pub(crate) struct PreparedServer {
-  listener: TcpListener,
+  listener: std::net::TcpListener,
   routes: RouterService,
   address: ServerAddress,
   shutdown: CancellationToken,
 }
 
 impl PreparedServer {
-  pub(crate) async fn bind(config: &ServerSchema, shutdown: CancellationToken) -> Result<Self, ServerError> {
+  pub(crate) fn bind(config: &ServerSchema, shutdown: CancellationToken) -> Result<Self, ServerError> {
     let listener =
-      TcpListener::bind((config.host.as_str(), config.port))
-        .await
-        .map_err(|source| ServerError::Bind {
-          host: config.host.clone(),
-          port: config.port,
-          source,
-        })?;
+      std::net::TcpListener::bind((config.host.as_str(), config.port)).map_err(|source| ServerError::Bind {
+        host: config.host.clone(),
+        port: config.port,
+        source,
+      })?;
     let bound_addr = listener.local_addr().map_err(ServerError::LocalAddr)?;
+    listener.set_nonblocking(true).map_err(ServerError::SetNonblocking)?;
     let address = ServerAddress::new(config.https, config.domain.clone(), bound_addr);
 
     Ok(Self {
@@ -44,20 +42,28 @@ impl PreparedServer {
   pub(crate) fn address(&self) -> &ServerAddress {
     &self.address
   }
+
+  fn into_tokio_listener(
+    self,
+  ) -> Result<(tokio::net::TcpListener, RouterService, ServerAddress, CancellationToken), ServerError> {
+    let listener = tokio::net::TcpListener::from_std(self.listener).map_err(ServerError::Serve)?;
+    Ok((listener, self.routes, self.address, self.shutdown))
+  }
 }
 
 pub(crate) async fn run(server: PreparedServer) -> Result<(), ServerError> {
-  let addr = server.address.bound_addr();
+  let (listener, routes, address, shutdown) = server.into_tokio_listener()?;
+  let addr = address.bound_addr();
   tracing::info_span!("server").in_scope(|| {
     tracing::info!(
       bind_address = %addr,
-      base_url = %server.address.url().build("/"),
+      base_url = %address.url().build("/"),
       "HTTP server listening",
     );
   });
 
-  axum::serve(server.listener, server.routes.into_make_service())
-    .with_graceful_shutdown(server.shutdown.cancelled_owned())
+  axum::serve(listener, routes.into_make_service())
+    .with_graceful_shutdown(shutdown.cancelled_owned())
     .await
     .map_err(ServerError::Serve)
 }
@@ -75,6 +81,9 @@ pub(crate) enum ServerError {
   #[error("failed to read bound HTTP address: {0}")]
   LocalAddr(#[source] std::io::Error),
 
+  #[error("failed to set HTTP listener nonblocking: {0}")]
+  SetNonblocking(#[source] std::io::Error),
+
   #[error("HTTP server failed: {0}")]
   Serve(#[source] std::io::Error),
 }
@@ -88,9 +97,7 @@ mod tests {
   #[tokio::test]
   async fn bind_discovers_actual_port_for_random_port_config() {
     let config = ServerSchema::default();
-    let server = PreparedServer::bind(&config, CancellationToken::new())
-      .await
-      .expect("server binds");
+    let server = PreparedServer::bind(&config, CancellationToken::new()).expect("server binds");
 
     assert_eq!(server.address().bind_address(), "127.0.0.1");
     assert_ne!(server.address().port(), 0);
@@ -100,7 +107,7 @@ mod tests {
   async fn server_runs_health_route_and_stops_on_shutdown() {
     let shutdown = CancellationToken::new();
     let config = ServerSchema::default();
-    let server = PreparedServer::bind(&config, shutdown.clone()).await.expect("server binds");
+    let server = PreparedServer::bind(&config, shutdown.clone()).expect("server binds");
     let addr = server.address().bound_addr();
     let handle = tokio::spawn(run(server));
 
@@ -121,7 +128,7 @@ mod tests {
   async fn server_runs_status_route() {
     let shutdown = CancellationToken::new();
     let config = ServerSchema::default();
-    let server = PreparedServer::bind(&config, shutdown.clone()).await.expect("server binds");
+    let server = PreparedServer::bind(&config, shutdown.clone()).expect("server binds");
     let addr = server.address().bound_addr();
     let handle = tokio::spawn(run(server));
 

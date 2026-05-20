@@ -52,6 +52,8 @@ fn run_inner(workflow: Workflow, args: &RunArgs) -> anyhow::Result<()> {
   // belongs in the file appender that does not exist yet.
   let mut stale_state_note: Option<(u32, std::path::PathBuf)> = None;
 
+  let shutdown = CancellationToken::new();
+
   if args.detached {
     // Reject double-detach against a live daemon before forking. Once
     // the parent `_exit`s, the operator has no foreground stderr
@@ -76,6 +78,8 @@ fn run_inner(workflow: Workflow, args: &RunArgs) -> anyhow::Result<()> {
       },
     }
 
+    let server = prepare_server(&workflow, shutdown.clone())?;
+
     // Detach must happen before the tracing subscriber is installed.
     // The grandchild reinstalls it below so its rolling appenders are
     // owned by the surviving process; the original parent has already
@@ -85,8 +89,21 @@ fn run_inner(workflow: Workflow, args: &RunArgs) -> anyhow::Result<()> {
       let _ = writeln!(io::stderr(), "failed to prepare log dir {}: {err}", log_dir.display());
     }
     daemon::detach(&log_dir).with_context(|| "detach daemon")?;
+    run_runtime(workflow, args, shutdown, server, stale_state_note)?;
+    return Ok(());
   }
 
+  let server = prepare_server(&workflow, shutdown.clone())?;
+  run_runtime(workflow, args, shutdown, server, stale_state_note)
+}
+
+fn run_runtime(
+  workflow: Workflow,
+  args: &RunArgs,
+  shutdown: CancellationToken,
+  server: Option<PreparedServer>,
+  stale_state_note: Option<(u32, std::path::PathBuf)>,
+) -> anyhow::Result<()> {
   let _guard = init_logging(&workflow, !args.detached)?;
 
   if let Some((stale_pid, stale_path)) = stale_state_note {
@@ -105,7 +122,8 @@ fn run_inner(workflow: Workflow, args: &RunArgs) -> anyhow::Result<()> {
     .context("build tokio runtime")?;
 
   runtime.block_on(async move {
-    let signals = daemon::install_shutdown_handler().map_err(|err| anyhow!("install shutdown handler: {err:#}"))?;
+    let signals = signals::install_shutdown_handler_with_token(shutdown.clone())
+      .map_err(|err| anyhow!("install shutdown handler: {err:#}"))?;
     let shutdown = signals.token();
 
     {
@@ -118,12 +136,12 @@ fn run_inner(workflow: Workflow, args: &RunArgs) -> anyhow::Result<()> {
           "starting vik",
       );
     }
+    trace_http_state(server.as_ref().map(PreparedServer::address));
     // State file goes down before the orchestrator spins up so
     // lifecycle commands can already address us. Foreground runs
     // also write it — the operator may have started a foreground
     // daemon in another shell and want to manage it from elsewhere.
     let state_path = workflow.workspace().service_state_file().to_path_buf();
-    let server = prepare_server(&workflow, shutdown.clone()).await?;
     write_state_file(
       &workflow,
       args,
@@ -173,15 +191,11 @@ async fn drive_runtime(
   daemon::runtime::drive(shutdown, orch_future, server_future).await
 }
 
-async fn prepare_server(workflow: &Workflow, shutdown: CancellationToken) -> anyhow::Result<Option<PreparedServer>> {
+fn prepare_server(workflow: &Workflow, shutdown: CancellationToken) -> anyhow::Result<Option<PreparedServer>> {
   let Some(config) = effective_server_config(workflow) else {
-    trace_http_disabled();
     return Ok(None);
   };
-  let server = PreparedServer::bind(&config, shutdown)
-    .await
-    .with_context(|| "prepare HTTP server")?;
-  trace_http_enabled(server.address());
+  let server = PreparedServer::bind(&config, shutdown).with_context(|| "prepare HTTP server")?;
   Ok(Some(server))
 }
 
@@ -197,6 +211,13 @@ fn trace_http_enabled(address: &ServerAddress) {
       "HTTP API enabled",
     );
   });
+}
+
+fn trace_http_state(address: Option<&ServerAddress>) {
+  match address {
+    Some(address) => trace_http_enabled(address),
+    None => trace_http_disabled(),
+  }
 }
 
 fn trace_http_disabled() {
@@ -301,6 +322,21 @@ mod tests {
   }
 
   #[test]
+  fn prepare_server_reports_bind_error_before_runtime_start() {
+    let occupied = std::net::TcpListener::bind((DEFAULT_HOST, 0)).expect("occupy port");
+    let mut server = ServerSchema::default();
+    server.port = occupied.local_addr().expect("occupied addr").port();
+    let workflow = Workflow::builder().server(server).build();
+
+    let err = match prepare_server(&workflow, CancellationToken::new()) {
+      Ok(_) => panic!("bind must fail"),
+      Err(err) => err,
+    };
+
+    assert!(format!("{err:#}").contains("prepare HTTP server"));
+  }
+
+  #[test]
   fn write_state_file_logs_inside_daemon_span() {
     let (layer, events) = CaptureLayer::new();
     let subscriber = Registry::default().with(layer);
@@ -323,8 +359,8 @@ mod tests {
     assert!(event.get("phase").is_none());
   }
 
-  #[tokio::test]
-  async fn prepared_random_port_server_is_recorded_in_state_file() {
+  #[test]
+  fn prepared_random_port_server_is_recorded_in_state_file() {
     let temp = tempfile::tempdir().expect("tempdir");
     let workflow = Workflow::builder()
       .workflow_path(temp.path().join("workflow.yml"))
@@ -335,7 +371,6 @@ mod tests {
     let state_path = temp.path().join("state.json");
     let shutdown = CancellationToken::new();
     let server = prepare_server(&workflow, shutdown.clone())
-      .await
       .expect("prepare server")
       .expect("server enabled");
 
