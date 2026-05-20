@@ -10,7 +10,8 @@ use super::diagnose::*;
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WorkspaceSchema {
   /// Workspace home before per-workflow namespacing. Missing or null
-  /// uses `VIK_HOME` when set, otherwise the OS home directory.
+  /// uses non-empty `VIK_HOME` when set, otherwise the user home
+  /// `.vik` directory.
   /// Relative values are resolved against the workflow file directory
   /// (not cwd) at supervisor build time.
   #[serde(default)]
