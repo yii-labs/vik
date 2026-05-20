@@ -1,4 +1,4 @@
-//! `vik run [-d] [--port N] [WORKFLOW]`.
+//! `vik run [-d] [WORKFLOW]`.
 //!
 //! Boots the orchestrator. Foreground mode logs to both stdout and the
 //! file appender; `-d` detaches via double-fork before logging is
@@ -14,7 +14,7 @@ use chrono::Utc;
 use clap::Parser;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::ServerSchema;
+use crate::config::{DEFAULT_HOST, ServerSchema};
 use crate::daemon;
 use crate::daemon::signals;
 use crate::daemon::state::State;
@@ -23,18 +23,8 @@ use crate::orchestrator::Orchestrator;
 use crate::server::{PreparedServer, ServerAddress};
 use crate::workflow::Workflow;
 
-const DEFAULT_BIND_ADDRESS: &str = "127.0.0.1";
-
 #[derive(Debug, Parser)]
 pub struct RunArgs {
-  /// Override `server.port` from workflow.yml.
-  #[arg(long)]
-  pub port: Option<u16>,
-
-  /// Override `server.host` from workflow.yml.
-  #[arg(long, default_value = DEFAULT_BIND_ADDRESS)]
-  pub bind_address: String,
-
   /// Detach into the background as a daemon.
   #[arg(short = 'd', long = "detached")]
   pub detached: bool,
@@ -133,7 +123,7 @@ fn run_inner(workflow: Workflow, args: &RunArgs) -> anyhow::Result<()> {
     // also write it — the operator may have started a foreground
     // daemon in another shell and want to manage it from elsewhere.
     let state_path = workflow.workspace().service_state_file().to_path_buf();
-    let server = prepare_server(&workflow, args, shutdown.clone()).await?;
+    let server = prepare_server(&workflow, shutdown.clone()).await?;
     write_state_file(
       &workflow,
       args,
@@ -178,17 +168,13 @@ async fn drive_runtime(
   };
 
   let server_future =
-    server.map(|server| async move { server.run().await.map_err(|err| anyhow!("HTTP server: {err:#}")) });
+    server.map(|server| async move { crate::server::run(server).await.map_err(|err| anyhow!("HTTP server: {err:#}")) });
 
   daemon::runtime::drive(shutdown, orch_future, server_future).await
 }
 
-async fn prepare_server(
-  workflow: &Workflow,
-  args: &RunArgs,
-  shutdown: CancellationToken,
-) -> anyhow::Result<Option<PreparedServer>> {
-  let Some(config) = effective_server_config(workflow, args)? else {
+async fn prepare_server(workflow: &Workflow, shutdown: CancellationToken) -> anyhow::Result<Option<PreparedServer>> {
+  let Some(config) = effective_server_config(workflow) else {
     trace_http_disabled();
     return Ok(None);
   };
@@ -199,24 +185,8 @@ async fn prepare_server(
   Ok(Some(server))
 }
 
-fn effective_server_config(workflow: &Workflow, args: &RunArgs) -> anyhow::Result<Option<ServerSchema>> {
-  let Some(mut config) = workflow.schema().server.clone() else {
-    if args.port.is_some() || args.bind_address != DEFAULT_BIND_ADDRESS {
-      return Err(anyhow!(
-        "`--port` and `--bind-address` require a `server:` section in workflow.yml"
-      ));
-    }
-    return Ok(None);
-  };
-
-  if let Some(port) = args.port {
-    config.port = port;
-  }
-  if args.bind_address != DEFAULT_BIND_ADDRESS {
-    config.host = args.bind_address.clone();
-  }
-
-  Ok(Some(config))
+fn effective_server_config(workflow: &Workflow) -> Option<ServerSchema> {
+  workflow.schema().server.clone()
 }
 
 fn trace_http_enabled(address: &ServerAddress) {
@@ -257,7 +227,7 @@ fn write_state_file(
     port: server_address.map(ServerAddress::port).unwrap_or(0),
     bind_address: server_address
       .map(ServerAddress::bind_address)
-      .unwrap_or_else(|| args.bind_address.clone()),
+      .unwrap_or_else(|| DEFAULT_HOST.to_string()),
     started_at: Utc::now(),
     log_dir: workflow.workspace().logs_dir().to_path_buf(),
     sessions_dir: workflow.workspace().sessions_dir().to_path_buf(),
@@ -282,12 +252,6 @@ fn format_command(workflow: &Workflow, args: &RunArgs) -> String {
   if args.detached {
     parts.push("-d".into());
   }
-  if let Some(port) = args.port {
-    parts.push(format!("--port {port}"));
-  }
-  if args.bind_address != DEFAULT_BIND_ADDRESS {
-    parts.push(format!("--bind-address {}", args.bind_address));
-  }
   parts.push(workflow.workflow_path().display().to_string());
   parts.join(" ")
 }
@@ -300,63 +264,35 @@ mod tests {
   use tracing_subscriber::{Registry, layer::SubscriberExt};
 
   #[test]
-  fn format_command_records_detached_http_args_and_workflow_path() {
+  fn format_command_records_detached_and_workflow_path() {
     let workflow = Workflow::builder().workflow_path("/tmp/vik-cli-tests/workflow.yml").build();
-    let args = RunArgs {
-      port: Some(8123),
-      bind_address: "0.0.0.0".to_string(),
-      detached: true,
-    };
+    let args = RunArgs { detached: true };
 
     assert_eq!(
       format_command(&workflow, &args),
-      "vik run -d --port 8123 --bind-address 0.0.0.0 /tmp/vik-cli-tests/workflow.yml"
+      "vik run -d /tmp/vik-cli-tests/workflow.yml"
     );
   }
 
   #[test]
   fn effective_server_config_keeps_http_disabled_when_server_is_missing() {
-    let args = RunArgs {
-      port: None,
-      bind_address: DEFAULT_BIND_ADDRESS.to_string(),
-      detached: false,
-    };
     let workflow = Workflow::builder().build();
 
-    let config = effective_server_config(&workflow, &args).expect("server config");
+    let config = effective_server_config(&workflow);
 
     assert!(config.is_none());
   }
 
   #[test]
-  fn effective_server_config_requires_workflow_server_for_cli_override() {
-    let args = RunArgs {
-      port: Some(9000),
-      bind_address: DEFAULT_BIND_ADDRESS.to_string(),
-      detached: false,
-    };
-    let workflow = Workflow::builder().build();
-
-    let err = effective_server_config(&workflow, &args).expect_err("missing server rejects override");
-
-    assert!(err.to_string().contains("server:"));
-  }
-
-  #[test]
-  fn effective_server_config_uses_workflow_server_and_cli_overrides() {
-    let args = RunArgs {
-      port: Some(9000),
-      bind_address: "0.0.0.0".to_string(),
-      detached: false,
-    };
+  fn effective_server_config_uses_workflow_server() {
     let mut server = ServerSchema::default();
+    server.host = "0.0.0.0".into();
+    server.port = 9000;
     server.https = true;
     server.domain = Some("example.local".into());
     let workflow = Workflow::builder().server(server).build();
 
-    let config = effective_server_config(&workflow, &args)
-      .expect("server config")
-      .expect("enabled");
+    let config = effective_server_config(&workflow).expect("enabled");
 
     assert_eq!(config.host, "0.0.0.0");
     assert_eq!(config.port, 9000);
@@ -368,21 +304,18 @@ mod tests {
   fn write_state_file_logs_inside_daemon_span() {
     let (layer, events) = CaptureLayer::new();
     let subscriber = Registry::default().with(layer);
-    let _default = tracing::subscriber::set_default(subscriber);
 
     let temp = tempfile::tempdir().expect("tempdir");
     let workflow = Workflow::builder()
       .workflow_path(temp.path().join("workflow.yml"))
       .workspace_root(temp.path())
       .build();
-    let args = RunArgs {
-      port: None,
-      bind_address: "127.0.0.1".to_string(),
-      detached: false,
-    };
+    let args = RunArgs { detached: false };
     let state_path = temp.path().join("state.json");
 
-    write_state_file(&workflow, &args, None, &state_path).expect("state file written");
+    tracing::subscriber::with_default(subscriber, || {
+      write_state_file(&workflow, &args, None, &state_path).expect("state file written");
+    });
 
     let events = events.lock().expect("events mutex");
     let event = captured_event(&events, "daemon state file written");
@@ -398,14 +331,10 @@ mod tests {
       .workspace_root(temp.path())
       .server(ServerSchema::default())
       .build();
-    let args = RunArgs {
-      port: None,
-      bind_address: DEFAULT_BIND_ADDRESS.to_string(),
-      detached: false,
-    };
+    let args = RunArgs { detached: false };
     let state_path = temp.path().join("state.json");
     let shutdown = CancellationToken::new();
-    let server = prepare_server(&workflow, &args, shutdown.clone())
+    let server = prepare_server(&workflow, shutdown.clone())
       .await
       .expect("prepare server")
       .expect("server enabled");
@@ -424,11 +353,12 @@ mod tests {
   fn http_status_logs_inside_server_span() {
     let (layer, events) = CaptureLayer::new();
     let subscriber = Registry::default().with(layer);
-    let _default = tracing::subscriber::set_default(subscriber);
 
     let address = ServerAddress::new(false, None, "127.0.0.1:9000".parse().expect("socket address"));
-    trace_http_enabled(&address);
-    trace_http_disabled();
+    tracing::subscriber::with_default(subscriber, || {
+      trace_http_enabled(&address);
+      trace_http_disabled();
+    });
 
     let events = events.lock().expect("events mutex");
     let enabled = captured_event(&events, "HTTP API enabled");

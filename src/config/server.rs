@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use super::WorkflowSchema;
 use super::diagnose::*;
 
+pub const DEFAULT_HOST: &str = "127.0.0.1";
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ServerSchema {
   #[serde(default = "default_host")]
@@ -21,7 +23,7 @@ pub struct ServerSchema {
 }
 
 fn default_host() -> String {
-  "127.0.0.1".into()
+  DEFAULT_HOST.into()
 }
 
 impl Default for ServerSchema {

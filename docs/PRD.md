@@ -215,10 +215,8 @@ vik uninstall [WORKFLOW]
 vik --help
 ```
 
-`run` and `restart` accept `--port` and `--bind-address` as overrides for
-`server.port` and `server.host`. They require a `server:` section in
-`workflow.yml`. Do not document state/control HTTP endpoints as working
-behavior yet.
+HTTP host and port come from `workflow.yml` `server:` config. Do not document
+state/control HTTP endpoints as working behavior yet.
 
 ## Logging And Observation
 
@@ -251,8 +249,8 @@ These state/control endpoints remain planned design, not current behavior:
 - `POST /api/v1/refresh`
 - `POST /api/v1/issues/{issue_id}/cancel`
 
-The current server only exposes `GET /health`. No current CLI command depends on
-the planned state/control routes.
+The current server only exposes `GET /health` and `GET /status`. No current CLI
+command depends on the planned state/control routes.
 
 ## Related Documents
 

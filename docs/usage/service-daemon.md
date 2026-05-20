@@ -27,9 +27,6 @@ HTTP stays disabled unless the workflow has a top-level `server:` section.
 `server: {}` binds `127.0.0.1:0`, so the OS picks a free port. The actual bound
 port is recorded in daemon state and printed by `vik status`.
 
-`--port` and `--bind-address` override `server.port` and `server.host`. They
-require a `server:` section in `workflow.yml`.
-
 ## Status
 
 ```sh

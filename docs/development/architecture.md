@@ -13,8 +13,8 @@ The orchestrator owns intake, shutdown, and drain. `StageSessionManager` owns
 running-stage state, issue setup, stage launch, session command senders, and
 hook execution behind its own typed channel.
 
-`src/server/` owns basic HTTP binding, `lxy` route construction, health route,
-and URL construction. State/control endpoints remain planned work.
+`src/server/` owns basic HTTP binding, `lxy` route construction, health/status
+routes, and URL construction. State/control endpoints remain planned work.
 
 ## Folder Structure
 
@@ -134,7 +134,7 @@ sequenceDiagram
 ```
 
 Missing `server` keeps HTTP disabled. `server: {}` binds `127.0.0.1:0`, records
-the actual port, and serves `GET /health`.
+the actual port, and serves `GET /health` and `GET /status`.
 
 ## Orchestrator Runtime
 

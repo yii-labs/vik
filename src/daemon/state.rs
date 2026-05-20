@@ -177,7 +177,7 @@ mod tests {
       started_at: "2026-05-09T10:00:00Z".parse().unwrap(),
       log_dir: cwd.join("logs"),
       sessions_dir: cwd.join("sessions"),
-      command: "vik run -d --port 3000 workflow.yml".into(),
+      command: "vik run -d workflow.yml".into(),
     }
   }
 

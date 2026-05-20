@@ -241,7 +241,7 @@ Issue workspace cleanup:
 
 ## Known Current Gaps
 
-- HTTP API is not implemented in current source. `vik run --port` reaches `todo!` in `src/cli/run.rs`; no `src/server` module exists.
+- Basic HTTP server infra exists when `workflow.yml` has `server:`. It serves `GET /health` and `GET /status`; state/control endpoints remain planned.
 - Some usage docs and README still mention HTTP endpoints or Codex app-server. Treat those as stale unless source confirms them.
 
 ## Verification

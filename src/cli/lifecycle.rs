@@ -19,16 +19,7 @@ use crate::workflow::Workflow;
 pub struct LifecycleArgs {}
 
 #[derive(Debug, Parser)]
-pub struct RestartArgs {
-  /// TCP port for the new daemon's HTTP API. Omit to start without
-  /// the HTTP API.
-  #[arg(long)]
-  pub port: Option<u16>,
-
-  /// Bind address for the HTTP API.
-  #[arg(long, default_value = "127.0.0.1")]
-  pub bind_address: String,
-}
+pub struct RestartArgs {}
 
 /// Exit 0 for `running`, `stale`, and `not installed` — the operator
 /// gets the answer in stdout. Exit 1 only for actual I/O failures, so
@@ -91,7 +82,7 @@ fn stop_inner(workflow: &Workflow) -> anyhow::Result<()> {
 /// daemon-startup path. Always restarts silently when no daemon was
 /// running — operators can still inspect what happened via the
 /// "no daemon was running" message.
-pub fn restart(workflow: Workflow, args: RestartArgs) -> ExitCode {
+pub fn restart(workflow: Workflow, _args: RestartArgs) -> ExitCode {
   match restart_stop_phase(&workflow) {
     Ok(RestartOutcome::Stopped) => {
       let _ = writeln!(io::stdout(), "daemon stopped; starting a fresh one");
@@ -105,14 +96,7 @@ pub fn restart(workflow: Workflow, args: RestartArgs) -> ExitCode {
     },
   }
 
-  super::run::execute(
-    workflow,
-    super::run::RunArgs {
-      port: args.port,
-      bind_address: args.bind_address,
-      detached: true,
-    },
-  )
+  super::run::execute(workflow, super::run::RunArgs { detached: true })
 }
 
 fn restart_stop_phase(workflow: &Workflow) -> anyhow::Result<RestartOutcome> {

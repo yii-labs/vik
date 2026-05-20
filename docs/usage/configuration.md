@@ -134,8 +134,8 @@ URL construction uses:
 
 Named `domain` values omit the port. IP hosts include the actual bound port.
 
-The current server only serves `GET /health`. State APIs and webhook intake are
-planned work and are not implemented by this section.
+The current server serves `GET /health` and `GET /status`. State APIs and
+webhook intake are planned work and are not implemented by this section.
 
 ## Agents
 
