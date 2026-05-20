@@ -51,10 +51,15 @@ pub fn resolve_from<P: AsRef<Path>>(from: &Path, to_resolve: P) -> Option<PathBu
 
 const VIK_HOME_ENV_NAME: &str = "VIK_HOME";
 pub fn default_home() -> PathBuf {
-  env::var_os(VIK_HOME_ENV_NAME)
-    .map(PathBuf::from)
-    .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from("~/")))
-    .join(".vik")
+  default_home_from(env::var_os(VIK_HOME_ENV_NAME).map(PathBuf::from), dirs::home_dir())
+}
+
+fn default_home_from(vik_home: Option<PathBuf>, user_home: Option<PathBuf>) -> PathBuf {
+  vik_home.unwrap_or_else(|| {
+    user_home
+      .map(|home| home.join(".vik"))
+      .unwrap_or_else(|| PathBuf::from("~/.vik"))
+  })
 }
 
 #[cfg(test)]
@@ -136,10 +141,9 @@ mod tests {
   #[test]
   fn default_home_uses_env_var() {
     let temp = tempfile::Builder::new().prefix("vik-home-").tempdir().expect("tempdir");
-    let expected = temp.path().join(".vik");
     unsafe { std::env::set_var(VIK_HOME_ENV_NAME, temp.path()) };
     let out = default_home();
-    assert_eq!(out, expected);
+    assert_eq!(out, temp.path());
   }
 
   #[test]
@@ -148,5 +152,11 @@ mod tests {
     unsafe { std::env::remove_var(VIK_HOME_ENV_NAME) };
     let out = default_home();
     assert_eq!(out, expected);
+  }
+
+  #[test]
+  fn default_home_falls_back_to_literal_home_vik_without_user_home() {
+    let out = default_home_from(None, None);
+    assert_eq!(out, PathBuf::from("~/.vik"));
   }
 }
