@@ -5,6 +5,7 @@
 //! driving.
 
 use std::io::{self, Write};
+use std::path::PathBuf;
 
 use anyhow::{Context, anyhow};
 use tokio_util::sync::CancellationToken;
@@ -12,11 +13,29 @@ use tokio_util::sync::CancellationToken;
 use super::state::StateManager;
 use super::{detach, runtime, signals};
 use crate::logging;
-use crate::orchestrator::Orchestrator;
 use crate::server::ServerConfig;
 use crate::workflow::Workflow;
 
-pub fn run(workflow: Workflow, detached: bool) -> anyhow::Result<()> {
+struct RuntimeInput<S, MakeOrchestrator> {
+  workflow: Workflow,
+  detached: bool,
+  shutdown: CancellationToken,
+  server_config: ServerConfig,
+  server: S,
+  make_orchestrator: MakeOrchestrator,
+  stale_state_note: Option<(u32, PathBuf)>,
+  state_manager: StateManager,
+}
+
+pub fn run<O, MakeOrchestrator>(
+  workflow: Workflow,
+  detached: bool,
+  make_orchestrator: MakeOrchestrator,
+) -> anyhow::Result<()>
+where
+  O: std::future::Future<Output = anyhow::Result<()>>,
+  MakeOrchestrator: FnOnce(Workflow, CancellationToken) -> O,
+{
   workflow
     .workspace()
     .ensure_root()
@@ -65,41 +84,37 @@ pub fn run(workflow: Workflow, detached: bool) -> anyhow::Result<()> {
       let _ = writeln!(io::stderr(), "failed to prepare log dir {}: {err}", log_dir.display());
     }
     detach(&log_dir).with_context(|| "detach daemon")?;
-    run_runtime(
-      workflow,
-      detached,
-      shutdown,
-      server_config,
-      server_future,
-      stale_state_note,
-      state_manager,
-    )?;
-    return Ok(());
   }
 
-  run_runtime(
+  run_runtime(RuntimeInput {
     workflow,
     detached,
     shutdown,
     server_config,
-    server_future,
+    server: server_future,
+    make_orchestrator,
     stale_state_note,
     state_manager,
-  )
+  })
 }
 
-fn run_runtime<S>(
-  workflow: Workflow,
-  detached: bool,
-  shutdown: CancellationToken,
-  server_config: ServerConfig,
-  server: S,
-  stale_state_note: Option<(u32, std::path::PathBuf)>,
-  state_manager: StateManager,
-) -> anyhow::Result<()>
+fn run_runtime<O, S, MakeOrchestrator>(input: RuntimeInput<S, MakeOrchestrator>) -> anyhow::Result<()>
 where
   S: std::future::Future<Output = Result<(), crate::server::ServerError>>,
+  O: std::future::Future<Output = anyhow::Result<()>>,
+  MakeOrchestrator: FnOnce(Workflow, CancellationToken) -> O,
 {
+  let RuntimeInput {
+    workflow,
+    detached,
+    shutdown,
+    server_config,
+    server,
+    make_orchestrator,
+    stale_state_note,
+    state_manager,
+  } = input;
+
   let log_dir = workflow.workspace().logs_dir();
   let _guard = logging::init(log_dir, !detached)
     .with_context(|| format!("install logging subscriber writing to {}", log_dir.display()))?;
@@ -149,9 +164,8 @@ where
       )
       .with_context(|| format!("write daemon state file to {}", state_manager.path().display()))?;
 
-    let mut orchestrator = Orchestrator::new(workflow);
-
-    let exit_result = drive_runtime(&mut orchestrator, server, shutdown.clone()).await;
+    let orchestrator = make_orchestrator(workflow, shutdown.clone());
+    let exit_result = drive_runtime(orchestrator, server, shutdown.clone()).await;
 
     // Cleanup must not fail the run: we are shutting down anyway and
     // a leftover state file just turns into a stale pid record that
@@ -172,21 +186,14 @@ where
   Ok(())
 }
 
-async fn drive_runtime<S>(orchestrator: &mut Orchestrator, server: S, shutdown: CancellationToken) -> anyhow::Result<()>
+async fn drive_runtime<O, S>(orchestrator: O, server: S, shutdown: CancellationToken) -> anyhow::Result<()>
 where
+  O: std::future::Future<Output = anyhow::Result<()>>,
   S: std::future::Future<Output = Result<(), crate::server::ServerError>>,
 {
-  let orch_token = shutdown.clone();
-  let orch_future = async move {
-    orchestrator
-      .run(orch_token)
-      .await
-      .map_err(|err| anyhow!("orchestrator loop: {err:#}"))
-  };
-
   let server_future = async move { server.await.map_err(|err| anyhow!("HTTP server: {err:#}")) };
 
-  runtime::drive(shutdown, orch_future, Some(server_future)).await
+  runtime::drive(shutdown, orchestrator, Some(server_future)).await
 }
 
 fn trace_http_enabled(address: &ServerConfig) {
