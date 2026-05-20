@@ -38,7 +38,7 @@ src/cli/                 CLI parser and command dispatch
 src/config/              workflow.yml schema and doctor diagnostics
 src/workflow/            runtime supervisor built from parsed schema
 src/workspace/           canonical path layout under resolved workflow workspace root
-src/logging/             JSON tracing setup and phase/span helpers
+src/logging/             JSON tracing setup, spans, and retention
 src/daemon/              detach, signals, state.json, lifecycle commands
 src/orchestrator/        intake loop, dispatch, running-stage registry
 src/session/             one agent run, prompt render, JSONL writer, snapshot
@@ -70,6 +70,8 @@ Important workflow facts:
 - `<workspace.root>/workflows` must exist before `vik run`; Vik creates only the final workflow root.
 - `issue.state` matches `issue.stages.<stage>.when.state` by exact string equality.
 - `issues.pull.command` must print one JSON issue sequence.
+- Checked-in `workflow.yml` pulls GitHub Project 4 items from `yii-labs` with
+  project Status `Digging`, `In Progress`, or `Merging`.
 - Issue identifiers become path segments under `<workflow-workspace-root>/issues`; unsafe names break dispatch.
 - Prompt files are MiniJinja first, then prompt-command expansion.
 - Hooks are MiniJinja only; hooks do not run prompt-command expansion.
@@ -111,7 +113,7 @@ command
 Log files are newline-delimited JSON. Useful fields:
 
 - `timestamp`, `level`, `message`, `target`
-- `phase`: `startup`, `intake`, `dispatch`, `stage_run`, `hook`, `server`, `daemon`
+- `span` / `spans`: current span names such as `intake`, `issue`, `stage`, `session`, `hook`, `daemon`
 - `issue_identifier`, `stage_name`, `agent_profile`, `runtime`, `session_id`
 - `error`, `duration_ms`, `state_file`, `workflow_path`, `workspace_root`
 
@@ -121,7 +123,7 @@ Fast log commands:
 cargo run -- status ./workflow.yml
 tail -n 100 <relative-path-to-workflow.yml>/.vik/workflows/<sanitized-absolute-workflow-path>/logs/vik.log.*
 tail -n 100 <relative-path-to-workflow.yml>/.vik/workflows/<sanitized-absolute-workflow-path>/logs/vik-error.log.*
-jq -c 'select(.level=="ERROR" or .phase=="intake" or .phase=="stage_run" or .phase=="hook")' <relative-path-to-workflow.yml>/.vik/workflows/<sanitized-absolute-workflow-path>/logs/vik.log.*
+jq -c 'select(.level=="ERROR" or any(.spans[]?; .name=="intake" or .name=="stage" or .name=="hook"))' <relative-path-to-workflow.yml>/.vik/workflows/<sanitized-absolute-workflow-path>/logs/vik.log.*
 ```
 
 If paths differ, replace the example `logs` directory with `log_dir` from `vik status`.
@@ -185,8 +187,12 @@ Intake returns no work or fails:
 
 - Start in `src/orchestrator/intake.rs`.
 - Check `workflow.yml -> issues.pull.command`.
+- GitHub Project commands require project auth. Run `gh auth refresh -s project`
+  when `gh` reports missing `read:project` or `project` scope.
 - Command stdout must be one JSON issue sequence.
 - Returned issue fields are `identifier`, `title`, `state`; aliases `desc` and `status` also parse.
+- For current repo workflow, returned `state` is project Status. Exact values
+  handled by stages are `Digging`, `In Progress`, and `Merging`.
 
 Stage does not run:
 

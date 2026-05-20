@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 use crate::config::diagnose::Diagnostics;
+use crate::context::{Context, RenderContext};
 use crate::hooks::HookRunner;
 use crate::utils;
 use crate::workspace::Workspace;
@@ -46,6 +47,11 @@ impl Workflow {
 
   pub(crate) fn workflow_path(&self) -> &Path {
     &self.workflow_path
+  }
+
+  #[allow(dead_code)]
+  pub(crate) fn workflow_dir(&self) -> &Path {
+    &self.workflow_dir
   }
 
   pub fn agents(&self) -> &AgentProfilesSchema {
@@ -93,4 +99,17 @@ pub enum WorkflowError {
 
   #[error("workspace.root `{0}` could not be resolved")]
   WorkspaceRoot(PathBuf),
+}
+
+impl RenderContext for Workflow {
+  fn as_render_context(&self) -> Context {
+    let mut context = Context::new();
+    context.with_values([
+      ("workflow_path", self.workflow_path.to_string_lossy()),
+      ("workflow_dir", self.workflow_dir.to_string_lossy()),
+      ("workspace_root", self.workspace.root().to_string_lossy()),
+    ]);
+
+    context
+  }
 }

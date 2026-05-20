@@ -22,25 +22,9 @@ description:
 
 ## Validation
 
-For code, workflow, prompt behavior, config, or broad repo changes, run:
-
-```sh
-cargo run --locked -- doctor --json ./workflow.yml
-cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-features
-git diff --check
-```
-
-For docs-only or skill-only changes, run:
-
-```sh
-cargo run --locked -- --help
-cargo run --locked -- doctor --json ./workflow.yml
-git diff --check
-```
-
-Also run any issue-provided validation. Do not downgrade explicit issue tests.
+Run validation appropriate for the current branch scope before every push.
+Include any issue-provided validation. Do not downgrade explicit issue tests.
+Do not publish if required validation failed.
 
 ## Steps
 
@@ -69,12 +53,12 @@ Also run any issue-provided validation. Do not downgrade explicit issue tests.
    - use clear title covering full branch scope
    - body includes issue, summary, validation, risks
    - refresh body on every update; do not keep stale text
-   - add label `vik`
-9. Link PR to tracker issue through explicit tracker command or PR body.
+9. Link PR to the issue through an explicit command or PR body when needed.
 10. Check remote status:
     - `gh pr view --json url,state,mergeStateStatus,reviewDecision,headRefOid`
     - `gh pr checks`
-11. Update workpad with PR URL, commit, validation, and remote status.
+11. Record PR URL, commit, validation, and remote status in the requested
+    handoff location when applicable.
 
 ## PR Body Shape
 
@@ -96,5 +80,4 @@ closes <issue identifier or link>
 
 - Do not use plain `--force`.
 - Do not leave PR in draft unless user asked for draft.
-- Do not move tracker state to review if local validation failed.
 - Do not hide pending or failed checks.

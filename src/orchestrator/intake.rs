@@ -18,9 +18,9 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
-use crate::context::Issues;
-use crate::logging::Phase;
+use crate::context::{Issues, RenderContext};
 use crate::shell::{CommandExecError, CommandExt};
+use crate::template::{JinjaRenderer, TemplateError};
 use crate::workflow::Workflow;
 
 use super::event::EventProducer;
@@ -32,15 +32,20 @@ const STDERR_TAIL_BYTES: usize = 4096;
 pub(super) struct IntakeLoop {
   workflow: Arc<Workflow>,
   producer: EventProducer,
+  renderer: JinjaRenderer,
 }
 
 impl IntakeLoop {
   pub(super) fn new(workflow: Arc<Workflow>, producer: EventProducer) -> Self {
-    Self { workflow, producer }
+    Self {
+      workflow,
+      producer,
+      renderer: JinjaRenderer::new(),
+    }
   }
 
   pub(super) fn start(self, shutdown: CancellationToken) -> JoinHandle<()> {
-    let span = tracing::info_span!("intake", phase = Phase::Intake.as_str());
+    let span = tracing::info_span!("intake");
     tokio::spawn(async move { self.run(shutdown).await }.instrument(span))
   }
 
@@ -48,13 +53,24 @@ impl IntakeLoop {
     let max_iterations = self.workflow.schema().loop_.max_iterations;
     let mut iterations = 0_u64;
 
+    let command = match self.renderer.render(
+      &self.workflow.schema().issues.pull.command,
+      self.workflow.as_render_context(),
+    ) {
+      Ok(command) => command,
+      Err(error) => {
+        self.producer.intake_failed(IntakeError::PullCommandTemplate(error)).await;
+        return;
+      },
+    };
+
     loop {
       if shutdown.is_cancelled() || max_iterations.is_some_and(|max| iterations >= max) {
         break;
       }
 
       iterations = iterations.saturating_add(1);
-      match self.run_once(&shutdown).await {
+      match self.run_once(&command, &shutdown).await {
         Ok(()) => {},
         // A cancelled pull is not a failure — shutdown raced the
         // command and we will exit on the next iteration check.
@@ -74,8 +90,8 @@ impl IntakeLoop {
     self.producer.intake_stopped().await;
   }
 
-  async fn run_once(&self, shutdown: &CancellationToken) -> Result<(), IntakeError> {
-    let stdout = run_pull_command(self.workflow.as_ref(), shutdown).await?;
+  async fn run_once(&self, command: &str, shutdown: &CancellationToken) -> Result<(), IntakeError> {
+    let stdout = run_pull_command(self.workflow.as_ref(), command, shutdown).await?;
     let issues = parse_issues_output(&stdout)?;
     tracing::info!(candidates = issues.len(), "issues pulled");
     let mut seen = HashSet::new();
@@ -88,7 +104,6 @@ impl IntakeLoop {
         self.producer.intake_issue(issue).await;
       } else {
         tracing::warn!(
-          phase = %Phase::Intake,
           issue_id = %issue.id,
           "duplicate issue id from intake; keeping first issue",
         );
@@ -99,8 +114,11 @@ impl IntakeLoop {
   }
 }
 
-async fn run_pull_command(workflow: &Workflow, shutdown: &CancellationToken) -> Result<String, IntakeError> {
-  let command = &workflow.schema().issues.pull.command;
+async fn run_pull_command(
+  workflow: &Workflow,
+  command: &str,
+  shutdown: &CancellationToken,
+) -> Result<String, IntakeError> {
   // Pull command runs in the workflow file directory so relative paths
   // (e.g. `./scripts/issues-json`) resolve as the author wrote them.
   let cwd = workflow.workflow_path().parent().unwrap_or_else(|| Path::new("."));
@@ -116,7 +134,7 @@ async fn run_pull_command(workflow: &Workflow, shutdown: &CancellationToken) -> 
 
   let mut child = cmd.timeout(PULL_COMMAND_TIMEOUT).spawn().map_err(IntakeError::PullCommand)?;
   let output = tokio::select! {
-    result = child.wait_with_output() => result.map_err(IntakeError::PullCommand)?,
+    result = child.wait_with_output() => result?,
     _ = shutdown.cancelled() => {
       // Explicit cancel + wait so a SIGTERM does not leak a child
       // process into the operator's session.
@@ -170,7 +188,9 @@ fn shell_command(command: &str) -> Command {
 #[derive(Debug, Error)]
 enum IntakeError {
   #[error(transparent)]
-  PullCommand(CommandExecError),
+  PullCommandTemplate(#[from] TemplateError),
+  #[error(transparent)]
+  PullCommand(#[from] CommandExecError),
   #[error("issue pull command exited with code {code}: {stderr_tail}")]
   PullCommandExit { code: i32, stderr_tail: String },
   #[error("issue pull command stdout was not valid UTF-8: {0}")]
@@ -220,7 +240,7 @@ mod tests {
       .workflow_path(cwd.join("workflow.yml"))
       .build();
 
-    let stdout = run_pull_command(&workflow, &CancellationToken::new())
+    let stdout = run_pull_command(&workflow, "pwd", &CancellationToken::new())
       .await
       .expect("pull command runs");
 
@@ -238,7 +258,7 @@ mod tests {
       .workflow_path(cwd.join("workflow.yml"))
       .build();
 
-    let err = run_pull_command(&workflow, &CancellationToken::new())
+    let err = run_pull_command(&workflow, "printf '%s' 'broken' >&2; exit 7", &CancellationToken::new())
       .await
       .expect_err("pull command must fail");
 
@@ -254,14 +274,17 @@ mod tests {
   #[tokio::test]
   async fn run_once_emits_issues_from_command_json() {
     let cwd = std::env::current_dir().expect("cwd");
-    let workflow = Workflow::builder()
-      .pull_command(r#"printf '%s' '[{"id":"ABC-1","title":"Pulled","state":"todo"}]'"#)
-      .workflow_path(cwd.join("workflow.yml"))
-      .build();
+    let workflow = Workflow::builder().workflow_path(cwd.join("workflow.yml")).build();
     let (producer, mut consumer) = event_channel();
     let intake = IntakeLoop::new(Arc::new(workflow), producer);
 
-    intake.run_once(&CancellationToken::new()).await.expect("intake runs");
+    intake
+      .run_once(
+        r#"printf '%s' '[{"id":"ABC-1","title":"Pulled","state":"todo"}]'"#,
+        &CancellationToken::new(),
+      )
+      .await
+      .expect("intake runs");
 
     match consumer.recv().await.expect("event") {
       OrchestratorEvent::Intake(IntakeEvent::Issue(issue)) => {

@@ -31,8 +31,7 @@ use tracing::Instrument;
 
 use crate::agent::{AgentAdapter, AgentCommand, AgentStdin, get_adapter};
 use crate::config::{AgentProfileSchema, IssueStagePromptSource};
-use crate::context::IssueStage;
-use crate::logging::Phase;
+use crate::context::{IssueStage, RenderContext};
 use crate::shell::{Child, CommandExecError, CommandExt};
 use crate::template::{PromptRenderer, TemplateError};
 
@@ -135,12 +134,7 @@ impl Session {
     profile: AgentProfileSchema,
     shutdown: CancellationToken,
   ) -> (SessionCommandSender, SessionStateReceiver) {
-    let _span = tracing::info_span!(
-      "session",
-      phase = %Phase::StageRun,
-      session_id = tracing::field::Empty,
-    )
-    .entered();
+    let _span = tracing::info_span!("session", session_id = tracing::field::Empty).entered();
 
     let (command_tx, command_rx) = mpsc::channel(SESSION_COMMAND_BUFFER);
     let (state_tx, state_rx) = mpsc::channel(SESSION_STATE_BUFFER);
@@ -547,7 +541,7 @@ impl Session {
       IssueStagePromptSource::Inline(prompt) => prompt.clone(),
     };
 
-    Ok(renderer.render(&template, &stage).await?)
+    Ok(renderer.render(&template, stage.as_render_context()).await?)
   }
 }
 

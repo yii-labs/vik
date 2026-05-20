@@ -85,6 +85,16 @@ where
         }
         span_values.push(serde_json::Value::Object(span_payload));
       }
+    } else if let Some(span) = ctx.lookup_current() {
+      let mut span_payload = serde_json::Map::new();
+      span_payload.insert("name".to_string(), json!(span.metadata().name()));
+      if let Some(fields) = span.extensions().get::<SpanFields>() {
+        for (k, v) in &fields.0 {
+          merged.insert(k.clone(), v.clone());
+          span_payload.insert(k.clone(), v.clone());
+        }
+      }
+      span_values.push(serde_json::Value::Object(span_payload));
     }
 
     let mut visitor = FieldVisitor::default();

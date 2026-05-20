@@ -90,10 +90,13 @@ scripts/
 ## 2. Tell Vik where to put files
 
 Vik keeps logs, per-issue working folders, and session records under
-one workflow-scoped workspace directory. If you omit `workspace.root`,
-Vik uses `VIK_HOME` when set; otherwise it uses your home directory.
+one workflow-scoped workspace directory. If you omit the whole `workspace`
+section, Vik uses `.vik` as the workspace home. With `workspace: {}` or
+`workspace.root: null`, Vik uses non-empty `VIK_HOME` directly when it is set;
+otherwise it uses your home `.vik` directory.
 
-`vik init` already writes this local default:
+You can skip this section for the default workspace. `vik init` already writes
+this local workspace home:
 
 ```yaml
 workspace:
@@ -103,9 +106,9 @@ workspace:
 You can also set `workspace.root` to an absolute path like
 `/Users/you/vik-workspaces`.
 Relative paths resolve from the directory that contains `workflow.yml`.
-Vik adds `workflows/<workflow-path-key>/` under that root so different
-workflow files do not collide. `vik run` creates that directory if it is
-missing.
+After choosing the workspace home, Vik adds `workflows/<workflow-path-key>/`
+under that root so different workflow files do not collide. `vik run` creates
+that directory if it is missing.
 
 ## 3. Pick a coding agent
 
@@ -156,10 +159,10 @@ Pick the tracker you use and follow its dedicated guide for full
 setup, sample pull commands, and the prompt-side commands you will
 need later (read details, leave comments, change state, etc.).
 
-| Tracker     | Auth                            | Setup guide                               |
-| ----------- | ------------------------------- | ----------------------------------------- |
-| GitHub      | `gh auth login` (or `GH_TOKEN`) | [GitHub Issue Source](trackers/github.md) |
-| Linear      | `export LINEAR_API_KEY=...`     | [Linear Issue Source](trackers/linear.md) |
+| Tracker     | Auth                            | Setup guide                                    |
+| ----------- | ------------------------------- | ---------------------------------------------- |
+| GitHub      | `gh auth login` (or `GH_TOKEN`) | [GitHub Issue Source](trackers/github.md)      |
+| Linear      | `export LINEAR_API_KEY=...`     | [Linear Issue Source](trackers/linear.md)      |
 | Feishu Base | `lark-cli auth login`           | [Feishu Base Issue Source](trackers/feishu.md) |
 
 Whichever you pick, every issue your pull command emits must include
@@ -242,10 +245,13 @@ per issue, in the issue's working folder, before any stage starts.
 issue:
   hooks:
     after_create: |
-      git clone --depth 1 git@github.com:your-org/your-repo .
+      git clone --depth 1 <your-repo-url> .
   stages:
     # ... same stages as before
 ```
+
+This pattern assumes `workflow.yml` lives at the repo root. It creates a local
+issue branch from `origin/main`. Existing issue branches are reused.
 
 Vik skips `after_create` when the issue folder already exists. If setup fails
 halfway through, clean or repair that folder before relying on the hook again.

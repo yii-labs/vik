@@ -7,7 +7,6 @@
 use tokio::sync::mpsc;
 
 use crate::context::Issue;
-use crate::logging::Phase;
 
 /// Bounded so a slow main loop applies backpressure to producers. 256 is
 /// large enough to swallow a normal intake burst without forcing intake
@@ -36,7 +35,7 @@ impl EventProducer {
 
   async fn send(&self, event: OrchestratorEvent) {
     if self.sender.send(event).await.is_err() {
-      tracing::debug!(phase = %Phase::Dispatch, "orchestrator event receiver dropped");
+      tracing::debug!("orchestrator event receiver dropped");
     }
   }
 }

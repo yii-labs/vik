@@ -15,7 +15,6 @@ use tracing::Instrument;
 
 use crate::context::{Issue, IssueRun, IssueStage, IssueStageKey};
 use crate::hooks::HookError;
-use crate::logging::Phase;
 use crate::session::{SessionCommandSender, SessionError, SessionFactory, SessionState, SessionStateReceiver};
 use crate::workflow::Workflow;
 
@@ -47,13 +46,7 @@ impl StageSessionManager {
   }
 
   pub(super) fn try_run_issue(&mut self, issue: Issue) {
-    let _span = tracing::info_span!(
-      "issue",
-      phase = %Phase::Dispatch,
-      issue_id = &issue.id,
-      issue_state = &issue.state
-    )
-    .entered();
+    let _span = tracing::info_span!("issue", issue_id = &issue.id, issue_state = &issue.state).entered();
 
     if self.shutdown.is_cancelled() {
       tracing::info!("stage session manager is shutting down; skipping issue this cycle");
@@ -161,12 +154,12 @@ impl StageSessionManager {
       return;
     };
     let stage_names: Vec<&str> = issue_stages.iter().map(|s| s.stage_name()).collect();
-    tracing::info!(
-      phase = %Phase::Dispatch,
-      issue_id = %first.issue().id,
-      stage_names = ?stage_names,
-      "issue ready; launching stages",
-    );
+    tracing::info_span!("issue", issue_id = %first.issue().id, issue_state = %first.issue().state).in_scope(|| {
+      tracing::info!(
+        stage_names = ?stage_names,
+        "issue ready; launching stages",
+      );
+    });
 
     for issue_stage in issue_stages {
       self.launch_issue_stage(issue_stage);
@@ -176,7 +169,6 @@ impl StageSessionManager {
   fn launch_issue_stage(&self, issue_stage: IssueStage) {
     let _span = tracing::info_span!(
       "stage",
-      phase = %Phase::StageRun,
       issue_id = %issue_stage.issue().id,
       stage = %issue_stage.stage().name,
       agent = %issue_stage.stage().agent,
@@ -241,7 +233,6 @@ impl StageSessionManager {
     let event_tx = self.session_events_channel.0.clone();
     let span = tracing::info_span!(
       "stage",
-      phase = %Phase::StageRun,
       issue_id = %issue_stage.issue().id,
       stage = %issue_stage.stage().name,
       agent = %issue_stage.stage().agent,
@@ -566,9 +557,31 @@ mod tests {
       &events,
       "no workflow stage matched issue state; skipping issue this cycle",
     );
-    assert_eq!(no_match["phase"], Phase::Dispatch.to_string());
+    assert!(events.iter().all(|event| event.get("phase").is_none()));
+    assert_eq!(no_match["spans"][0]["name"], "issue");
     assert_eq!(no_match["issue_id"], "ABC-3");
     assert_eq!(no_match["issue_state"], "review");
+  }
+
+  #[tokio::test]
+  async fn prepared_dispatch_logs_inside_issue_span() {
+    let (layer, events) = CaptureLayer::new();
+    let subscriber = Registry::default().with(layer);
+
+    let _default = tracing::subscriber::set_default(subscriber);
+    let workflow = Arc::new(workflow_fixture(1, None));
+    let manager = StageSessionManager::new(Arc::clone(&workflow));
+    let issue_run = Arc::new(IssueRun::new(Arc::clone(&workflow), issue("ABC-1", "todo")));
+    let issue_stages = IssueRun::matching_stages(issue_run);
+
+    manager.launch_issue_stages(issue_stages);
+
+    let events = events.lock().expect("events mutex");
+    let event = captured_event(&events, "issue ready; launching stages");
+    assert!(event.get("phase").is_none());
+    assert_eq!(event["spans"][0]["name"], "issue");
+    assert_eq!(event["issue_id"], "ABC-1");
+    assert_eq!(event["issue_state"], "todo");
   }
 
   fn workflow_fixture(max_issue_concurrency: u32, after_create: Option<&str>) -> Workflow {

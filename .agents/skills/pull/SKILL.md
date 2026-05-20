@@ -21,22 +21,19 @@ description:
    - `git remote -v`
 2. If uncommitted changes exist, commit intended work first or stop and record
    why sync is unsafe.
-3. Enable conflict reuse:
-   - `git config rerere.enabled true`
-   - `git config rerere.autoupdate true`
-4. Fetch:
+3. Fetch:
    - `git fetch origin`
-5. Merge latest main:
+4. Merge latest main:
    - `git merge origin/main`
-6. If conflicts appear:
+5. If conflicts appear:
    - Read both sides before editing.
    - Preserve current branch intent and upstream invariants.
    - Resolve one logical batch at a time.
    - Run `git diff --check`.
    - Finish merge with `git add <files>` and `git commit` if Git did not create
      the merge commit automatically.
-7. Run validation appropriate for changed files.
-8. Record workpad evidence:
+6. Run validation appropriate for changed files.
+7. Record workpad evidence:
    - merge source: `origin/main`
    - result: `clean` or `conflicts resolved`
    - resulting `HEAD` short SHA
