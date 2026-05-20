@@ -14,14 +14,14 @@ use crate::workflow::Workflow;
 
 pub(crate) use services::ServerConfig;
 
-struct PreparedServer {
+struct Server {
   listener: std::net::TcpListener,
   routes: RouterService,
   address: ServerConfig,
   shutdown: CancellationToken,
 }
 
-impl PreparedServer {
+impl Server {
   fn bind(config: ServerConfig, shutdown: CancellationToken) -> Result<Self, ServerError> {
     let listener = std::net::TcpListener::bind(config.bind_addr()).map_err(|source| ServerError::Bind {
       host: config.bind_address(),
@@ -52,22 +52,18 @@ impl PreparedServer {
   }
 }
 
-fn prepare(workflow: &Workflow, shutdown: CancellationToken) -> Result<PreparedServer, ServerError> {
-  let schema = workflow.schema().server.clone().unwrap_or_default();
-  let config = ServerConfig::try_from(schema)?;
-  PreparedServer::bind(config, shutdown)
-}
-
 pub(crate) fn run(
   workflow: &Workflow,
   shutdown: CancellationToken,
 ) -> Result<(ServerConfig, impl Future<Output = Result<(), ServerError>> + use<>), ServerError> {
-  let server = prepare(workflow, shutdown)?;
+  let schema = workflow.schema().server.clone().unwrap_or_default();
+  let config = ServerConfig::try_from(schema)?;
+  let server = Server::bind(config, shutdown)?;
   let address = server.address().clone();
   Ok((address, serve(server)))
 }
 
-async fn serve(server: PreparedServer) -> Result<(), ServerError> {
+async fn serve(server: Server) -> Result<(), ServerError> {
   let (listener, routes, address, shutdown) = server.into_tokio_listener()?;
   let addr = address.bound_addr();
   tracing::info_span!("server").in_scope(|| {
@@ -116,7 +112,8 @@ mod tests {
 
   #[tokio::test]
   async fn bind_discovers_actual_port_for_random_port_config() {
-    let server = prepare(&Workflow::builder().build(), CancellationToken::new()).expect("server binds");
+    let config = ServerConfig::try_from(ServerSchema::default()).expect("server config");
+    let server = Server::bind(config, CancellationToken::new()).expect("server binds");
 
     assert_eq!(server.address().bind_address(), "127.0.0.1");
     assert_ne!(server.address().port(), 0);
@@ -166,7 +163,8 @@ mod tests {
   #[tokio::test]
   async fn server_runs_health_route_and_stops_on_shutdown() {
     let shutdown = CancellationToken::new();
-    let server = prepare(&Workflow::builder().build(), shutdown.clone()).expect("server binds");
+    let config = ServerConfig::try_from(ServerSchema::default()).expect("server config");
+    let server = Server::bind(config, shutdown.clone()).expect("server binds");
     let addr = server.address().bound_addr();
     let handle = tokio::spawn(serve(server));
 
@@ -186,7 +184,8 @@ mod tests {
   #[tokio::test]
   async fn server_runs_status_route() {
     let shutdown = CancellationToken::new();
-    let server = prepare(&Workflow::builder().build(), shutdown.clone()).expect("server binds");
+    let config = ServerConfig::try_from(ServerSchema::default()).expect("server config");
+    let server = Server::bind(config, shutdown.clone()).expect("server binds");
     let addr = server.address().bound_addr();
     let handle = tokio::spawn(serve(server));
 
