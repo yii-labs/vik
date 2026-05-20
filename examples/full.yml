@@ -23,7 +23,7 @@ workspace:
   # Workspace home. Vik creates a per-workflow root below this path:
   # <workspace.root>/workflows/<absolute-workflow-path-with-slashes-replaced>/.
   # If root is omitted or null, Vik uses VIK_HOME when set, otherwise ~/.vik.
-  root: ../.vik-example
+  root: ~/.vik
 
 agents:
   codex-high:
