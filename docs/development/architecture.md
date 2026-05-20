@@ -13,8 +13,9 @@ The orchestrator owns intake, shutdown, and drain. `StageSessionManager` owns
 running-stage state, issue setup, stage launch, session command senders, and
 hook execution behind its own typed channel.
 
-There is no `src/server/` module today. HTTP API docs describe planned work, not
-current runtime behavior.
+`src/server/` serves generic webhook intake when `vik run --port ...` is used.
+It only registers `POST /intake/issue` and `POST /intake/issues` when
+`issues.webhook` is configured.
 
 ## Folder Structure
 
@@ -32,6 +33,7 @@ src/
 |-- session/         session command/state channels, snapshots, JSONL writer
 |-- hooks/           after_create, before_run, after_run shell hooks
 |-- orchestrator/    intake loop and stage-session manager
+|-- server/          axum webhook intake endpoints
 |-- daemon/          detach, signals, lifecycle, state file
 |-- context/         issue intake data and issue-run runtime context
 `-- utils/           shared path helpers
@@ -124,12 +126,16 @@ sequenceDiagram
     CLI->>O: Orchestrator::new(workflow).run(shutdown)
 ```
 
-`--port` resolves a socket address, but the server path is `todo!` today.
+`--port` resolves a socket address and runs the HTTP server beside the
+orchestrator. The server uses an `IssueIngress` handle and never dispatches
+stages directly.
 
 ## Orchestrator Runtime
 
-`Orchestrator::run` starts one `IntakeLoop` task and one
-`StageSessionManager`, then selects over:
+`Orchestrator::run` starts an `IntakeLoop` task when `issues.pull` is
+configured. `Orchestrator::run_with_external_intake` keeps the event channel
+open for webhook intake. Both paths use one `StageSessionManager`, then select
+over:
 
 - shutdown token
 - orchestrator event channel
@@ -145,7 +151,7 @@ yet. The concurrency cap counts distinct issue ids, not stage count.
 
 Dispatch flow:
 
-1. Intake emits an issue.
+1. Pull intake or webhook intake emits an issue.
 2. Orchestrator passes the issue to `StageSessionManager::try_spawn`.
 3. The manager wraps it in `IssueRun`, matches stages by exact `state`, and
    reserves `(issue_id, stage_name)`.
@@ -163,10 +169,18 @@ Dispatch flow:
 
 ## Intake
 
+`issues` must define at least one intake source: `pull` or `webhook`.
+
 `IntakeLoop` runs `issues.pull.command` from the workflow file directory, waits
 for command completion, and parses stdout as `Issues(Vec<Issue>)` JSON.
 
 The sleep between intake cycles is `issues.pull.idle_sec`.
+
+Webhook intake uses the same `Issue` and `Issues` JSON shape. `POST
+/intake/issue` parses one issue object. `POST /intake/issues` parses an issue
+array. A configured `x-event-signature` is an exact request-header match before
+body parsing; tracker-specific HMAC and provider event parsing are out of
+scope.
 
 ## Session
 

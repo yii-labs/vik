@@ -20,23 +20,29 @@ pub(super) struct EventProducer {
 
 impl EventProducer {
   pub(super) async fn intake_issue(&self, issue: Issue) {
-    self.send(OrchestratorEvent::Intake(IntakeEvent::Issue(issue))).await;
+    let _ = self.send(OrchestratorEvent::Intake(IntakeEvent::Issue(issue))).await;
   }
 
   pub(super) async fn intake_failed(&self, error: impl ToString) {
-    self
+    let _ = self
       .send(OrchestratorEvent::Intake(IntakeEvent::Failed(error.to_string())))
       .await;
   }
 
   pub(super) async fn intake_stopped(&self) {
-    self.send(OrchestratorEvent::Intake(IntakeEvent::Stopped)).await;
+    let _ = self.send(OrchestratorEvent::Intake(IntakeEvent::Stopped)).await;
   }
 
-  async fn send(&self, event: OrchestratorEvent) {
+  pub(super) async fn external_issue(&self, issue: Issue) -> Result<(), ()> {
+    self.send(OrchestratorEvent::Intake(IntakeEvent::Issue(issue))).await
+  }
+
+  async fn send(&self, event: OrchestratorEvent) -> Result<(), ()> {
     if self.sender.send(event).await.is_err() {
       tracing::debug!("orchestrator event receiver dropped");
+      return Err(());
     }
+    Ok(())
   }
 }
 
@@ -47,6 +53,11 @@ pub(super) struct EventConsumer {
 impl EventConsumer {
   pub(super) async fn recv(&mut self) -> Option<OrchestratorEvent> {
     self.receiver.recv().await
+  }
+
+  #[cfg(test)]
+  pub(super) fn try_recv(&mut self) -> Option<OrchestratorEvent> {
+    self.receiver.try_recv().ok()
   }
 }
 

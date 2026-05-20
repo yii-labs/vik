@@ -6,6 +6,7 @@ mod daemon;
 mod hooks;
 mod logging;
 mod orchestrator;
+mod server;
 mod session;
 mod shell;
 mod template;

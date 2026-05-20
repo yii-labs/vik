@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
+use crate::config::IssuePullSchema;
 use crate::config::IssueStageSchema;
+use crate::config::IssueWebhookSchema;
 use crate::config::WorkflowSchema;
 
 use super::Workflow;
@@ -35,6 +37,11 @@ impl WorkflowBuilder {
     self
   }
 
+  pub fn max_iterations(mut self, max_iterations: u64) -> Self {
+    self.schema.loop_.max_iterations = Some(max_iterations);
+    self
+  }
+
   pub fn workspace_root(mut self, workspace_root: impl Into<PathBuf>) -> Self {
     self.schema.workspace.root = Some(workspace_root.into());
     self
@@ -46,7 +53,14 @@ impl WorkflowBuilder {
   }
 
   pub fn pull_command(mut self, pull_command: impl Into<String>) -> Self {
-    self.schema.issues.pull.command = pull_command.into();
+    let mut pull = IssuePullSchema::default();
+    pull.command = pull_command.into();
+    self.schema.issues.pull = Some(pull);
+    self
+  }
+
+  pub fn webhook(mut self) -> Self {
+    self.schema.issues.webhook = Some(IssueWebhookSchema::default());
     self
   }
 
@@ -98,7 +112,7 @@ mod tests {
     let workflow = builder.build();
 
     assert!(workflow.schema().agents.is_empty());
-    assert!(workflow.schema().issues.pull.command.is_empty());
+    assert!(workflow.schema().issues.pull.is_none());
     assert!(workflow.schema().issue.stages.is_empty());
   }
 
@@ -118,7 +132,10 @@ mod tests {
 
     assert_eq!(workflow.schema().loop_.max_issue_concurrency, 10);
     assert_eq!(workflow.schema().workspace.root.as_deref(), Some(temp.path()));
-    assert_eq!(workflow.schema().issues.pull.command, "printf '%s' '[]'");
+    assert_eq!(
+      workflow.schema().issues.pull.as_ref().expect("pull schema").command,
+      "printf '%s' '[]'"
+    );
     assert_eq!(
       workflow.schema().issue.hooks.after_create.as_deref(),
       Some("echo created")

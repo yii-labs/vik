@@ -187,7 +187,10 @@ issue:
 
     assert_eq!(loaded.path, workflow_path);
     assert_eq!(loaded.schema.loop_.max_issue_concurrency, 2);
-    assert_eq!(loaded.schema.issues.pull.command, "./scripts/issues-json");
+    assert_eq!(
+      loaded.schema.issues.pull.as_ref().expect("pull schema").command,
+      "./scripts/issues-json"
+    );
     assert_eq!(
       loaded
         .schema

@@ -58,6 +58,8 @@ fn run_inner(workflow: Workflow, args: &RunArgs) -> anyhow::Result<()> {
   // looking at the foreground process), but the structured warn
   // belongs in the file appender that does not exist yet.
   let mut stale_state_note: Option<(u32, std::path::PathBuf)> = None;
+  let bind_address = resolve_bind_address(args)?;
+  ensure_webhook_runtime_reachable(&workflow, bind_address.as_ref())?;
 
   if args.detached {
     // Reject double-detach against a live daemon before forking. Once
@@ -130,12 +132,12 @@ fn run_inner(workflow: Workflow, args: &RunArgs) -> anyhow::Result<()> {
     // also write it — the operator may have started a foreground
     // daemon in another shell and want to manage it from elsewhere.
     let state_path = workflow.workspace().service_state_file().to_path_buf();
-    let bind_address = resolve_bind_address(args)?;
     write_state_file(&workflow, args, bind_address.as_ref(), &state_path)?;
 
+    let webhook = workflow.schema().issues.webhook.clone();
     let mut orchestrator = Orchestrator::new(workflow);
 
-    let exit_result = drive_runtime(&mut orchestrator, bind_address, shutdown.clone()).await;
+    let exit_result = drive_runtime(&mut orchestrator, bind_address, webhook, shutdown.clone()).await;
 
     // Cleanup must not fail the run: we are shutting down anyway and
     // a leftover state file just turns into a stale pid record that
@@ -159,26 +161,76 @@ fn run_inner(workflow: Workflow, args: &RunArgs) -> anyhow::Result<()> {
 async fn drive_runtime(
   orchestrator: &mut Orchestrator,
   bind_address: Option<SocketAddr>,
+  webhook: Option<crate::config::IssueWebhookSchema>,
   shutdown: CancellationToken,
 ) -> anyhow::Result<()> {
   let orch_token = shutdown.clone();
-  let orch_future = async move {
-    orchestrator
-      .run(orch_token)
-      .await
-      .map_err(|err| anyhow!("orchestrator loop: {err:#}"))
-  };
 
   match bind_address {
     Some(addr) => {
       trace_http_enabled(addr);
-      todo!("vik run with --port is not implemented yet");
+      let external_intake = webhook.is_some();
+      let ingress = external_intake.then(|| orchestrator.issue_ingress());
+      let server_shutdown = shutdown.child_token();
+      let server_token = server_shutdown.clone();
+      let server_future = async move {
+        crate::server::serve(addr, webhook, ingress, server_token)
+          .await
+          .map_err(|err| anyhow!("HTTP API: {err:#}"))
+      };
+      let orch_future = async move {
+        let result = if external_intake {
+          orchestrator.run_with_external_intake(orch_token).await
+        } else {
+          orchestrator.run(orch_token).await
+        };
+        result.map_err(|err| anyhow!("orchestrator loop: {err:#}"))
+      };
+      let runtime_shutdown = shutdown.clone();
+      let runtime_future = async move {
+        tokio::pin!(orch_future);
+        tokio::pin!(server_future);
+
+        tokio::select! {
+          result = &mut orch_future => {
+            server_shutdown.cancel();
+            result?;
+            server_future.await?;
+            Ok(())
+          },
+          result = &mut server_future => {
+            if result.is_err() {
+              runtime_shutdown.cancel();
+            }
+            result?;
+            runtime_shutdown.cancel();
+            orch_future.await?;
+            Ok(())
+          },
+        }
+      };
+      super::shutdown::graceful(shutdown, runtime_future).await
     },
     None => {
       trace_http_disabled();
+      let orch_future = async move {
+        orchestrator
+          .run(orch_token)
+          .await
+          .map_err(|err| anyhow!("orchestrator loop: {err:#}"))
+      };
       super::shutdown::graceful(shutdown, orch_future).await
     },
   }
+}
+
+fn ensure_webhook_runtime_reachable(workflow: &Workflow, bind_address: Option<&SocketAddr>) -> anyhow::Result<()> {
+  if workflow.schema().issues.webhook.is_some() && workflow.schema().issues.pull.is_none() && bind_address.is_none() {
+    return Err(anyhow!(
+      "issues.webhook requires --port when issues.pull is not configured"
+    ));
+  }
+  Ok(())
 }
 
 fn trace_http_enabled(addr: SocketAddr) {
@@ -352,5 +404,48 @@ mod tests {
     assert_eq!(enabled["spans"][0]["name"], "server");
     assert_eq!(disabled["spans"][0]["name"], "server");
     assert!(events.iter().all(|event| event.get("phase").is_none()));
+  }
+
+  #[test]
+  fn webhook_only_runtime_requires_port() {
+    let workflow = Workflow::builder().webhook().build();
+
+    let err = ensure_webhook_runtime_reachable(&workflow, None).expect_err("webhook-only must fail without port");
+
+    assert!(
+      err
+        .to_string()
+        .contains("issues.webhook requires --port when issues.pull is not configured")
+    );
+  }
+
+  #[test]
+  fn webhook_only_runtime_accepts_port() {
+    let workflow = Workflow::builder().webhook().build();
+    let addr: SocketAddr = "127.0.0.1:9000".parse().expect("socket address");
+
+    ensure_webhook_runtime_reachable(&workflow, Some(&addr)).expect("port makes webhook reachable");
+  }
+
+  #[test]
+  fn pull_runtime_can_omit_port_even_when_webhook_is_configured() {
+    let workflow = Workflow::builder().pull_command("printf '%s' '[]'").webhook().build();
+
+    ensure_webhook_runtime_reachable(&workflow, None).expect("pull keeps runtime reachable without port");
+  }
+
+  #[tokio::test]
+  async fn pull_only_http_runtime_exits_after_orchestrator_drain() {
+    let workflow = Workflow::builder().pull_command("printf '%s' '[]'").max_iterations(0).build();
+    let mut orchestrator = Orchestrator::new(workflow);
+    let addr: SocketAddr = "127.0.0.1:0".parse().expect("socket address");
+
+    tokio::time::timeout(
+      std::time::Duration::from_secs(2),
+      drive_runtime(&mut orchestrator, Some(addr), None, CancellationToken::new()),
+    )
+    .await
+    .expect("runtime should stop after orchestrator drain")
+    .expect("runtime exits cleanly");
   }
 }

@@ -138,9 +138,13 @@ timeouts and stall-watchdog config are not implemented.
 
 ## Issues
 
-`issues.pull.command` is a shell command that fetches and filters issues from an
-external tracker. Vik runs it from the workflow file directory and reads stdout.
-The command must output one raw JSON sequence:
+`issues` must define at least one intake source: `pull` or `webhook`. You may
+define both. Pull intake polls a shell command. Webhook intake accepts HTTP
+POSTs when `vik run --port <port>` is used.
+
+`issues.pull.command` is a shell command that fetches and filters issues from
+an external tracker. Vik runs it from the workflow file directory and reads
+stdout. The command must output one raw JSON sequence:
 
 ```json
 [
@@ -154,6 +158,38 @@ The command must output one raw JSON sequence:
 
 `issues.pull.idle_sec` controls the sleep after each pull cycle completes.
 Default: `5`.
+
+`issues.webhook` enables generic issue webhook intake. It registers only these
+endpoints when the HTTP server is enabled:
+
+- `POST /intake/issue`: body is one issue object.
+- `POST /intake/issues`: body is an array of issue objects.
+
+Example:
+
+```yaml
+issues:
+  webhook:
+    x-event-signature: shared-secret
+```
+
+`x-event-signature` is optional. When set, Vik requires the request
+`x-event-signature` header to exactly match the configured value before it
+parses the body. Vik does not implement tracker-specific HMAC validation or
+provider event parsers.
+
+Webhook responses:
+
+- `202 Accepted`: issue or issues enqueued for normal stage dispatch.
+- `400 Bad Request`: body is not valid normalized issue JSON.
+- `401 Unauthorized`: configured signature is missing or mismatched.
+- `404 Not Found`: webhook routes are absent because `issues.webhook` is not
+  configured.
+- `503 Service Unavailable`: the orchestrator issue ingress is closed.
+
+A workflow with only `issues.webhook` must run with `--port`. A workflow with
+both `issues.pull` and `issues.webhook` can run without `--port`; only pull
+intake is active in that mode.
 
 Required issue fields:
 
@@ -292,8 +328,9 @@ path. Current code does not expose root-level `stage`, `workflow`, `loop`, or
 ## Observation
 
 Current observation surfaces are logs, daemon state, and session JSONL files.
-The CLI parses `--port` and `--bind-address`, but the HTTP server is not
-implemented yet.
+When `issues.webhook` and `--port` are configured, the HTTP server accepts only
+the webhook intake endpoints documented above. State, cancel, and refresh
+HTTP endpoints are not implemented.
 
 ## References
 

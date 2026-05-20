@@ -208,8 +208,10 @@ vik uninstall [WORKFLOW]
 vik --help
 ```
 
-`run` and `restart` parse `--port` and `--bind-address`, but the HTTP server is
-not implemented. Do not document HTTP endpoints as working behavior yet.
+`run` and `restart` support `--port` and `--bind-address` for the limited HTTP
+server. Current working endpoints are only generic webhook intake:
+`POST /intake/issue` and `POST /intake/issues`. Do not document state, refresh,
+or cancel HTTP endpoints as working behavior yet.
 
 ## Logging And Observation
 
