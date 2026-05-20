@@ -58,7 +58,7 @@ gh pr merge "$pr_number" --squash --delete-branch --match-head-commit "$head_sha
 
 13. Confirm merged:
     - `gh pr view --json state,mergeCommit,url`
-14. Update tracker issue and workpad with merge evidence.
+14. Record merge evidence in the requested handoff location when applicable.
 
 ## Failure Handling
 

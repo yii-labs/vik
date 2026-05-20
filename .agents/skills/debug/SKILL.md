@@ -70,6 +70,8 @@ Important workflow facts:
 - `<workspace.root>/workflows` must exist before `vik run`; Vik creates only the final workflow root.
 - `issue.state` matches `issue.stages.<stage>.when.state` by exact string equality.
 - `issues.pull.command` must print one JSON issue sequence.
+- Checked-in `workflow.yml` pulls GitHub Project 4 items from `yii-labs` with
+  project Status `Digging`, `In Progress`, or `Merging`.
 - Issue identifiers become path segments under `<workflow-workspace-root>/issues`; unsafe names break dispatch.
 - Prompt files are MiniJinja first, then prompt-command expansion.
 - Hooks are MiniJinja only; hooks do not run prompt-command expansion.
@@ -185,8 +187,12 @@ Intake returns no work or fails:
 
 - Start in `src/orchestrator/intake.rs`.
 - Check `workflow.yml -> issues.pull.command`.
+- GitHub Project commands require project auth. Run `gh auth refresh -s project`
+  when `gh` reports missing `read:project` or `project` scope.
 - Command stdout must be one JSON issue sequence.
 - Returned issue fields are `identifier`, `title`, `state`; aliases `desc` and `status` also parse.
+- For current repo workflow, returned `state` is project Status. Exact values
+  handled by stages are `Digging`, `In Progress`, and `Merging`.
 
 Stage does not run:
 

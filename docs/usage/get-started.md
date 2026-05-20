@@ -137,10 +137,10 @@ Pick the tracker you use and follow its dedicated guide for full
 setup, sample pull commands, and the prompt-side commands you will
 need later (read details, leave comments, change state, etc.).
 
-| Tracker     | Auth                            | Setup guide                               |
-| ----------- | ------------------------------- | ----------------------------------------- |
-| GitHub      | `gh auth login` (or `GH_TOKEN`) | [GitHub Issue Source](trackers/github.md) |
-| Linear      | `export LINEAR_API_KEY=...`     | [Linear Issue Source](trackers/linear.md) |
+| Tracker     | Auth                            | Setup guide                                    |
+| ----------- | ------------------------------- | ---------------------------------------------- |
+| GitHub      | `gh auth login` (or `GH_TOKEN`) | [GitHub Issue Source](trackers/github.md)      |
+| Linear      | `export LINEAR_API_KEY=...`     | [Linear Issue Source](trackers/linear.md)      |
 | Feishu Base | `lark-cli auth login`           | [Feishu Base Issue Source](trackers/feishu.md) |
 
 Whichever you pick, every issue your pull command emits must include
@@ -228,10 +228,13 @@ per issue, in the issue's working folder, before any stage starts.
 issue:
   hooks:
     after_create: |
-      git clone --depth 1 git@github.com:your-org/your-repo .
+      git clone --depth 1 <your-repo-url> .
   stages:
     # ... same stages as before
 ```
+
+This pattern assumes `workflow.yml` lives at the repo root. It creates a local
+issue branch from `origin/main`. Existing issue branches are reused.
 
 Vik skips `after_create` when the issue folder already exists. If setup fails
 halfway through, clean or repair that folder before relying on the hook again.
