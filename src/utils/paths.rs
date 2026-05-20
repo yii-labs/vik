@@ -63,9 +63,6 @@ pub fn default_home() -> PathBuf {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use std::process::Command;
-
-  const DEFAULT_HOME_PROBE_PREFIX: &str = "VIK_DEFAULT_HOME_PROBE=";
 
   #[test]
   fn test_canonicalize() {
@@ -142,56 +139,24 @@ mod tests {
   #[test]
   fn default_home_uses_env_var() {
     let temp = tempfile::Builder::new().prefix("vik-home-").tempdir().expect("tempdir");
-    let out = probe_default_home(|cmd| {
-      cmd.env(VIK_HOME_ENV_NAME, temp.path());
-    });
+    unsafe { std::env::set_var(VIK_HOME_ENV_NAME, temp.path()) };
+    let out = default_home();
     assert_eq!(out, temp.path());
   }
 
   #[test]
   fn default_home_falls_back_to_user_home() {
     let expected = dirs::home_dir().expect("home dir available in test env").join(".vik");
-    let out = probe_default_home(|cmd| {
-      cmd.env_remove(VIK_HOME_ENV_NAME);
-    });
+    unsafe { std::env::remove_var(VIK_HOME_ENV_NAME) };
+    let out = default_home();
     assert_eq!(out, expected);
   }
 
   #[test]
   fn default_home_ignores_empty_env_var() {
     let expected = dirs::home_dir().expect("home dir available in test env").join(".vik");
-    let out = probe_default_home(|cmd| {
-      cmd.env(VIK_HOME_ENV_NAME, "");
-    });
+    unsafe { std::env::set_var(VIK_HOME_ENV_NAME, "") };
+    let out = default_home();
     assert_eq!(out, expected);
-  }
-
-  #[test]
-  #[ignore = "helper for default_home tests"]
-  fn default_home_probe_prints_value() {
-    println!("{DEFAULT_HOME_PROBE_PREFIX}{}", default_home().display());
-  }
-
-  fn probe_default_home(configure: impl FnOnce(&mut Command)) -> PathBuf {
-    let mut command = Command::new(std::env::current_exe().expect("current test exe"));
-    command
-      .arg("--exact")
-      .arg("utils::paths::tests::default_home_probe_prints_value")
-      .arg("--ignored")
-      .arg("--nocapture");
-    configure(&mut command);
-
-    let output = command.output().expect("default_home probe runs");
-    assert!(
-      output.status.success(),
-      "default_home probe failed: {}",
-      String::from_utf8_lossy(&output.stderr)
-    );
-
-    String::from_utf8_lossy(&output.stdout)
-      .lines()
-      .find_map(|line| line.strip_prefix(DEFAULT_HOME_PROBE_PREFIX))
-      .map(PathBuf::from)
-      .expect("default_home probe output present")
   }
 }
