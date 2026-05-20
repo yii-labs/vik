@@ -281,6 +281,7 @@ fn format_command(workflow: &Workflow, args: &RunArgs) -> String {
 mod tests {
   use super::*;
   use crate::config::ServerSchema;
+  use crate::logging::tests::{capture_events, captured_event};
 
   #[test]
   fn format_command_records_detached_and_workflow_path() {
@@ -335,6 +336,26 @@ mod tests {
   }
 
   #[test]
+  fn write_state_file_logs_inside_daemon_span() {
+    let (events, _capture) = capture_events();
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workflow = Workflow::builder()
+      .workflow_path(temp.path().join("workflow.yml"))
+      .workspace_root(temp.path())
+      .build();
+    let args = RunArgs { detached: false };
+    let state_path = temp.path().join("state.json");
+
+    write_state_file(&workflow, &args, None, &state_path).expect("state file written");
+
+    let events = events.lock().expect("events mutex");
+    let event = captured_event(&events, "daemon state file written");
+    assert_eq!(event["spans"][0]["name"], "daemon");
+    assert!(event.get("phase").is_none());
+  }
+
+  #[test]
   fn prepared_random_port_server_is_recorded_in_state_file() {
     let temp = tempfile::tempdir().expect("tempdir");
     let workflow = Workflow::builder()
@@ -357,5 +378,21 @@ mod tests {
     assert_eq!(state.port, server.address().port());
 
     shutdown.cancel();
+  }
+
+  #[test]
+  fn http_status_logs_inside_server_span() {
+    let (events, _capture) = capture_events();
+
+    let address = ServerAddress::new(false, None, "127.0.0.1:9000".parse().expect("socket address"));
+    trace_http_enabled(&address);
+    trace_http_disabled();
+
+    let events = events.lock().expect("events mutex");
+    let enabled = captured_event(&events, "HTTP API enabled");
+    let disabled = captured_event(&events, "HTTP API disabled (no server config)");
+    assert_eq!(enabled["spans"][0]["name"], "server");
+    assert_eq!(disabled["spans"][0]["name"], "server");
+    assert!(events.iter().all(|event| event.get("phase").is_none()));
   }
 }

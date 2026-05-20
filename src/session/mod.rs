@@ -550,14 +550,13 @@ mod tests {
   use std::sync::Arc;
 
   use serde_json::{Value, json};
-  use tracing_subscriber::{Registry, layer::SubscriberExt};
 
   use super::*;
   use crate::agent::ToolCallPhase;
   use crate::agent::{AgentAdapter, AgentCommand};
   use crate::config::{AgentProfileSchema, AgentRuntime};
   use crate::context::{Issue, IssueRun};
-  use crate::logging::tests::{CaptureLayer, captured_event, captured_message_exists};
+  use crate::logging::tests::{capture_events, captured_event, captured_message_exists};
   use crate::workflow::Workflow;
 
   struct NoopAdapter;
@@ -827,10 +826,7 @@ mod tests {
 
   #[tokio::test]
   async fn set_state_emits_terminal_log_on_terminal_transition() {
-    let (layer, events) = CaptureLayer::new();
-    let subscriber = Registry::default().with(layer);
-
-    let _default = tracing::subscriber::set_default(subscriber);
+    let (events, _capture) = capture_events();
     let (mut task, _states) = session_task();
     task.set_state(SessionState::Running).await;
     task.set_state(SessionState::Completed).await;
@@ -843,10 +839,7 @@ mod tests {
 
   #[tokio::test]
   async fn apply_event_emits_agent_session_id_log() {
-    let (layer, events) = CaptureLayer::new();
-    let subscriber = Registry::default().with(layer);
-
-    let _default = tracing::subscriber::set_default(subscriber);
+    let (events, _capture) = capture_events();
     let (mut task, _states) = session_task();
     task
       .apply_event(AgentEvent::SessionStarted {
