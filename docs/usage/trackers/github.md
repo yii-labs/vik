@@ -94,13 +94,11 @@ generates this pattern as an editable script under `scripts/`:
 ```sh
 GITHUB_PROJECT_OWNER=<org>
 GITHUB_PROJECT_NUMBER=<project-number>
-GITHUB_PROJECT_QUERY="repo:owner/name is:issue"
 
 gh project item-list "$GITHUB_PROJECT_NUMBER" \
   --owner "$GITHUB_PROJECT_OWNER" \
   --limit 50 \
   --format json \
-  --query "$GITHUB_PROJECT_QUERY" \
   --jq '
     [
       .items[]

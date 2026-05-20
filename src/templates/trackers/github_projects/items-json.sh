@@ -1,12 +1,10 @@
 : "${GITHUB_PROJECT_OWNER:?GITHUB_PROJECT_OWNER is required}"
 : "${GITHUB_PROJECT_NUMBER:?GITHUB_PROJECT_NUMBER is required}"
-GITHUB_PROJECT_QUERY="${GITHUB_PROJECT_QUERY:-is:issue}"
 
 gh project item-list "$GITHUB_PROJECT_NUMBER" \
   --owner "$GITHUB_PROJECT_OWNER" \
   --limit "${GITHUB_PROJECT_LIMIT:-50}" \
   --format json \
-  --query "$GITHUB_PROJECT_QUERY" \
   --jq '
     [
       .items[]

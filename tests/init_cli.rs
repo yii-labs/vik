@@ -243,6 +243,7 @@ fn init_generates_github_projects_script_and_status_operations() {
   assert!(script_body.contains("gh project item-list"));
   assert!(script_body.contains("GITHUB_PROJECT_OWNER"));
   assert!(script_body.contains("GITHUB_PROJECT_NUMBER"));
+  assert!(!script_body.contains("--query"));
   assert!(script_body.contains("state: .status"));
   assert!(script_body.contains("project_item_id: .id"));
   assert!(script_body.contains(". == \"work\" or . == \"review\""));
