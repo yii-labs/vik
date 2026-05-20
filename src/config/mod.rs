@@ -21,7 +21,9 @@ pub use workspace::*;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowSchema {
   #[serde(rename = "loop")]
+  #[serde(default)]
   pub loop_: LoopSchema,
+  #[serde(default)]
   pub workspace: WorkspaceSchema,
   pub agents: AgentProfilesSchema,
   pub issues: IssueIntakeSchema,
@@ -133,6 +135,116 @@ issue:
     let plan = schema.issue.stages.get("plan").expect("plan stage");
     assert_eq!(plan.hooks.before_run.as_deref(), Some("echo before"));
     assert_eq!(plan.hooks.after_run.as_deref(), Some("echo after"));
+  }
+
+  #[test]
+  fn workflow_schema_loads_with_loop_omitted() {
+    let schema = parse_schema(
+      r#"
+workspace:
+  root: workspace
+agents:
+  codex:
+    runtime: codex
+    model: gpt-5.5
+issues:
+  pull:
+    command: ./scripts/issues-json
+issue:
+  stages:
+    plan:
+      when:
+        state: todo
+      agent: codex
+      prompt_file: ./prompts/plan.md
+"#,
+    );
+
+    assert_eq!(schema.loop_.max_issue_concurrency, 10);
+    assert_eq!(schema.loop_.wait_ms, 5000);
+    assert_eq!(schema.loop_.max_iterations, None);
+    assert_eq!(schema.workspace.root.as_deref(), Some(Path::new("workspace")));
+  }
+
+  #[test]
+  fn workflow_schema_loads_with_workspace_omitted() {
+    let schema = parse_schema(
+      r#"
+loop: {}
+agents:
+  codex:
+    runtime: codex
+    model: gpt-5.5
+issues:
+  pull:
+    command: ./scripts/issues-json
+issue:
+  stages:
+    plan:
+      when:
+        state: todo
+      agent: codex
+      prompt_file: ./prompts/plan.md
+"#,
+    );
+
+    assert_eq!(schema.loop_.max_issue_concurrency, 10);
+    assert_eq!(schema.loop_.wait_ms, 5000);
+    assert_eq!(schema.loop_.max_iterations, None);
+    assert_eq!(schema.workspace.root.as_deref(), Some(Path::new(".vik")));
+  }
+
+  #[test]
+  fn workflow_schema_loads_with_loop_and_workspace_omitted() {
+    let schema = parse_schema(
+      r#"
+agents:
+  codex:
+    runtime: codex
+    model: gpt-5.5
+issues:
+  pull:
+    command: ./scripts/issues-json
+issue:
+  stages:
+    plan:
+      when:
+        state: todo
+      agent: codex
+      prompt_file: ./prompts/plan.md
+"#,
+    );
+
+    assert_eq!(schema.loop_.max_issue_concurrency, 10);
+    assert_eq!(schema.loop_.wait_ms, 5000);
+    assert_eq!(schema.loop_.max_iterations, None);
+    assert_eq!(schema.workspace.root.as_deref(), Some(Path::new(".vik")));
+  }
+
+  #[test]
+  fn workflow_schema_keeps_present_empty_workspace_root_unset() {
+    let schema = parse_schema(
+      r#"
+loop: {}
+workspace: {}
+agents:
+  codex:
+    runtime: codex
+    model: gpt-5.5
+issues:
+  pull:
+    command: ./scripts/issues-json
+issue:
+  stages:
+    plan:
+      when:
+        state: todo
+      agent: codex
+      prompt_file: ./prompts/plan.md
+"#,
+    );
+
+    assert_eq!(schema.workspace.root, None);
   }
 
   #[test]

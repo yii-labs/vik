@@ -43,8 +43,8 @@ when a run stalls, crashes, or restarts.
 
 ## Core Concepts
 
-- **Workflow Definition**: YAML file with `loop`, `workspace`, `agents`,
-  `issues`, and `issue`.
+- **Workflow Definition**: YAML file with required `agents`, `issues`, and
+  `issue` sections. `loop` and `workspace` are optional.
 - **Workflow**: runtime supervisor wrapping parsed schema, resolved paths, and
   hook runner.
 - **Agent Profile**: named `runtime`, `model`, and optional `args`.
@@ -154,11 +154,14 @@ Agent subprocess cwd is the issue workspace.
 
 ## Workspace
 
-- `workspace.root` is optional. It uses `VIK_HOME` when set; otherwise it uses
-  the OS home directory.
+- `workspace` is optional. If omitted, the workspace home defaults to `.vik`.
+- Inside `workspace`, `root` is optional. Present-empty `workspace: {}` and
+  `workspace.root: null` use the same fallback: non-empty `VIK_HOME` directly
+  when set, otherwise the user home `.vik` directory.
 - Relative `workspace.root` values resolve from the workflow file directory.
-- Vik appends `workflows/<workflow-path-key>/` to build one
-  workflow-scoped workspace root per workflow file.
+- After choosing the workspace home, Vik appends
+  `workflows/<workflow-path-key>/` to build one workflow-scoped workspace root
+  per workflow file.
 - `<workflow-path-key>` is the absolute workflow file path with `/` replaced by
   `-`.
 - The workflow-scoped workspace root is auto-created recursively when missing.
