@@ -6,8 +6,9 @@ on issues for you. You describe how you want it to behave in a single
 file called `workflow.yml`. Once that file is ready, you start Vik and
 walk away.
 
-This guide builds that file with you, one section at a time. Run
-every command from the same folder you are working in.
+This guide starts from `vik init`, then shows the generated pieces you
+will usually edit. Run every command from the same folder you are
+working in.
 
 > Never paste API keys into chat, commit them to git, or print them
 > with `echo` / `cat`. Keep secrets in environment variables.
@@ -52,19 +53,47 @@ jq --version
 
 If any of these fail, install the missing tool before continuing.
 
-## 1. Create `workflow.yml`
+## 1. Generate starter files
 
-Pick (or create) a folder where you want to work from, and start an
-empty config file inside it:
+Pick (or create) a folder where you want to work from, then generate
+the workflow, prompt files, bundled skills, and tracker helper script:
 
 ```sh
 mkdir -p hello-vik
 cd hello-vik
-touch workflow.yml
+vik init ./workflow.yml
 ```
 
-This is the file you will add to in every step below. Open it in
-your editor of choice.
+`vik init` asks for:
+
+- template: `Simple`, `Symphony`, or `Matt Pocock`
+- tracker: `GitHub Issue`, `GitHub Projects`, or `Linear`
+
+For scripts or CI, pass choices directly:
+
+```sh
+vik init --template symphony --tracker github ./workflow.yml
+vik init --template matt-pocock --tracker github-projects ./workflow.yml
+vik init --template simple --tracker linear ./workflow.yml
+```
+
+The command refuses to overwrite generated files unless you pass
+`--force`. Each template also writes the skills its prompts reference,
+including one tracker issue-management skill. When a bundled skill
+folder already exists, interactive `vik init` asks for another skill
+name and updates generated prompt references. Non-interactive mode
+fails on that collision unless you pass `--force`. Rerun
+`vik init --force` when you intentionally want to refresh generated
+workflow, prompt, script, and skill templates.
+
+Open these generated files in your editor:
+
+```text
+workflow.yml
+.agents/prompts/
+.agents/skills/
+scripts/
+```
 
 ## 2. Tell Vik where to put files
 
@@ -74,11 +103,12 @@ section, Vik uses `.vik` as the workspace home. With `workspace: {}` or
 `workspace.root: null`, Vik uses non-empty `VIK_HOME` directly when it is set;
 otherwise it uses your home `.vik` directory.
 
-You can skip this section for the default workspace. Add this only if you want
-the `workspace.root` fallback:
+You can skip this section for the default workspace. `vik init` already writes
+this local workspace home:
 
 ```yaml
-workspace: {}
+workspace:
+  root: .vik
 ```
 
 You can also set `workspace.root` to an absolute path like
@@ -101,8 +131,8 @@ codex --version
 codex login status
 ```
 
-Add an `agents` section to `workflow.yml`. The name (`coder` here)
-is yours to choose — stages will reference it later.
+`vik init` writes a `coder` profile that uses Codex by default.
+Change it if you want another model or profile name:
 
 ```yaml
 agents:
@@ -120,7 +150,7 @@ claude --version
 claude auth status
 ```
 
-Add an `agents` section to `workflow.yml`:
+Change the generated `agents` section if you want Claude Code:
 
 ```yaml
 agents:
@@ -137,11 +167,20 @@ Pick the tracker you use and follow its dedicated guide for full
 setup, sample pull commands, and the prompt-side commands you will
 need later (read details, leave comments, change state, etc.).
 
-| Tracker     | Auth                            | Setup guide                                    |
-| ----------- | ------------------------------- | ---------------------------------------------- |
-| GitHub      | `gh auth login` (or `GH_TOKEN`) | [GitHub Issue Source](trackers/github.md)      |
-| Linear      | `export LINEAR_API_KEY=...`     | [Linear Issue Source](trackers/linear.md)      |
-| Feishu Base | `lark-cli auth login`           | [Feishu Base Issue Source](trackers/feishu.md) |
+| Tracker         | Auth                            | Setup guide                                    |
+| --------------- | ------------------------------- | ---------------------------------------------- |
+| GitHub Issues   | `gh auth login` (or `GH_TOKEN`) | [GitHub Issue Source](trackers/github.md)      |
+| GitHub Projects | `gh auth login` with project scope | [GitHub Issue Source](trackers/github.md)   |
+| Linear          | `export LINEAR_API_KEY=...`     | [Linear Issue Source](trackers/linear.md)      |
+| Feishu Base     | `lark-cli auth login`           | [Feishu Base Issue Source](trackers/feishu.md) |
+
+`vik init` generates editable tracker scripts. GitHub Projects scripts read
+`GITHUB_PROJECT_OWNER`, `GITHUB_PROJECT_NUMBER`, and optional
+`GITHUB_PROJECT_LIMIT`; Linear scripts read `LINEAR_API_KEY` and optional
+`LINEAR_TEAM_KEY`. Keep these in the environment of the process that starts
+Vik. If you need to pass them through `workflow.yml`, `issues.pull.command` is
+rendered before intake runs, so values can be injected with `{{ env.VAR_NAME }}`
+instead of shell-specific `VAR=value command` prefixes.
 
 Whichever you pick, every issue your pull command emits must include
 at least:
@@ -157,23 +196,19 @@ before pasting it into `issues.pull.command`:
 ./your-pull-command | jq 'length'
 ```
 
-Then add the `issues.pull` block to `workflow.yml` exactly as the
-tracker guide shows. `idle_sec` controls how long Vik waits between
-pull cycles. Start at `5` for GitHub, `10` for Linear or Feishu Base,
-then tune.
+Then compare the generated `issues.pull` block with the tracker guide
+and edit the helper script under `scripts/` for your repo, team, view,
+labels, or states. The matching skill under `.agents/skills/` holds the
+commands for reading, commenting, changing state, and linking PRs.
+`idle_sec` controls how long Vik waits between pull cycles. Start at
+`5` for GitHub, `10` for Linear or Feishu Base, then tune.
 
 ## 5. Tell Vik what to do per state
 
 For each tracker state, Vik runs a stage: one prompt source given to
-your agent. A prompt source can be a file or inline text. If you use
-files, create a prompts folder and a starter prompt:
-
-```sh
-mkdir -p ./prompts
-```
-
-Write `./prompts/plan.md` with whatever you want the agent to do
-when an issue is in the `todo` state. For example:
+your agent. A prompt source can be a file or inline text. `vik init`
+creates starter prompt files in `.agents/prompts/`. Edit the prompt for
+each stage. For example, the `plan` prompt can say:
 
 ```text
 You are working on issue {{ issue.id }}: {{ issue.title }}.
@@ -193,7 +228,7 @@ issue:
       when:
         state: todo
       agent: coder
-      prompt_file: ./prompts/plan.md
+      prompt_file: ./.agents/prompts/plan.md
 ```
 
 For small prompts, use inline text instead:

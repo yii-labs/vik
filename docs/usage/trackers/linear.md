@@ -66,14 +66,14 @@ Save this as `./scripts/linear-issues.sh` and `chmod +x` it:
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${LINEAR_API_KEY:?LINEAR_API_KEY is required}"
+TEAM_KEY="${LINEAR_TEAM_KEY:-ENG}"
 
 # Adjust the where: clause to match your workflow.
 QUERY='
-query {
+query ($teamKey: String!) {
   issues(
     filter: {
-      team: { key: { eq: "ENG" } }
+      team: { key: { eq: $teamKey } }
       state: { type: { in: ["unstarted", "started", "review"] } }
     }
     first: 50
@@ -90,7 +90,7 @@ query {
 curl -sS https://api.linear.app/graphql \
   -H "Authorization: $LINEAR_API_KEY" \
   -H "Content-Type: application/json" \
-  -d "$(jq -n --arg q "$QUERY" '{query: $q}')" \
+  -d "$(jq -n --arg q "$QUERY" --arg teamKey "$TEAM_KEY" '{query: $q, variables: {teamKey: $teamKey}}')" \
 | jq '
     [
       .data.issues.nodes[]
@@ -110,8 +110,8 @@ issues:
 
 What the script does:
 
-1. Refuses to run if `LINEAR_API_KEY` is missing.
-2. Queries the GraphQL API for issues in the `ENG` team that are in
+1. Reads `LINEAR_API_KEY` and optional `LINEAR_TEAM_KEY` from the environment.
+2. Queries the GraphQL API for issues in that team that are in
    one of the active workflow categories.
 3. Reshapes each issue into Vik's `{id, title, state}` shape, using
    the **state name** (e.g. `Todo`, `In Progress`, `In Review`) as
