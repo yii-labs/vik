@@ -17,6 +17,67 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::workflow::Workflow;
+
+#[derive(Debug, Clone)]
+pub struct StateManager {
+  path: PathBuf,
+}
+
+impl StateManager {
+  pub fn new(path: impl Into<PathBuf>) -> Self {
+    Self { path: path.into() }
+  }
+
+  pub fn path(&self) -> &Path {
+    &self.path
+  }
+
+  pub fn read(&self) -> Result<Option<State>, StateError> {
+    State::try_read(&self.path)
+  }
+
+  pub fn write(&self, state: &State) -> Result<(), StateError> {
+    state.write(&self.path)
+  }
+
+  pub fn remove(&self) -> Result<(), StateError> {
+    State::remove(&self.path)
+  }
+
+  /// `command` is captured verbatim so an operator looking at a stale
+  /// state file can tell which invocation produced it.
+  pub fn write_runtime_state(
+    &self,
+    workflow: &Workflow,
+    port: u16,
+    bind_address: String,
+    command: String,
+  ) -> Result<(), StateError> {
+    let state = State {
+      workflow_path: workflow.workflow_path().to_path_buf(),
+      cwd: std::env::current_dir().map_err(StateError::CurrentDir)?,
+      pid: std::process::id(),
+      port,
+      bind_address,
+      started_at: Utc::now(),
+      log_dir: workflow.workspace().logs_dir().to_path_buf(),
+      sessions_dir: workflow.workspace().sessions_dir().to_path_buf(),
+      command,
+    };
+    self.write(&state)?;
+    tracing::info_span!("daemon").in_scope(|| {
+      tracing::info!(
+        state_file = %self.path.display(),
+        pid = state.pid,
+        port = state.port as u64,
+        "daemon state file written",
+      );
+    });
+    Ok(())
+  }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct State {
   pub workflow_path: PathBuf,
@@ -25,8 +86,8 @@ pub struct State {
   /// run from.
   pub cwd: PathBuf,
   pub pid: u32,
-  /// `0` means "no HTTP API." Foreground-only runs technically should
-  /// not write state files, so this is mostly defensive.
+  /// Normal runs record the actual bound HTTP port. `0` is reserved
+  /// for older or manually-authored state files that lack HTTP info.
   pub port: u16,
   /// String form so IPv4 and IPv6 round-trip unchanged.
   pub bind_address: String,
@@ -65,6 +126,9 @@ pub enum StateError {
 
   #[error("failed to serialize daemon state: {0}")]
   Serialize(#[source] serde_json::Error),
+
+  #[error("failed to read current working directory: {0}")]
+  CurrentDir(#[source] std::io::Error),
 
   #[error("failed to remove daemon state file {path}: {source}")]
   Remove {
@@ -165,6 +229,8 @@ impl State {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::logging::tests::{capture_events, captured_event};
+  use crate::workflow::Workflow;
   use tempfile::TempDir;
 
   fn sample(workflow: &Path, cwd: &Path) -> State {
@@ -224,6 +290,33 @@ mod tests {
     assert!(path.exists());
     State::remove(&path).expect("remove");
     assert!(!path.exists());
+  }
+
+  #[test]
+  fn state_manager_writes_runtime_state_with_daemon_span() {
+    let (events, _capture) = capture_events();
+
+    let dir = TempDir::new().expect("tmpdir");
+    let workflow = Workflow::builder()
+      .workflow_path(dir.path().join("workflow.yml"))
+      .workspace_root(dir.path())
+      .build();
+    let manager = StateManager::new(dir.path().join("service/state.json"));
+
+    manager
+      .write_runtime_state(&workflow, 3456, "127.0.0.1".into(), "vik run workflow.yml".into())
+      .expect("write runtime state");
+
+    let state = manager.read().expect("state reads").expect("state exists");
+    assert_eq!(state.workflow_path, dir.path().join("workflow.yml"));
+    assert_eq!(state.port, 3456);
+    assert_eq!(state.bind_address, "127.0.0.1");
+    assert_eq!(state.command, "vik run workflow.yml");
+
+    let events = events.lock().expect("events mutex");
+    let event = captured_event(&events, "daemon state file written");
+    assert_eq!(event["spans"][0]["name"], "daemon");
+    assert!(event.get("phase").is_none());
   }
 
   #[test]

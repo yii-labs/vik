@@ -68,9 +68,9 @@ when a run stalls, crashes, or restarts.
 - Current doctor does not check prompt file existence, external binaries, auth,
   or tracker access.
 
-Optional `server:` config starts basic HTTP infrastructure. Missing `server`
-means no HTTP. `server: {}` binds `127.0.0.1:0`; Vik records the actual bound
-port in daemon state.
+Basic HTTP infrastructure starts by default. Optional `server:` config overrides
+the default bind options. Missing `server` means `server: {}` behavior:
+`127.0.0.1:0`; Vik records the actual bound port in daemon state.
 
 ## Intake
 

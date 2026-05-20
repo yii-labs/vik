@@ -241,7 +241,7 @@ Issue workspace cleanup:
 
 ## Known Current Gaps
 
-- Basic HTTP server infra exists when `workflow.yml` has `server:`. It serves `GET /health` and `GET /status`; state/control endpoints remain planned.
+- Basic HTTP server infra starts by default and uses `workflow.yml` `server:` overrides when present. It serves `GET /health` and `GET /status`; state/control endpoints remain planned.
 - Some usage docs and README still mention HTTP endpoints or Codex app-server. Treat those as stale unless source confirms them.
 
 ## Verification

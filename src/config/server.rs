@@ -76,7 +76,7 @@ issue:
 "#;
 
   #[test]
-  fn missing_server_keeps_http_disabled() {
+  fn missing_server_remains_absent_in_authored_schema() {
     let schema = parse_workflow(MINIMAL_WORKFLOW);
 
     assert!(schema.server.is_none());

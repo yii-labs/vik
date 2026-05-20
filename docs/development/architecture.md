@@ -5,16 +5,18 @@ This document describes current code. It is not a target design.
 ## Overview
 
 Vik is one Rust binary crate. CLI startup loads `workflow.yml` into
-`WorkflowSchema`, builds a `Workflow`, prepares the workflow-scoped workspace
-root, installs logging, optionally binds the HTTP server, writes daemon state,
-and runs the daemon runtime.
+`WorkflowSchema`, builds a `Workflow`, and delegates `run` execution to the
+daemon layer. The daemon runner prepares the workflow-scoped workspace root,
+installs logging, binds the HTTP server, writes daemon state, and runs the
+daemon runtime.
 
 The orchestrator owns intake, shutdown, and drain. `StageSessionManager` owns
 running-stage state, issue setup, stage launch, session command senders, and
 hook execution behind its own typed channel.
 
 `src/server/` owns basic HTTP binding, `lxy` route construction, health/status
-routes, and URL construction. State/control endpoints remain planned work.
+routes, and URL construction. The daemon runner is its caller. State/control
+endpoints remain planned work.
 
 ## Folder Structure
 
@@ -32,7 +34,7 @@ src/
 |-- session/         session command/state channels, snapshots, JSONL writer
 |-- hooks/           after_create, before_run, after_run shell hooks
 |-- orchestrator/    intake loop and stage-session manager
-|-- daemon/          detach, signals, lifecycle, runtime, state file
+|-- daemon/          run startup, detach, signals, lifecycle, runtime, state file
 |-- server/          basic HTTP server, health route, URL construction
 |-- context/         issue intake data and issue-run runtime context
 `-- utils/           shared path helpers
@@ -112,6 +114,7 @@ sequenceDiagram
     participant Wf as Workflow
     participant Log as logging::init
     participant D as daemon
+    participant DRun as daemon::runner
     participant S as server
     participant O as Orchestrator
 
@@ -119,22 +122,21 @@ sequenceDiagram
     CLI->>Loader: load(workflow path)
     Loader-->>CLI: LoadedWorkflowSchema
     CLI->>Wf: Workflow::try_from(loaded)
-    CLI->>Wf: workspace.ensure_root()
+    CLI->>DRun: run(workflow, detached)
+    DRun->>Wf: workspace.ensure_root()
     opt detached
-      CLI->>D: detach(log_dir)
-      D-->>CLI: parent exits, child continues
+      DRun->>D: detach(log_dir)
+      D-->>DRun: parent exits, child continues
     end
-    CLI->>Log: init(workspace.logs_dir)
-    CLI->>D: install_shutdown_handler()
-    opt server configured
-      CLI->>S: bind server and read actual address
-    end
-    CLI->>D: write state.json
-    CLI->>D: runtime drives server and orchestrator futures
+    DRun->>Log: init(workspace.logs_dir)
+    DRun->>D: install_shutdown_handler()
+    DRun->>S: bind server and read actual address
+    DRun->>D: write state.json
+    DRun->>D: runtime drives server and orchestrator futures
 ```
 
-Missing `server` keeps HTTP disabled. `server: {}` binds `127.0.0.1:0`, records
-the actual port, and serves `GET /health` and `GET /status`.
+Missing `server` uses default HTTP options. `server: {}` binds `127.0.0.1:0`,
+records the actual port, and serves `GET /health` and `GET /status`.
 
 ## Orchestrator Runtime
 
@@ -323,6 +325,7 @@ Daemon modules:
 
 - `detach/`: Unix detach and Windows unsupported stub.
 - `signals/`: SIGINT/SIGTERM/SIGHUP handling and pid liveness helpers.
+- `runner.rs`: `vik run` startup order, HTTP binding, state write, runtime handoff.
 - `runtime.rs`: drives orchestrator and optional HTTP server futures.
 - `state.rs`: atomic state JSON read/write/remove.
 - `lifecycle.rs`: status, stop, restart stop phase, uninstall.

@@ -10,8 +10,8 @@ use std::process::ExitCode;
 use anyhow::anyhow;
 use clap::Parser;
 
+use crate::daemon::StateManager;
 use crate::daemon::lifecycle::{RestartOutcome, STOP_TIMEOUT, StatusReport};
-use crate::daemon::{self};
 use crate::workflow::Workflow;
 
 /// Args shared by `status`, `stop`, `uninstall`.
@@ -26,7 +26,7 @@ pub struct RestartArgs {}
 /// scripting around `vik status` does not need to special-case the
 /// "absent daemon" case.
 pub fn status(workflow: Workflow, _args: LifecycleArgs) -> ExitCode {
-  match status_inner(&workflow) {
+  match StateManager::new(workflow.workspace().service_state_file().to_path_buf()).status() {
     Ok(report) => {
       render_status(&report);
       ExitCode::SUCCESS
@@ -36,11 +36,6 @@ pub fn status(workflow: Workflow, _args: LifecycleArgs) -> ExitCode {
       ExitCode::from(1)
     },
   }
-}
-
-fn status_inner(workflow: &Workflow) -> anyhow::Result<StatusReport> {
-  let path = workflow.workspace().service_state_file().to_path_buf();
-  daemon::lifecycle::status(&path).map_err(|err| anyhow!(err))
 }
 
 fn render_status(report: &StatusReport) {
@@ -62,8 +57,14 @@ fn render_status(report: &StatusReport) {
 }
 
 pub fn stop(workflow: Workflow, _args: LifecycleArgs) -> ExitCode {
-  match stop_inner(&workflow) {
-    Ok(()) => ExitCode::SUCCESS,
+  match StateManager::new(workflow.workspace().service_state_file().to_path_buf())
+    .stop(STOP_TIMEOUT)
+    .map_err(|err| anyhow!(err))
+  {
+    Ok(()) => {
+      let _ = writeln!(io::stdout(), "daemon stopped");
+      ExitCode::SUCCESS
+    },
     Err(err) => {
       let _ = writeln!(io::stderr(), "vik stop failed: {err:#}");
       ExitCode::from(1)
@@ -71,19 +72,15 @@ pub fn stop(workflow: Workflow, _args: LifecycleArgs) -> ExitCode {
   }
 }
 
-fn stop_inner(workflow: &Workflow) -> anyhow::Result<()> {
-  let path = workflow.workspace().service_state_file().to_path_buf();
-  daemon::lifecycle::stop(&path, STOP_TIMEOUT).map_err(|err| anyhow!(err))?;
-  let _ = writeln!(io::stdout(), "daemon stopped");
-  Ok(())
-}
-
 /// Implemented as "stop, then run -d" so both entry points share one
 /// daemon-startup path. Always restarts silently when no daemon was
 /// running — operators can still inspect what happened via the
 /// "no daemon was running" message.
 pub fn restart(workflow: Workflow, _args: RestartArgs) -> ExitCode {
-  match restart_stop_phase(&workflow) {
+  match StateManager::new(workflow.workspace().service_state_file().to_path_buf())
+    .restart_stop_phase(STOP_TIMEOUT)
+    .map_err(|err| anyhow!(err))
+  {
     Ok(RestartOutcome::Stopped) => {
       let _ = writeln!(io::stdout(), "daemon stopped; starting a fresh one");
     },
@@ -99,24 +96,18 @@ pub fn restart(workflow: Workflow, _args: RestartArgs) -> ExitCode {
   super::run::execute(workflow, super::run::RunArgs { detached: true })
 }
 
-fn restart_stop_phase(workflow: &Workflow) -> anyhow::Result<RestartOutcome> {
-  let path = workflow.workspace().service_state_file().to_path_buf();
-  daemon::lifecycle::restart_stop_phase(&path, STOP_TIMEOUT).map_err(|err| anyhow!(err))
-}
-
 pub fn uninstall(workflow: Workflow, _args: LifecycleArgs) -> ExitCode {
-  match uninstall_inner(&workflow) {
-    Ok(()) => ExitCode::SUCCESS,
+  match StateManager::new(workflow.workspace().service_state_file().to_path_buf())
+    .uninstall(STOP_TIMEOUT)
+    .map_err(|err| anyhow!(err))
+  {
+    Ok(()) => {
+      let _ = writeln!(io::stdout(), "daemon uninstalled (state file removed if present)");
+      ExitCode::SUCCESS
+    },
     Err(err) => {
       let _ = writeln!(io::stderr(), "vik uninstall failed: {err:#}");
       ExitCode::from(1)
     },
   }
-}
-
-fn uninstall_inner(workflow: &Workflow) -> anyhow::Result<()> {
-  let path = workflow.workspace().service_state_file().to_path_buf();
-  daemon::lifecycle::uninstall(&path, STOP_TIMEOUT).map_err(|err| anyhow!(err))?;
-  let _ = writeln!(io::stdout(), "daemon uninstalled (state file removed if present)");
-  Ok(())
 }

@@ -23,9 +23,9 @@ Use an explicit workflow path when managing another workflow:
 vik run -d /path/to/workflow.yml
 ```
 
-HTTP stays disabled unless the workflow has a top-level `server:` section.
-`server: {}` binds `127.0.0.1:0`, so the OS picks a free port. The actual bound
-port is recorded in daemon state and printed by `vik status`.
+Vik starts the basic HTTP server by default. Omitted `server:` uses the same
+defaults as `server: {}`: bind `127.0.0.1:0`, so the OS picks a free port. The
+actual bound port is recorded in daemon state and printed by `vik status`.
 
 ## Status
 

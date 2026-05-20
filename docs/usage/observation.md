@@ -6,10 +6,10 @@ Current Vik observation surfaces are files:
 - rolling daemon logs
 - daemon state JSON
 - decoded session `AgentEvent` JSONL
-- optional HTTP health and status checks
+- HTTP health and status checks
 
 The HTTP state and control API is still planned. Basic server infrastructure
-exists only when `workflow.yml` has `server:`. It currently serves
+starts by default, using `server:` options when present. It currently serves
 `GET /health` and `GET /status`, and does not serve issue state, refresh,
 cancel, or webhook routes.
 

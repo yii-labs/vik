@@ -104,9 +104,8 @@ ids. Do not return issue ids that start with `.` or contain path separators.
 
 ## Server
 
-`server` is optional. If it is omitted, Vik does not start HTTP.
-
-`server: {}` starts the basic HTTP server with these defaults:
+`server` is optional. If it is omitted, Vik uses the same defaults as
+`server: {}` and starts the basic HTTP server:
 
 ```yaml
 server:
@@ -332,8 +331,8 @@ path. Current code does not expose root-level `stage`, `workflow`, `loop`, or
 ## Observation
 
 Current observation surfaces are logs, daemon state, and session JSONL files.
-When `server:` is present, daemon state also records the actual HTTP bind
-address and port. HTTP state APIs remain planned work.
+Daemon state records the actual HTTP bind address and port. HTTP state APIs
+remain planned work.
 
 ## References
 
