@@ -69,8 +69,9 @@ your editor of choice.
 ## 2. Tell Vik where to put files
 
 Vik keeps logs, per-issue working folders, and session records under
-one workflow-scoped workspace directory. If you omit `workspace.root`,
-Vik uses `VIK_HOME` when set; otherwise it uses your home directory.
+one workflow-scoped workspace directory. With `workspace: {}` or
+`workspace.root: null`, Vik uses non-empty `VIK_HOME` directly when it is set;
+otherwise it uses your home `.vik` directory.
 
 Add to `workflow.yml`:
 
@@ -81,9 +82,9 @@ workspace: {}
 You can also set `workspace.root` to an absolute path like
 `/Users/you/vik-workspaces`.
 Relative paths resolve from the directory that contains `workflow.yml`.
-Vik adds `workflows/<workflow-path-key>/` under that root so different
-workflow files do not collide. `vik run` creates that directory if it is
-missing.
+After choosing the workspace home, Vik adds `workflows/<workflow-path-key>/`
+under that root so different workflow files do not collide. `vik run` creates
+that directory if it is missing.
 
 ## 3. Pick a coding agent
 
